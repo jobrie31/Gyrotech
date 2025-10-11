@@ -1,25 +1,35 @@
-import { useEffect, useState } from "react";
-import { onAuthStateChanged, signOut } from "firebase/auth";
-import { auth } from "./firebaseConfig";
-import Login from "./Login";
-import PageAccueil from "./pageAccueil"; // 👈 on importe la page d'accueil
+// App.jsx — Router ultra-simple basé sur window.location.hash
+import React, { useEffect, useState } from "react";
+import BurgerMenu from "./BurgerMenu";
+import PageAccueil from "./pageAccueil";   // <= casse respectée
+import PageProjet from "./PageProjet";
+import Horloge from "./Horloge";
+
+function getRoute() {
+  const h = window.location.hash.replace(/^#\//, "");
+  return h || "accueil";
+}
 
 export default function App() {
-  const [user, setUser] = useState(null);
+  const [route, setRoute] = useState(getRoute());
 
   useEffect(() => {
-    return onAuthStateChanged(auth, (u) => setUser(u));
+    const onHash = () => setRoute(getRoute());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  if (!user) return <Login />;
+  const handleNavigate = (key) => {
+    window.location.hash = `#/${key}`;
+  };
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1>Bienvenue {user.email}</h1>
-      <button onClick={() => signOut(auth)}>Déconnexion</button>
+    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+      <BurgerMenu onNavigate={handleNavigate} />
+      <Horloge />
 
-      {/* 👇 On affiche le punch des employés */}
-      <PageAccueil />
+      {route === "accueil" && <PageAccueil />}
+      {route === "projets" && <PageProjet />}
     </div>
   );
 }
