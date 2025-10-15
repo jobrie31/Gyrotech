@@ -1,11 +1,6 @@
-// src/PageProjets.jsx — Tableau Projets (même UI que PageAccueil)
-// - Tableau Projets : Punch / Dépunch (cumule plusieurs sessions / jour)
-// - Barre d’ajout de projets
-// - Clic sur un projet => panneau Historique du jour (navigable jour -/+)
-// - Stockage miroir :
-//   projets/{projId}/timecards/{YYYY-MM-DD} : { start, end, createdAt }
-//   projets/{projId}/timecards/{YYYY-MM-DD}/segments : { start, end, createdAt }
-//   (on réutilise le nom "segments" pour rester cohérent avec tes rules)
+// src/PageProjets.jsx — Tableau Projets (miroir, sans punch)
+// - Clic sur une ligne => ouvre le matériel du projet (#/projets/<id>)
+// - Colonne "Actions" avec bouton "Matériel" (+ "Historique" facultatif)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -13,8 +8,7 @@ import {
   doc,
   getDoc,
   setDoc,
-  updateDoc,
-  addDoc,
+  addDoc,            // ✅ manquait
   onSnapshot,
   serverTimestamp,
   query,
@@ -54,8 +48,7 @@ function fmtHM(ms){
   return `${h}:${m.toString().padStart(2,"0")}`;
 }
 
-/* ---------------------- Firestore helpers (Projets) ---------------------- */
-function projetRef(projId){ return doc(db,"projets",projId); }
+/* ---------------------- Firestore helpers (Projets / Temps) ---------------------- */
 function dayRefP(projId, key){ return doc(db,"projets",projId,"timecards",key); }
 function segColP(projId, key){ return collection(db,"projets",projId,"timecards",key,"segments"); }
 
@@ -72,36 +65,30 @@ async function ensureDayP(projId, key=todayKey()){
   return ref;
 }
 
-async function closeAllOpenSessionsP(projId, key=todayKey()){
-  const qOpen = query(segColP(projId,key), where("end","==",null));
-  const snap = await getDocs(qOpen);
-  const ops = [];
-  snap.forEach(d=>{
-    ops.push(updateDoc(doc(segColP(projId,key), d.id), { end: serverTimestamp() }));
-  });
-  await Promise.all(ops);
-}
-
-async function openSessionP(projId, key=todayKey()){
-  // évite doublons : s'il y a déjà une session ouverte, on ne rouvre pas
-  const qOpen = query(segColP(projId,key), where("end","==",null));
-  const s = await getDocs(qOpen);
-  if(!s.empty) return;
-  await addDoc(segColP(projId,key), {
-    start: serverTimestamp(),
-    end: null,
-    createdAt: serverTimestamp(),
-  });
-}
-
 /* ---------------------- Hooks ---------------------- */
 function useProjets(setError){
   const [rows,setRows] = useState([]);
   useEffect(()=>{
     const c = collection(db,"projets");
     const unsub = onSnapshot(c,(snap)=>{
-      const list=[]; snap.forEach(d=>list.push({id:d.id,...d.data()}));
-      list.sort((a,b)=> (a.nom||"").localeCompare(b.nom||""));
+      const list=[];
+      snap.forEach(d=>{
+        const data = d.data();
+        list.push({id:d.id, ouvert: data.ouvert ?? true, ...data});
+      });
+
+      // Tri identique à PageListeProjet:
+      // 1) ouverts (true) d'abord, puis fermés
+      // 2) numeroUnite (string pad), puis nom (ou marque+modele)
+      list.sort((a,b)=>{
+        const ao = a.ouvert ? 0 : 1;
+        const bo = b.ouvert ? 0 : 1;
+        if (ao !== bo) return ao - bo;
+        const A = (a.numeroUnite ?? "").toString().padStart(6,"0") + " " + (a.nom || `${a.marque||""} ${a.modele||""}`.trim());
+        const B = (b.numeroUnite ?? "").toString().padStart(6,"0") + " " + (b.nom || `${b.marque||""} ${b.modele||""}`.trim());
+        return A.localeCompare(B, "fr-CA");
+      });
+
       setRows(list);
     },(err)=> setError(err?.message||String(err)));
     return ()=>unsub();
@@ -157,29 +144,6 @@ function usePresenceTodayP(projId, setError){
   const totalMs = useMemo(()=> computeTotalMs(sessions),[sessions]);
   const hasOpen = useMemo(()=> sessions.some(s=>!s.end),[sessions]);
   return { key, card, sessions, totalMs, hasOpen };
-}
-
-/* ---------------------- Actions Punch / Dépunch (Projet) ---------------------- */
-async function doPunchP(projId, setError){
-  try{
-    const key = todayKey();
-    const ref = await ensureDayP(projId, key);
-    const snap = await getDoc(ref);
-    const d = snap.data() || {};
-    const patch = {};
-    if(!d.start) patch.start = serverTimestamp();
-    await updateDoc(ref, { ...patch });
-    await openSessionP(projId, key);
-  }catch(e){ setError(e?.message||String(e)); }
-}
-
-async function doDepunchP(projId, setError){
-  try{
-    const key = todayKey();
-    const ref = await ensureDayP(projId, key);
-    await closeAllOpenSessionsP(projId, key);
-    await updateDoc(ref, { end: serverTimestamp() });
-  }catch(e){ setError(e?.message||String(e)); }
 }
 
 /* ---------------------- UI de base ---------------------- */
@@ -280,75 +244,71 @@ function HistoriqueProjet({ proj, open, onClose }){
   );
 }
 
-/* ---------------------- Lignes / Tableau ---------------------- */
-function LigneProjet({ proj, onOpenHistory, setError }) {
-  const { card, sessions, totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
-  const present = hasOpen;
+/* ---------------------- Lignes / Tableau (clic => matériel) ---------------------- */
+function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
+  const { card, totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
 
-  const [pending, setPending] = useState(false);
-
-  const togglePunch = async () => {
-    try {
-      setPending(true);
-      if (present) {
-        await doDepunchP(proj.id, setError);
-      } else {
-        await doPunchP(proj.id, setError);
-      }
-    } finally {
-      setPending(false);
-    }
+  const statutLabel = hasOpen ? "Actif" : (card?.end ? "Terminé" : (card?.start ? "Inactif" : "—"));
+  const statutStyle = {
+    fontWeight: 800,
+    color: hasOpen ? "#166534" : (card?.end ? "#444" : (card?.start ? "#475569" : "#6b7280")),
   };
 
+  const btn = (label, onClick, color="#2563eb") => (
+    <button
+      onClick={onClick}
+      style={{
+        border:"none", background:color, color:"#fff",
+        borderRadius:8, padding:"6px 10px", cursor:"pointer", fontWeight:700, marginRight:8
+      }}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <tr onClick={() => onOpenHistory(proj)} style={{ cursor: "pointer" }}>
+    <tr
+      onClick={() => onOpenMaterial(proj.id)}
+      style={{ cursor: "pointer" }}
+      onMouseEnter={(e)=> e.currentTarget.style.background="#f8fafc"}
+      onMouseLeave={(e)=> e.currentTarget.style.background="transparent"}
+    >
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{proj.nom || "—"}</td>
-      <td
-        style={{
-          padding: 10,
-          borderBottom: "1px solid #eee",
-          color: present ? "#2e7d32" : "#666",
-        }}
-      >
-        {present ? "Actif" : card?.end ? "Terminé" : card?.start ? "Inactif" : "—"}
+
+      {/* Situation — miroir, non modifiable */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        <span style={{
+          border: proj.ouvert ? "1px solid #16a34a" : "1px solid #ef4444",
+          background: proj.ouvert ? "#dcfce7" : "#fee2e2",
+          color: proj.ouvert ? "#166534" : "#b91c1c",
+          borderRadius: 9999,
+          padding: "4px 10px",
+          fontWeight: 800,
+          fontSize: 12,
+        }}>
+          {proj.ouvert ? "Ouvert" : "Fermé"}
+        </span>
       </td>
+
+      {/* Statut — plus en gras */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        <span style={statutStyle}>{statutLabel}</span>
+      </td>
+
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtDateTime(card?.start)}</td>
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtDateTime(card?.end)}</td>
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalMs)}</td>
 
-      {/* GROS BOUTON UNIQUE (toggle) */}
-      <td
-        style={{ padding: 10, borderBottom: "1px solid #eee" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          onClick={togglePunch}
-          disabled={pending}
-          aria-label={present ? "Dépuncher" : "Puncher"}
-          style={{
-            width: 180,
-            height: 46,
-            fontSize: 16,
-            fontWeight: 700,
-            border: "none",
-            borderRadius: 9999,
-            cursor: pending ? "not-allowed" : "pointer",
-            boxShadow: "0 6px 16px rgba(0,0,0,0.12)",
-            transition: "transform 120ms ease, opacity 120ms ease",
-            transform: pending ? "scale(0.98)" : "scale(1)",
-            opacity: pending ? 0.7 : 1,
-            background: present ? "#E53935" : "#2E7D32",
-            color: "#fff",
-          }}
-        >
-          {present ? "Dépunch" : "Punch"}
-        </button>
+      {/* Actions */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }} onClick={(e)=>e.stopPropagation()}>
+        {btn("Matériel", ()=>onOpenMaterial(proj.id), "#2563eb")}
+        {btn("Historique", ()=>onOpenHistory(proj), "#6b7280")}
       </td>
     </tr>
   );
 }
 
-/* ---------------------- Barre d’ajout projets ---------------------- */
+/* ---------------------- Barre d’ajout projets (inchangé) ---------------------- */
 function BarreAjoutProjets({ onError }){
   const [open,setOpen] = useState(false);
   const [nom,setNom] = useState("");
@@ -389,6 +349,11 @@ export default function PageProjets(){
   const openHistory = (proj)=>{ setProjSel(proj); setOpenHist(true); };
   const closeHistory = ()=>{ setOpenHist(false); setProjSel(null); };
 
+  // 👉 ouvre le panneau "matériel" dans PageAccueil
+  const openMaterial = (id) => {
+    window.location.hash = `#/projets/${id}`;
+  };
+
   return (
     <div style={{ padding:20, fontFamily:"Arial, system-ui, -apple-system" }}>
       <ErrorBanner error={error} onClose={()=>setError(null)} />
@@ -398,19 +363,26 @@ export default function PageProjets(){
           <thead>
             <tr style={{ background:"#f6f7f8" }}>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Nom</th>
+              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Situation</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Statut</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Première entrée</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Dernier dépunch</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Total (jour)</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Pointage</th>
+              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {projets.map(p=>(
-              <LigneProjet key={p.id} proj={p} onOpenHistory={openHistory} setError={setError} />
+              <LigneProjet
+                key={p.id}
+                proj={p}
+                onOpenHistory={openHistory}
+                onOpenMaterial={openMaterial}
+                setError={setError}
+              />
             ))}
             {projets.length===0 && (
-              <tr><td colSpan={6} style={{ padding:12, color:"#666" }}>Aucun projet pour l’instant.</td></tr>
+              <tr><td colSpan={7} style={{ padding:12, color:"#666" }}>Aucun projet pour l’instant.</td></tr>
             )}
           </tbody>
         </table>

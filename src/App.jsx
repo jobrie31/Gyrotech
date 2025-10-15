@@ -1,35 +1,44 @@
-// App.jsx — Router ultra-simple basé sur window.location.hash
+// App.jsx
 import React, { useEffect, useState } from "react";
 import BurgerMenu from "./BurgerMenu";
-import PageAccueil from "./pageAccueil";   // <= casse respectée
-import PageProjet from "./PageProjet";
-import Horloge from "./Horloge";
+import PageAccueil from "./pageAccueil";       // ✅ casse corrigée
+import PageListeProjet from "./PageListeProjet";
+import PageMateriels from "./PageMateriels";   // ✅ nouveau
 
-function getRoute() {
-  const h = window.location.hash.replace(/^#\//, "");
-  return h || "accueil";
+function getRouteFromHash() {
+  const key = window.location.hash.replace(/^#\//, "");
+  return key || "accueil";
 }
 
 export default function App() {
-  const [route, setRoute] = useState(getRoute());
+  const [route, setRoute] = useState(getRouteFromHash());
 
   useEffect(() => {
-    const onHash = () => setRoute(getRoute());
+    const onHash = () => setRoute(getRouteFromHash());
     window.addEventListener("hashchange", onHash);
+    onHash(); // init
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const handleNavigate = (key) => {
-    window.location.hash = `#/${key}`;
-  };
+  // Items du menu (clé = hash)
+  const pages = [
+    { key: "accueil",   label: "pageAccueil" },
+    { key: "projets",   label: "Projets" },
+    { key: "materiels", label: "Matériels" }, // ✅ nouveau
+  ];
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      <BurgerMenu onNavigate={handleNavigate} />
-      <Horloge />
+    <div>
+      {/* BurgerMenu au niveau racine ; navigation via hash par défaut */}
+      <BurgerMenu pages={pages} />
 
+      {/* Mini-router */}
       {route === "accueil" && <PageAccueil />}
-      {route === "projets" && <PageProjet />}
+      {route === "projets" && <PageListeProjet />}
+      {route === "materiels" && <PageMateriels />}
+
+      {/* Fallback simple */}
+      {!["accueil", "projets", "materiels"].includes(route) && <PageAccueil />}
     </div>
   );
 }

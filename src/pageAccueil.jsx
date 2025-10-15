@@ -1,7 +1,5 @@
-// PageAccueil.jsx — Punch employé synchronisé au projet sélectionné
-// - Popup plus GROSSE, texte plus GRAND, fond fortement assombri + léger blur.
-// - Si tu Punch sans projet et que tu dis "Non", l’étape suivante N’a PAS "Aucun projet" coché par défaut.
-// - Dans l’étape "choisir", le bouton "Aucun projet spécifique" est GROS et très visible.
+// PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS menu)
+// Nécessite: UIPro.jsx dans le même dossier src/
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -17,14 +15,18 @@ import {
   where,
   getDocs,
   orderBy,
+  increment, // ✅ pour +1 qty
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 import PageProjets from "./PageProjets";
 import Horloge from "./Horloge";
-import BurgerMenu from "./BurgerMenu";
+import PageListeProjet from "./PageListeProjet"; // (optionnel) si tu l’utilises
+
+// UI helpers
+import { styles, Card, Pill, Button, PageContainer, TopBar } from "./UIPro";
 
 /* ---------------------- Utils ---------------------- */
-function pad2(n){return n.toString().padStart(2,"0");}
+function pad2(n) { return n.toString().padStart(2, "0"); }
 function dayKey(d){
   const x = d instanceof Date ? d : new Date(d);
   return `${x.getFullYear()}-${pad2(x.getMonth()+1)}-${pad2(x.getDate())}`;
@@ -51,6 +53,11 @@ function fmtHM(ms){
   const h = Math.floor(s/3600);
   const m = Math.floor((s%3600)/60);
   return `${h}:${m.toString().padStart(2,"0")}`;
+}
+function formatCAD(n) {
+  const x = typeof n === "number" ? n : parseFloat(String(n).replace(",", "."));
+  if (!isFinite(x)) return "—";
+  return x.toLocaleString("fr-CA", { style: "currency", currency: "CAD" });
 }
 
 /* ---------------------- Firestore helpers (Employés) ---------------------- */
@@ -100,6 +107,8 @@ async function openEmpSession(empId, key=todayKey()){
 /* ---------------------- Firestore helpers (Projets) ---------------------- */
 function projDayRef(projId, key){ return doc(db,"projets",projId,"timecards",key); }
 function projSegCol(projId, key){ return collection(db,"projets",projId,"timecards",key,"segments"); }
+// ✅ usages de matériels d’un projet
+function projUsageCol(projId){ return collection(db,"projets",projId,"usagesMateriels"); }
 
 async function ensureProjDay(projId, key=todayKey()){
   const ref = projDayRef(projId,key);
@@ -134,7 +143,7 @@ async function closeProjSessionsForEmp(projId, empId, key=todayKey()){
   await Promise.all(docs.map(d=> updateDoc(d.ref, { end: serverTimestamp() })));
 }
 
-/* ---------------------- Hooks ---------------------- */
+/* ---------------------- Hooks (employés/projets) ---------------------- */
 function useEmployes(setError){
   const [rows,setRows] = useState([]);
   useEffect(()=>{
@@ -180,10 +189,7 @@ function useDay(empId, key, setError){
 function useSessions(empId, key, setError){
   const [list,setList] = useState([]);
   const [tick,setTick] = useState(0);
-  useEffect(()=>{
-    const t = setInterval(()=>setTick(x=>x+1),15000);
-    return ()=>clearInterval(t);
-  },[]);
+  useEffect(()=>{ const t=setInterval(()=>setTick(x=>x+1),15000); return ()=>clearInterval(t); },[]);
   useEffect(()=>{
     if(!empId||!key) return;
     const qSeg = query(segCol(empId,key), orderBy("start","asc"));
@@ -215,8 +221,58 @@ function usePresenceToday(empId, setError){
   return { key, card, sessions, totalMs, hasOpen };
 }
 
+/* ---------------------- Hooks (projet + matériaux) ---------------------- */
+function useProject(projId, setError) {
+  const [proj, setProj] = useState(null);
+  useEffect(()=>{
+    if(!projId) return;
+    const ref = doc(db,"projets",projId);
+    const unsub = onSnapshot(ref, (snap)=> setProj(snap.exists()? {id:snap.id, ...snap.data()} : null),
+      (err)=> setError?.(err?.message||String(err)));
+    return ()=>unsub();
+  },[projId,setError]);
+  return proj;
+}
+function useCategories(setError) {
+  const [cats, setCats] = useState([]);
+  useEffect(()=>{
+    const qy = query(collection(db,"categoriesMateriels"), orderBy("nom","asc"));
+    const unsub = onSnapshot(qy,(snap)=>{
+      const out=[]; snap.forEach(d=> out.push({id:d.id, ...d.data()}));
+      setCats(out);
+    }, (err)=> setError?.(err?.message||String(err)));
+    return ()=>unsub();
+  },[setError]);
+  return cats;
+}
+function useMateriels(setError) {
+  const [rows, setRows]= useState([]);
+  useEffect(()=>{
+    const qy = query(collection(db,"materiels"), orderBy("nom","asc"));
+    const unsub = onSnapshot(qy,(snap)=>{
+      const out=[]; snap.forEach(d=> out.push({id:d.id, ...d.data()}));
+      setRows(out);
+    }, (err)=> setError?.(err?.message||String(err)));
+    return ()=>unsub();
+  },[setError]);
+  return rows;
+}
+function useUsagesMateriels(projId, setError) {
+  const [rows, setRows]= useState([]);
+  useEffect(()=>{
+    if(!projId) return;
+    const qy = query(projUsageCol(projId), orderBy("nom","asc"));
+    const unsub = onSnapshot(qy,(snap)=>{
+      const out=[]; snap.forEach(d=> out.push({id:d.id, ...d.data()}));
+      setRows(out);
+    }, (err)=> setError?.(err?.message||String(err)));
+    return ()=>unsub();
+  },[projId,setError]);
+  return rows;
+}
+
 /* ---------------------- Actions Punch / Dépunch (Employés + Projet lié) ---------------------- */
-async function doPunchWithProject(emp, proj, setError){
+async function doPunchWithProject(emp, proj){
   const key = todayKey();
 
   await ensureDay(emp.id, key);
@@ -246,7 +302,7 @@ async function doPunchWithProject(emp, proj, setError){
   if(!ed.start){ await updateDoc(edRef, { start: serverTimestamp() }); }
 }
 
-async function doDepunchWithProject(emp, setError){
+async function doDepunchWithProject(emp){
   const key = todayKey();
 
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
@@ -265,10 +321,10 @@ async function doDepunchWithProject(emp, setError){
 function ErrorBanner({ error, onClose }){
   if(!error) return null;
   return (
-    <div style={{background:"#fdecea",color:"#b71c1c",border:"1px solid #f5c6cb",padding:"10px 14px",borderRadius:10,marginBottom:12,display:"flex",alignItems:"center",gap:12, fontSize:16}}>
+    <div style={{background:"#fdecea",color:"#7f1d1d",border:"1px solid #f5c6cb",padding:"10px 14px",borderRadius:10,marginBottom:12,display:"flex",alignItems:"center",gap:12, fontSize:16}}>
       <strong>Erreur :</strong>
       <span style={{flex:1}}>{error}</span>
-      <button onClick={onClose} style={{border:"none",background:"#b71c1c",color:"white",borderRadius:8,padding:"8px 12px",cursor:"pointer", fontWeight:700}}>OK</button>
+      <Button variant="danger" onClick={onClose}>OK</Button>
     </div>
   );
 }
@@ -295,15 +351,8 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
 
   const goChoose = ()=>{
     setStep("choose");
-    // ✅ Si aucun projet au départ ET on a cliqué "Non", ne pas cocher "Aucun projet"
-    if(!initialProj){
-      setAltNone(false);
-      setAltProjId(""); // rien de sélectionné par défaut
-    }else{
-      // Sinon, partir du projet courant, mais "Aucun projet" non coché
-      setAltNone(false);
-      setAltProjId(initialProj.id || "");
-    }
+    if(!initialProj){ setAltNone(false); setAltProjId(""); }
+    else { setAltNone(false); setAltProjId(initialProj.id || ""); }
   };
 
   const handleConfirmDirect = ()=> onConfirm(initialProj || null);
@@ -313,49 +362,9 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
     onConfirm(chosen);
   };
 
-  const Btn = ({children, ...props})=>(
-    <button
-      {...props}
-      style={{
-        border:"none",
-        borderRadius:12,
-        padding:"12px 18px",
-        fontWeight:800,
-        fontSize:16,
-        cursor:"pointer",
-        boxShadow:"0 8px 18px rgba(0,0,0,0.12)",
-        ...props.style
-      }}
-    >
-      {children}
-    </button>
-  );
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onCancel}
-      style={{
-        position:"fixed", inset:0, zIndex: 10000,
-        background:"rgba(0,0,0,0.70)",           // plus foncé
-        backdropFilter:"blur(3px)",              // léger flou
-        display:"flex", alignItems:"center", justifyContent:"center",
-        padding:"20px"
-      }}
-    >
-      <div
-        onClick={(e)=>e.stopPropagation()}
-        style={{
-          background:"#fff",
-          border:"1px solid #e5e7eb",
-          borderRadius:18,
-          padding:"24px 26px",
-          width:"min(840px, 96vw)",              // ✅ plus GROS
-          boxShadow:"0 28px 64px rgba(0,0,0,0.30)",
-        }}
-      >
-        {/* Header */}
+    <div role="dialog" aria-modal="true" onClick={onCancel} style={styles.modalBackdrop}>
+      <div onClick={(e)=>e.stopPropagation()} style={styles.modalCard}>
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16}}>
           <div style={{fontWeight:800, fontSize:22}}>Confirmation du punch</div>
           <button
@@ -365,42 +374,23 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
           >×</button>
         </div>
 
-        {/* Body */}
         {step === "confirm" ? (
           <div style={{display:"flex", alignItems:"center", gap:16}}>
             <div style={{flex:1, fontSize:18}}>{confirmText}</div>
-            <Btn
-              onClick={handleConfirmDirect}
-              title="Oui"
-              style={{background:"#22c55e", color:"#fff"}}
-            >Oui</Btn>
-            <Btn
-              onClick={goChoose}
-              title="Non"
-              style={{background:"#ef4444", color:"#fff"}}
-            >Non</Btn>
+            <Button variant="success" onClick={handleConfirmDirect}>Oui</Button>
+            <Button variant="danger" onClick={goChoose}>Non</Button>
           </div>
         ) : (
           <div>
             <div style={{marginBottom:14, fontSize:18, fontWeight:700}}>Choisir un projet</div>
 
             <div style={{display:"flex", gap:12, alignItems:"center", flexWrap:"wrap"}}>
-              {/* Select projet */}
               <select
                 value={altNone ? "" : altProjId}
                 disabled={altNone}
                 onChange={(e)=> setAltProjId(e.target.value)}
                 aria-label="Sélectionner un projet"
-                style={{
-                  flex:"1 1 360px",
-                  minWidth: 320,
-                  height: 48,
-                  padding: "0 12px",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 12,
-                  background:"#fff",
-                  fontSize:16
-                }}
+                style={{ ...styles.input, minWidth: 320, height: 48 }}
               >
                 <option value="" disabled>— Choisir un projet —</option>
                 {projets.map(p=>(
@@ -408,7 +398,6 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
                 ))}
               </select>
 
-              {/* ✅ Gros bouton "Aucun projet spécifique" (toggle) */}
               <button
                 type="button"
                 onClick={()=> setAltNone(v=>!v)}
@@ -431,32 +420,15 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
             </div>
 
             <div style={{display:"flex", justifyContent:"flex-end", gap:12, marginTop:20}}>
-              <button
-                onClick={onCancel}
-                style={{
-                  border:"1px solid #e5e7eb", background:"#fff",
-                  borderRadius:10, padding:"10px 14px", cursor:"pointer", fontSize:16, fontWeight:700
-                }}
-              >
-                Annuler
-              </button>
-              <button
+              <Button variant="neutral" onClick={onCancel}>Annuler</Button>
+              <Button
+                variant="primary"
                 onClick={handleConfirmChoice}
+                style={{ opacity: (!altNone && !altProjId) ? 0.6 : 1 }}
                 disabled={!altNone && !altProjId}
-                style={{
-                  border:"none",
-                  background: (!altNone && !altProjId) ? "#9ca3af" : "#2563eb",
-                  color:"#fff",
-                  borderRadius:10,
-                  padding:"12px 18px",
-                  fontWeight:800,
-                  fontSize:16,
-                  cursor: (!altNone && !altProjId) ? "not-allowed" : "pointer",
-                  boxShadow:"0 10px 24px rgba(37,99,235,0.28)"
-                }}
               >
                 Confirmer le punch
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -465,87 +437,158 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
   );
 }
 
-/* ---------------------- Historique (panneau) ---------------------- */
-function HistoriqueEmploye({ emp, open, onClose }){
-  const [day, setDay] = useState(new Date());
+/* ---------------------- Panneau Détails Projet (matériels) ---------------------- */
+function ProjectDetailsPanel({ projId, onClose, setParentError }) {
+  const [error, setError] = useState(null);
+  const proj = useProject(projId, setError);
+  const categories = useCategories(setError);
+  const materiels = useMateriels(setError);
+  const usages = useUsagesMateriels(projId, setError);
 
-  useEffect(()=>{ if(open) setDay(new Date()); },[open]);
+  useEffect(()=>{ if(error) setParentError?.(error); },[error, setParentError]);
 
-  const key = dayKey(day);
-  const [error,setError] = useState(null);
-  const card = useDay(emp?.id, key, setError);
-  const sessions = useSessions(emp?.id, key, setError);
-  const totalMs = useMemo(()=> computeTotalMs(sessions),[sessions]);
+  const usagesMap = useMemo(()=>{
+    const m = new Map(); // materielId -> usage
+    usages.forEach(u => m.set(u.id, u)); // doc id = materielId (on va l'utiliser ainsi)
+    return m;
+  },[usages]);
 
-  const prevDay = ()=> setDay(d=>addDays(d, -1));
-  const nextDay = ()=> setDay(d=>{
-    const tomorrow = addDays(d, +1);
-    const today = dayKey(new Date());
-    return dayKey(tomorrow) > today ? d : tomorrow;
-  });
+  // Groupes par catégorie pour l'affichage des MATERIELS disponibles
+  const groups = useMemo(()=>{
+    const map = new Map();
+    categories.forEach(c => map.set(c.nom, []));
+    const none = [];
+    materiels.forEach(r=>{
+      const k = (r.categorie || "").trim();
+      if(!k) none.push(r);
+      else (map.get(k) || (map.set(k,[]), map.get(k))).push(r);
+    });
+    const out = categories.map(c => ({ cat: c, items: map.get(c.nom) || [] }));
+    out.push({ cat: null, items: none });
+    return out;
+  },[materiels, categories]);
+
+  const addPlusOne = async (mat) => {
+    try{
+      const ref = doc(db, "projets", projId, "usagesMateriels", mat.id);
+      await setDoc(ref, {
+        materielId: mat.id,
+        nom: mat.nom || "",
+        categorie: mat.categorie || null,
+        prix: Number(mat.prix) || 0,
+        qty: increment(1),
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      }, { merge: true });
+    }catch(err){
+      setError(err?.message || String(err));
+    }
+  };
+
+  const total = useMemo(()=>{
+    return usages.reduce((s,u)=> s + (Number(u.prix)||0)*(Number(u.qty)||0), 0);
+  },[usages]);
 
   return (
     <div style={{
       position:"fixed", inset:0, background:"rgba(0,0,0,0.35)",
-      display: open ? "flex" : "none", alignItems:"center", justifyContent:"center", zIndex:9999
+      display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999
     }}>
-      <div style={{background:"#fff", width:"min(900px, 95vw)", maxHeight:"90vh", overflow:"auto", borderRadius:12, padding:16, boxShadow:"0 10px 30px rgba(0,0,0,0.2)"}}>
+      <div style={{background:"#fff", width:"min(1100px, 96vw)", maxHeight:"92vh", overflow:"auto", borderRadius:14, padding:16, boxShadow:"0 18px 50px rgba(0,0,0,0.25)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <h3 style={{margin:0}}>Historique — {emp?.nom}</h3>
-          <button onClick={onClose} style={{border:"1px solid #ddd",background:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>Fermer</button>
+          <h3 style={{margin:0}}>Détails du projet — {proj?.nom || "..."}</h3>
+          <Button variant="neutral" onClick={onClose}>Fermer</Button>
         </div>
 
         <ErrorBanner error={error} onClose={()=>setError(null)} />
 
-        <div style={{display:"flex",alignItems:"center",gap:8, margin:"8px 0 12px"}}>
-          <button onClick={prevDay} style={{border:"1px solid #ddd",background:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>◀</button>
-          <div style={{fontWeight:600}}>{key}</div>
-          <button onClick={nextDay} style={{border:"1px solid #ddd",background:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>▶</button>
-        </div>
-
-        <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12}}>
-          <div style={{border:"1px solid #eee",borderRadius:10,padding:12}}>
-            <div style={{fontSize:12,color:"#666"}}>Première entrée</div>
-            <div style={{fontSize:18,fontWeight:700}}>{fmtTimeOnly(card?.start)}</div>
-          </div>
-          <div style={{border:"1px solid #eee",borderRadius:10,padding:12}}>
-            <div style={{fontSize:12,color:"#666"}}>Dernier dépunch</div>
-            <div style={{fontSize:18,fontWeight:700}}>{fmtTimeOnly(card?.end)}</div>
-          </div>
-          <div style={{border:"1px solid #eee",borderRadius:10,padding:12}}>
-            <div style={{fontSize:12,color:"#666"}}>Temps total (jour)</div>
-            <div style={{fontSize:18,fontWeight:700}}>{fmtHM(totalMs)}</div>
-          </div>
-        </div>
-
-        <table style={{width:"100%", borderCollapse:"collapse", border:"1px solid #eee", borderRadius:12}}>
-          <thead>
-            <tr style={{background:"#f6f7f8"}}>
-              <th style={{textAlign:"left",padding:10,borderBottom:"1px solid #e0e0e0"}}>#</th>
-              <th style={{textAlign:"left",padding:10,borderBottom:"1px solid #e0e0e0"}}>Punch</th>
-              <th style={{textAlign:"left",padding:10,borderBottom:"1px solid #e0e0e0"}}>Dépunch</th>
-              <th style={{textAlign:"left",padding:10,borderBottom:"1px solid #e0e0e0"}}>Durée</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map((s,idx)=>{
-              const st = s.start?.toDate ? s.start.toDate() : null;
-              const en = s.end?.toDate ? s.end.toDate() : null;
-              const dur = computeTotalMs([s]);
-              return (
-                <tr key={s.id}>
-                  <td style={{padding:10,borderBottom:"1px solid #eee"}}>{idx+1}</td>
-                  <td style={{padding:10,borderBottom:"1px solid #eee"}}>{fmtTimeOnly(st)}</td>
-                  <td style={{padding:10,borderBottom:"1px solid #eee"}}>{fmtTimeOnly(en)}</td>
-                  <td style={{padding:10,borderBottom:"1px solid #eee"}}>{fmtHM(dur)}</td>
+        {/* Résumé en haut */}
+        <Card title="Matériel utilisé (résumé)">
+          <div style={{ overflowX:"auto" }}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  {["Matériel","Catégorie","Prix unitaire","Quantité","Sous-total"].map(h=>(
+                    <th key={h} style={styles.th}>{h}</th>
+                  ))}
                 </tr>
-              );
-            })}
-            {sessions.length===0 && (
-              <tr><td colSpan={4} style={{padding:12,color:"#666"}}>Aucune session ce jour.</td></tr>
-            )}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {usages.map(u=>(
+                  <tr key={u.id} style={styles.row}
+                      onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
+                      onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
+                    <td style={styles.td}>{u.nom}</td>
+                    <td style={styles.td}>{u.categorie || "—"}</td>
+                    <td style={styles.td}>{formatCAD(Number(u.prix)||0)}</td>
+                    <td style={styles.td}>{Number(u.qty)||0}</td>
+                    <td style={styles.td}>{formatCAD((Number(u.prix)||0)*(Number(u.qty)||0))}</td>
+                  </tr>
+                ))}
+                {usages.length===0 && (
+                  <tr><td colSpan={5} style={{ ...styles.td, color:"#64748b" }}>Aucun matériel pour l’instant.</td></tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={4} style={{ ...styles.td, textAlign:"right", fontWeight:800 }}>Total</td>
+                  <td style={{ ...styles.td, fontWeight:800 }}>{formatCAD(total)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </Card>
+
+        {/* Liste des matériels par catégorie avec bouton +1 */}
+        <Card title="Ajouter du matériel au projet">
+          <div style={styles.tableWrap}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  {["Nom","Prix","Catégorie","Actions","Déjà utilisé"].map(h=>(
+                    <th key={h} style={styles.th}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map(({cat, items})=>(
+                  <React.Fragment key={cat ? cat.id : "__NONE__"}>
+                    <tr style={{ background:"#f8fafc" }}>
+                      <th colSpan={5} style={{ ...styles.th, textAlign:"left" }}>
+                        {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
+                      </th>
+                    </tr>
+                    {items.map(mat=>{
+                      const used = usagesMap.get(mat.id);
+                      return (
+                        <tr key={mat.id} style={styles.row}
+                            onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
+                            onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
+                          <td style={styles.td}>{mat.nom}</td>
+                          <td style={styles.td}>{formatCAD(Number(mat.prix)||0)}</td>
+                          <td style={styles.td}>{mat.categorie || "—"}</td>
+                          <td style={styles.td}>
+                            <Button variant="success" onClick={()=>addPlusOne(mat)}>+1</Button>
+                          </td>
+                          <td style={styles.td}>
+                            <Pill variant="neutral">{used ? (Number(used.qty)||0) : 0}</Pill>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {items.length===0 && (
+                      <tr><td colSpan={5} style={{ ...styles.td, color:"#64748b" }}>Aucun matériel.</td></tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <div style={{fontSize:12, color:"#64748b", marginTop:8}}>
+          Astuce: ouvrir via <code style={{background:"#f1f5f9", padding:"2px 6px", borderRadius:6}}>#/projets/&lt;id&gt;</code>.
+        </div>
       </div>
     </div>
   );
@@ -565,13 +608,14 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
 
   useEffect(()=>{ setProjSel(emp?.lastProjectId || ""); }, [emp?.lastProjectId]);
 
+  const statusCell = present ? <Pill variant="success">Présent</Pill>
+    : card?.end ? <Pill variant="neutral">Terminé</Pill>
+    : card?.start ? <Pill variant="warning">Absent</Pill>
+    : <Pill variant="neutral">—</Pill>;
+
   const handlePunchClick = (e) => {
     e.stopPropagation();
-    if (present) {
-      // Dépunch direct
-      togglePunch();
-      return;
-    }
+    if (present) { togglePunch(); return; }
     const chosen = projSel ? projets.find(x => x.id === projSel) : null;
     setConfirmProj(chosen || null);
     setConfirmOpen(true);
@@ -581,9 +625,8 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
     setConfirmOpen(false);
     try {
       setPending(true);
-      // Reflect UI selection with the confirmed choice
       setProjSel(projOrNull?.id || "");
-      await doPunchWithProject(emp, projOrNull || null, setError);
+      await doPunchWithProject(emp, projOrNull || null);
     } finally {
       setPending(false);
     }
@@ -593,11 +636,10 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
     try {
       setPending(true);
       if (present) {
-        await doDepunchWithProject(emp, setError);
+        await doDepunchWithProject(emp);
       } else {
-        // fallback si jamais pas passé par la pop
         const chosenProj = projSel ? projets.find(x => x.id === projSel) : null;
-        await doPunchWithProject(emp, chosenProj || null, setError);
+        await doPunchWithProject(emp, chosenProj || null);
       }
     } finally {
       setPending(false);
@@ -606,40 +648,24 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
 
   return (
     <>
-      <tr onClick={() => onOpenHistory(emp)} style={{ cursor: "pointer" }}>
-        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{emp.nom || "—"}</td>
-        <td
-          style={{
-            padding: 10,
-            borderBottom: "1px solid #eee",
-            color: present ? "#2e7d32" : "#666",
-          }}
-        >
-          {present ? "Présent" : card?.end ? "Terminé" : card?.start ? "Absent" : "—"}
-        </td>
-        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtDateTime(card?.start)}</td>
-        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtDateTime(card?.end)}</td>
-        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalMs)}</td>
+      <tr onClick={() => onOpenHistory(emp)}
+          style={styles.row}
+          onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
+          onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
+        <td style={styles.td}>{emp.nom || "—"}</td>
+        <td style={styles.td}>{statusCell}</td>
+        <td style={styles.td}>{fmtDateTime(card?.start)}</td>
+        <td style={styles.td}>{fmtDateTime(card?.end)}</td>
+        <td style={styles.td}>{fmtHM(totalMs)}</td>
 
         {/* Sélecteur Projet + GROS BOUTON */}
-        <td
-          style={{ padding: 10, borderBottom: "1px solid #eee" }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <td style={styles.td} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
             <select
               value={projSel}
               onChange={(e)=> setProjSel(e.target.value)}
               aria-label="Projet pour ce punch"
-              style={{
-                minWidth: 220,
-                height: 38,
-                padding: "0 10px",
-                border: "1px solid #ccc",
-                borderRadius: 8,
-                background: "#fff",
-                cursor: present ? "not-allowed" : "pointer",
-              }}
+              style={{ ...styles.input, minWidth:220, height:38, cursor: present ? "not-allowed" : "pointer", opacity: present ? 0.7 : 1 }}
               disabled={present}
             >
               <option value="">— Projet pour ce punch —</option>
@@ -648,34 +674,21 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
               ))}
             </select>
 
-            <button
+            <Button
               type="button"
               onClick={handlePunchClick}
               disabled={pending}
               aria-label={present ? "Dépuncher" : "Puncher"}
-              style={{
-                width: 180,
-                height: 46,
-                fontSize: 16,
-                fontWeight: 700,
-                border: "none",
-                borderRadius: 9999,
-                cursor: pending ? "not-allowed" : "pointer",
-                boxShadow: "0 6px 16px rgba(0,0,0,0.12)",
-                transition: "transform 120ms ease, opacity 120ms ease",
-                transform: pending ? "scale(0.98)" : "scale(1)",
-                opacity: pending ? 0.7 : 1,
-                background: present ? "#E53935" : "#2E7D32",
-                color: "#fff",
-              }}
+              variant={present ? "danger" : "success"}
+              style={{ width:180, height:46, fontSize:16 }}
             >
               {present ? "Dépunch" : "Punch"}
-            </button>
+            </Button>
           </div>
         </td>
       </tr>
 
-      {/* Popup confirmation (plus GROS + logique demandée) */}
+      {/* Popup confirmation */}
       <MiniConfirm
         open={confirmOpen}
         initialProj={confirmProj}
@@ -688,34 +701,72 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
 }
 
 /* ---------------------- Barre d’ajout employés ---------------------- */
-function BarreAjoutEmployes({ onError }){
-  const [open,setOpen] = useState(false);
-  const [nom,setNom] = useState("");
-  const [msg,setMsg] = useState("");
-  const submit = async (e)=>{
+function BarreAjoutEmployes({ onError }) {
+  const [open, setOpen] = useState(false);
+  const [nom, setNom] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const submit = async (e) => {
     e.preventDefault();
     const clean = nom.trim();
-    if(!clean){ setMsg("Nom requis."); return; }
-    try{
-      await addDoc(collection(db,"employes"),{ nom: clean, createdAt: serverTimestamp() });
-      setNom(""); setMsg("Ajouté ✔"); setTimeout(()=>setMsg(""),1200); setOpen(false);
-    }catch(err){ console.error(err); onError(err?.message||String(err)); setMsg("Erreur d'ajout"); }
+    if (!clean) {
+      setMsg("Nom requis.");
+      return;
+    }
+    try {
+      await addDoc(collection(db, "employes"), {
+        nom: clean,
+        createdAt: serverTimestamp(),
+      });
+      setNom("");
+      setMsg("Ajouté ✔");
+      setTimeout(() => setMsg(""), 1200);
+      setOpen(false);
+    } catch (err) {
+      console.error(err);
+      onError?.(err?.message || String(err));
+      setMsg("Erreur d'ajout");
+    }
   };
+
   return (
-    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-      <h2 style={{ margin:0 }}>👥 Travailleurs</h2>
-      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-        {msg && <span style={{ color:"#1976D2", fontSize:14 }}>{msg}</span>}
-        <button onClick={()=>setOpen(v=>!v)} title="Ajouter un employé" style={{ border:"1px solid #ccc", background:"#fff", borderRadius:8, padding:"8px 12px", cursor:"pointer", fontWeight:600 }}>+</button>
-      </div>
+    <Card
+      title="👥 Travailleurs"
+      right={
+        <Button
+          variant="neutral"
+          onClick={() => setOpen((v) => !v)}
+          title="Ajouter un employé"
+        >
+          {open ? "–" : "+"}
+        </Button>
+      }
+    >
       {open && (
-        <form onSubmit={submit} style={{ marginTop:10, display:"flex", gap:8 }}>
-          <input value={nom} onChange={e=>setNom(e.target.value)} placeholder="Nom de l’employé" style={{ padding:"8px 10px", border:"1px solid #ccc", borderRadius:8, minWidth:240 }} />
-          <button type="submit" style={{ border:"none", background:"#2e7d32", color:"#fff", borderRadius:8, padding:"8px 12px", cursor:"pointer", fontWeight:600 }}>Ajouter</button>
+        <form
+          onSubmit={submit}
+          style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}
+        >
+          <input
+            value={nom}
+            onChange={(e) => setNom(e.target.value)}
+            placeholder="Nom de l’employé"
+            style={{ ...styles.input, minWidth: 260 }}
+          />
+          <Button type="submit" variant="success">
+            Ajouter
+          </Button>
+          {msg && <span style={{ color: "#2563eb", fontSize: 14 }}>{msg}</span>}
         </form>
       )}
-    </div>
+    </Card>
   );
+}
+
+/* ---------------------- Routing helper (LOCAL à PageAccueil) ---------------------- */
+function getRouteFromHash(){
+  const raw = window.location.hash.replace(/^#\//, "");
+  return raw || "accueil";
 }
 
 /* ---------------------- Page ---------------------- */
@@ -729,56 +780,131 @@ export default function PageAccueil(){
   const openHistory = (emp)=>{ setEmpSel(emp); setOpenHist(true); };
   const closeHistory = ()=>{ setOpenHist(false); setEmpSel(null); };
 
+  // Router local par hash (pas de menu ici)
+  const [route, setRoute] = useState(getRouteFromHash());
+  useEffect(()=>{
+    const onHash = ()=> setRoute(getRouteFromHash());
+    window.addEventListener("hashchange", onHash);
+    onHash();
+    return ()=> window.removeEventListener("hashchange", onHash);
+  },[]);
+
+  // Si l’URL est de la forme "projets/<id>" => panneau détails projet
+  const matchProj = /^projets\/([^/]+)$/.exec(route);
+  const openProjectId = matchProj ? matchProj[1] : null;
+
+  // Vue "liste projets" (si route === "projets" sans id)
+  if (route === "projets") {
+    return (
+      <>
+        {/* Horloge tout en haut, centrée */}
+        <div style={{ width:"100%", display:"flex", justifyContent:"center", margin:"8px 0 16px" }}>
+          <Horloge />
+        </div>
+
+        <PageContainer>
+          <TopBar
+            left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Projets</h1>}
+            right={null}
+          />
+          <Card>
+            <PageListeProjet />
+          </Card>
+        </PageContainer>
+      </>
+    );
+  }
+
+  // Accueil
   return (
-  <div style={{ padding:20, fontFamily:"Arial, system-ui, -apple-system" }}>
-    <BurgerMenu
-      onNavigate={(key)=>{
-        // branche ton routeur ici (react-router, etc.)
-        console.log("navigate:", key);
-      }}
-    />
-    <Horloge />
-
-    <ErrorBanner error={error} onClose={()=>setError(null)} />
-    <BarreAjoutEmployes onError={setError} />
-
-      {/* ===== Tableau EMPLOYÉS ===== */}
-      <div style={{ overflowX:"auto" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse", background:"#fff", border:"1px solid #eee", borderRadius:12 }}>
-          <thead>
-            <tr style={{ background:"#f6f7f8" }}>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Nom</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Statut</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Première entrée</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Dernier dépunch</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Total (jour)</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Projet + Pointage</th>
-            </tr>
-          </thead>
-          <tbody>
-            {employes.map(e=>(
-              <LigneEmploye
-                key={e.id}
-                emp={e}
-                onOpenHistory={openHistory}
-                setError={setError}
-                projets={projets}
-              />
-            ))}
-            {employes.length===0 && (
-              <tr><td colSpan={6} style={{ padding:12, color:"#666" }}>Aucun employé pour l’instant.</td></tr>
-            )}
-          </tbody>
-        </table>
+    <>
+      {/* Horloge tout en haut, centrée */}
+      <div style={{ width:"100%", display:"flex", justifyContent:"center", margin:"8px 0 16px" }}>
+        <Horloge />
       </div>
 
-      {/* ===== Tableau PROJETS ===== */}
-      <div style={{ marginTop: 28 }}>
-        <PageProjets />
-      </div>
+      <PageContainer>
+        <TopBar
+          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Tableau des présences & projets</h1>}
+          right={null}
+        />
 
-      {/* Modale d’historique employé */}
-      <HistoriqueEmploye emp={empSel} open={openHist} onClose={closeHistory} />
-    </div>
+        <ErrorBanner error={error} onClose={()=>setError(null)} />
+
+        {/* Barre d’ajout */}
+        <BarreAjoutEmployes onError={setError} />
+
+        {/* ===== Tableau EMPLOYÉS ===== */}
+        <Card title="Feuille de présence (aujourd’hui)">
+          <div style={styles.tableWrap}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  {["Nom","Statut","Première entrée","Dernier dépunch","Total (jour)","Projet + Pointage"].map((h,i)=>(
+                    <th key={i} style={styles.th}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {employes.map(e=>(
+                  <LigneEmploye
+                    key={e.id}
+                    emp={e}
+                    onOpenHistory={openHistory}
+                    setError={setError}
+                    projets={projets}
+                  />
+                ))}
+                {employes.length===0 && (
+                  <tr><td colSpan={6} style={{ ...styles.td, color:"#64748b" }}>Aucun employé pour l’instant.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* ===== Tableau PROJETS ===== */}
+        <Card title="Projets">
+          <PageProjets />
+        </Card>
+
+        {/* Modale d’historique employé */}
+        <HistoriqueEmploye emp={empSel} open={openHist} onClose={closeHistory} />
+      </PageContainer>
+
+      {/* Panneau Détails Projet (si URL #/projets/<id>) */}
+      {openProjectId && (
+        <ProjectDetailsPanel
+          projId={openProjectId}
+          onClose={()=>{ window.location.hash = "#/projets"; }}
+          setParentError={setError}
+        />
+      )}
+    </>
   );
 }
+
+/* ------------------------------------------------------------
+   RÈGLES FIRESTORE à ajouter (si Permission denied sur usages):
+   ------------------------------------------------------------
+   match /databases/{database}/documents {
+     match /projets/{projId}/usagesMateriels/{uId} {
+       allow read: if request.auth != null;
+       allow create: if request.auth != null
+         && request.resource.data.keys().hasOnly(['materielId','nom','categorie','prix','qty','createdAt','updatedAt'])
+         && (request.resource.data.materielId is string)
+         && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+         && (request.resource.data.categorie == null || request.resource.data.categorie is string)
+         && ((request.resource.data.prix is int) || (request.resource.data.prix is float))
+         && ((request.resource.data.qty is int) || (request.resource.data.qty is float))
+         && (request.resource.data.createdAt is timestamp)
+         && (request.resource.data.updatedAt is timestamp);
+       allow update: if request.auth != null
+         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['nom','categorie','prix','qty','updatedAt'])
+         && ((request.resource.data.prix is int) || (request.resource.data.prix is float))
+         && ((request.resource.data.qty is int) || (request.resource.data.qty is float))
+         && (request.resource.data.updatedAt is timestamp);
+       allow delete: if request.auth != null;
+     }
+   }
+*/

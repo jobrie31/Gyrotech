@@ -1,10 +1,9 @@
-// Horloge.jsx — Horloge live centrée en haut, avec date + secondes
+// Horloge.jsx — Horloge "banner" centrée en haut (pas d’overlay)
 import React, { useEffect, useState } from "react";
 
 export default function Horloge() {
   const [now, setNow] = useState(new Date());
 
-  // Mise à jour chaque seconde
   useEffect(() => {
     const tick = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(tick);
@@ -14,7 +13,6 @@ export default function Horloge() {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    // timeZone: "America/Toronto", // ← décommente si tu veux forcer le fuseau
     hour12: false,
   });
 
@@ -23,23 +21,12 @@ export default function Horloge() {
     year: "numeric",
     month: "long",
     day: "2-digit",
-    // timeZone: "America/Toronto",
   });
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 8,
-        left: "50%",
-        transform: "translateX(-50%)",
-        zIndex: 9000, // < modal (10000) pour ne pas passer devant les popups
-        pointerEvents: "none",
-      }}
-    >
+    <div style={{ display: "flex", justifyContent: "center", margin: "8px 0 16px" }}>
       <div
         style={{
-          pointerEvents: "auto",
           background: "rgba(255,255,255,0.9)",
           backdropFilter: "blur(4px)",
           border: "1px solid #e5e7eb",
@@ -59,19 +46,13 @@ export default function Horloge() {
             fontSize: 16,
             fontWeight: 700,
             letterSpacing: 0.3,
-            textTransform: "capitalize", // ex: "samedi 11 octobre 2025"
+            textTransform: "capitalize",
             marginBottom: 4,
           }}
         >
           {dateStr}
         </div>
-        <div
-          style={{
-            fontSize: 28, // gros texte
-            fontWeight: 800,
-            letterSpacing: 1,
-          }}
-        >
+        <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 1 }}>
           {heure}
         </div>
       </div>

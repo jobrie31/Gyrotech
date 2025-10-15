@@ -1,11 +1,14 @@
 // BurgerMenu.jsx — Bouton 3 lignes + tiroir gauche (pages)
-// Navigue via window.location.hash => '#/accueil', '#/projets'
+// Navigue via window.location.hash => '#/accueil', '#/projets', '#/materiels'
 
 import React, { useEffect, useState } from "react";
 
+// ✅ Plus d'import de PageMateriels ici — le menu ne rend pas les pages
+
 const defaultPages = [
-  { key: "accueil", label: "PageAccueil" },
-  { key: "projets", label: "Projets" },
+  { key: "accueil",  label: "PageAccueil" },
+  { key: "projets",  label: "Projets" },
+  { key: "materiels", label: "Matériels" }, // ✅ nouveau
 ];
 
 export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
@@ -29,7 +32,7 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
   const handleItem = (p) => {
     setOpen(false);
     if (p.onClick) return p.onClick();
-    if (onNavigate) return onNavigate(p.key); // si tu veux gérer la nav toi-même
+    if (onNavigate) return onNavigate(p.key); // navigation gérée par le parent
     // fallback: hash routing sans lib
     window.location.hash = `#/${p.key}`;
   };
