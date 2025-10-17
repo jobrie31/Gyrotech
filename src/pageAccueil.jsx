@@ -1,4 +1,4 @@
-// PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS menu)
+// pageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS menu)
 // Nécessite: UIPro.jsx dans le même dossier src/
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -15,12 +15,12 @@ import {
   where,
   getDocs,
   orderBy,
-  increment, // ✅ pour +1 qty
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 import PageProjets from "./PageProjets";
 import Horloge from "./Horloge";
 import PageListeProjet from "./PageListeProjet"; // (optionnel) si tu l’utilises
+import ProjectMaterielPanel from "./ProjectMaterielPanel"; // ✅ panneau partagé pour le matériel
 
 // UI helpers
 import { styles, Card, Pill, Button, PageContainer, TopBar } from "./UIPro";
@@ -32,7 +32,6 @@ function dayKey(d){
   return `${x.getFullYear()}-${pad2(x.getMonth()+1)}-${pad2(x.getDate())}`;
 }
 function todayKey(){ return dayKey(new Date()); }
-function addDays(d,delta){ const x = new Date(d); x.setDate(x.getDate()+delta); return x; }
 
 function fmtDateTime(ts){
   if(!ts) return "—";
@@ -54,11 +53,6 @@ function fmtHM(ms){
   const m = Math.floor((s%3600)/60);
   return `${h}:${m.toString().padStart(2,"0")}`;
 }
-function formatCAD(n) {
-  const x = typeof n === "number" ? n : parseFloat(String(n).replace(",", "."));
-  if (!isFinite(x)) return "—";
-  return x.toLocaleString("fr-CA", { style: "currency", currency: "CAD" });
-}
 
 /* ---------------------- Firestore helpers (Employés) ---------------------- */
 function dayRef(empId, key){ return doc(db,"employes",empId,"timecards",key); }
@@ -75,6 +69,7 @@ async function ensureDay(empId, key=todayKey()){
       breakStartMs: null,
       breakTotalMs: 0,
       createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(), // ✅ créé avec updatedAt
     });
   }
   return ref;
@@ -88,7 +83,9 @@ async function getOpenEmpSegments(empId, key=todayKey()){
 
 async function closeAllOpenSessions(empId, key=todayKey()){
   const docs = await getOpenEmpSegments(empId, key);
-  await Promise.all(docs.map(d=> updateDoc(d.ref, { end: serverTimestamp() })));
+  await Promise.all(
+    docs.map(d=> updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() })) // ✅ updatedAt requis
+  );
 }
 
 async function openEmpSession(empId, key=todayKey()){
@@ -100,6 +97,7 @@ async function openEmpSession(empId, key=todayKey()){
     start: serverTimestamp(),
     end: null,
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(), // ✅
   });
   return added;
 }
@@ -107,14 +105,12 @@ async function openEmpSession(empId, key=todayKey()){
 /* ---------------------- Firestore helpers (Projets) ---------------------- */
 function projDayRef(projId, key){ return doc(db,"projets",projId,"timecards",key); }
 function projSegCol(projId, key){ return collection(db,"projets",projId,"timecards",key,"segments"); }
-// ✅ usages de matériels d’un projet
-function projUsageCol(projId){ return collection(db,"projets",projId,"usagesMateriels"); }
 
 async function ensureProjDay(projId, key=todayKey()){
   const ref = projDayRef(projId,key);
   const snap = await getDoc(ref);
   if(!snap.exists()){
-    await setDoc(ref,{ start: null, end: null, createdAt: serverTimestamp() });
+    await setDoc(ref,{ start: null, end: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
   }
   return ref;
 }
@@ -134,13 +130,16 @@ async function openProjSessionForEmp(projId, empId, empName, key=todayKey()){
     start: serverTimestamp(),
     end: null,
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(), // ✅
   });
   return added;
 }
 
 async function closeProjSessionsForEmp(projId, empId, key=todayKey()){
   const docs = await getOpenProjSegsForEmp(projId, empId, key);
-  await Promise.all(docs.map(d=> updateDoc(d.ref, { end: serverTimestamp() })));
+  await Promise.all(
+    docs.map(d=> updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() })) // ✅
+  );
 }
 
 /* ---------------------- Hooks (employés/projets) ---------------------- */
@@ -221,56 +220,6 @@ function usePresenceToday(empId, setError){
   return { key, card, sessions, totalMs, hasOpen };
 }
 
-/* ---------------------- Hooks (projet + matériaux) ---------------------- */
-function useProject(projId, setError) {
-  const [proj, setProj] = useState(null);
-  useEffect(()=>{
-    if(!projId) return;
-    const ref = doc(db,"projets",projId);
-    const unsub = onSnapshot(ref, (snap)=> setProj(snap.exists()? {id:snap.id, ...snap.data()} : null),
-      (err)=> setError?.(err?.message||String(err)));
-    return ()=>unsub();
-  },[projId,setError]);
-  return proj;
-}
-function useCategories(setError) {
-  const [cats, setCats] = useState([]);
-  useEffect(()=>{
-    const qy = query(collection(db,"categoriesMateriels"), orderBy("nom","asc"));
-    const unsub = onSnapshot(qy,(snap)=>{
-      const out=[]; snap.forEach(d=> out.push({id:d.id, ...d.data()}));
-      setCats(out);
-    }, (err)=> setError?.(err?.message||String(err)));
-    return ()=>unsub();
-  },[setError]);
-  return cats;
-}
-function useMateriels(setError) {
-  const [rows, setRows]= useState([]);
-  useEffect(()=>{
-    const qy = query(collection(db,"materiels"), orderBy("nom","asc"));
-    const unsub = onSnapshot(qy,(snap)=>{
-      const out=[]; snap.forEach(d=> out.push({id:d.id, ...d.data()}));
-      setRows(out);
-    }, (err)=> setError?.(err?.message||String(err)));
-    return ()=>unsub();
-  },[setError]);
-  return rows;
-}
-function useUsagesMateriels(projId, setError) {
-  const [rows, setRows]= useState([]);
-  useEffect(()=>{
-    if(!projId) return;
-    const qy = query(projUsageCol(projId), orderBy("nom","asc"));
-    const unsub = onSnapshot(qy,(snap)=>{
-      const out=[]; snap.forEach(d=> out.push({id:d.id, ...d.data()}));
-      setRows(out);
-    }, (err)=> setError?.(err?.message||String(err)));
-    return ()=>unsub();
-  },[projId,setError]);
-  return rows;
-}
-
 /* ---------------------- Actions Punch / Dépunch (Employés + Projet lié) ---------------------- */
 async function doPunchWithProject(emp, proj){
   const key = todayKey();
@@ -281,13 +230,17 @@ async function doPunchWithProject(emp, proj){
   if(proj){
     await ensureProjDay(proj.id, key);
     await openProjSessionForEmp(proj.id, emp.id, emp.nom || null, key);
+
     if(empSegRef){
-      await updateDoc(empSegRef, { jobId: proj.id, jobName: proj.nom || null });
+      await updateDoc(empSegRef, { jobId: proj.id, jobName: proj.nom || null, updatedAt: serverTimestamp() }); // ✅
     }
+
     const pdRef = projDayRef(proj.id, key);
     const pdSnap = await getDoc(pdRef);
     const pd = pdSnap.data() || {};
-    if(!pd.start){ await updateDoc(pdRef, { start: serverTimestamp() }); }
+    if(!pd.start){
+      await updateDoc(pdRef, { start: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
+    }
 
     await updateDoc(doc(db,"employes",emp.id), {
       lastProjectId: proj.id,
@@ -299,12 +252,15 @@ async function doPunchWithProject(emp, proj){
   const edRef = dayRef(emp.id, key);
   const edSnap = await getDoc(edRef);
   const ed = edSnap.data() || {};
-  if(!ed.start){ await updateDoc(edRef, { start: serverTimestamp() }); }
+  if(!ed.start){
+    await updateDoc(edRef, { start: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
+  }
 }
 
 async function doDepunchWithProject(emp){
   const key = todayKey();
 
+  // Récupère les segments employés ouverts + leurs jobId
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
   const jobIds = Array.from(new Set(
     openEmpSegs
@@ -312,13 +268,16 @@ async function doDepunchWithProject(emp){
       .filter(v=>typeof v === "string" && v.length > 0)
   ));
 
+  // Ferme les segments projet correspondants
   await Promise.all(jobIds.map(jid => closeProjSessionsForEmp(jid, emp.id, key)));
+  // Ferme tous les segments employés
   await closeAllOpenSessions(emp.id, key);
-  await updateDoc(dayRef(emp.id, key), { end: serverTimestamp() });
+  // Marque la fin de la timecard employé (avec updatedAt)
+  await updateDoc(dayRef(emp.id, key), { end: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
 }
 
 /* ---------------------- UI de base ---------------------- */
-function ErrorBanner({ error, onClose }){
+function ErrorBanner({ error, onClose}){
   if(!error) return null;
   return (
     <div style={{background:"#fdecea",color:"#7f1d1d",border:"1px solid #f5c6cb",padding:"10px 14px",borderRadius:10,marginBottom:12,display:"flex",alignItems:"center",gap:12, fontSize:16}}>
@@ -432,163 +391,6 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------- Panneau Détails Projet (matériels) ---------------------- */
-function ProjectDetailsPanel({ projId, onClose, setParentError }) {
-  const [error, setError] = useState(null);
-  const proj = useProject(projId, setError);
-  const categories = useCategories(setError);
-  const materiels = useMateriels(setError);
-  const usages = useUsagesMateriels(projId, setError);
-
-  useEffect(()=>{ if(error) setParentError?.(error); },[error, setParentError]);
-
-  const usagesMap = useMemo(()=>{
-    const m = new Map(); // materielId -> usage
-    usages.forEach(u => m.set(u.id, u)); // doc id = materielId (on va l'utiliser ainsi)
-    return m;
-  },[usages]);
-
-  // Groupes par catégorie pour l'affichage des MATERIELS disponibles
-  const groups = useMemo(()=>{
-    const map = new Map();
-    categories.forEach(c => map.set(c.nom, []));
-    const none = [];
-    materiels.forEach(r=>{
-      const k = (r.categorie || "").trim();
-      if(!k) none.push(r);
-      else (map.get(k) || (map.set(k,[]), map.get(k))).push(r);
-    });
-    const out = categories.map(c => ({ cat: c, items: map.get(c.nom) || [] }));
-    out.push({ cat: null, items: none });
-    return out;
-  },[materiels, categories]);
-
-  const addPlusOne = async (mat) => {
-    try{
-      const ref = doc(db, "projets", projId, "usagesMateriels", mat.id);
-      await setDoc(ref, {
-        materielId: mat.id,
-        nom: mat.nom || "",
-        categorie: mat.categorie || null,
-        prix: Number(mat.prix) || 0,
-        qty: increment(1),
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-      }, { merge: true });
-    }catch(err){
-      setError(err?.message || String(err));
-    }
-  };
-
-  const total = useMemo(()=>{
-    return usages.reduce((s,u)=> s + (Number(u.prix)||0)*(Number(u.qty)||0), 0);
-  },[usages]);
-
-  return (
-    <div style={{
-      position:"fixed", inset:0, background:"rgba(0,0,0,0.35)",
-      display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999
-    }}>
-      <div style={{background:"#fff", width:"min(1100px, 96vw)", maxHeight:"92vh", overflow:"auto", borderRadius:14, padding:16, boxShadow:"0 18px 50px rgba(0,0,0,0.25)"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <h3 style={{margin:0}}>Détails du projet — {proj?.nom || "..."}</h3>
-          <Button variant="neutral" onClick={onClose}>Fermer</Button>
-        </div>
-
-        <ErrorBanner error={error} onClose={()=>setError(null)} />
-
-        {/* Résumé en haut */}
-        <Card title="Matériel utilisé (résumé)">
-          <div style={{ overflowX:"auto" }}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  {["Matériel","Catégorie","Prix unitaire","Quantité","Sous-total"].map(h=>(
-                    <th key={h} style={styles.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {usages.map(u=>(
-                  <tr key={u.id} style={styles.row}
-                      onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
-                      onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
-                    <td style={styles.td}>{u.nom}</td>
-                    <td style={styles.td}>{u.categorie || "—"}</td>
-                    <td style={styles.td}>{formatCAD(Number(u.prix)||0)}</td>
-                    <td style={styles.td}>{Number(u.qty)||0}</td>
-                    <td style={styles.td}>{formatCAD((Number(u.prix)||0)*(Number(u.qty)||0))}</td>
-                  </tr>
-                ))}
-                {usages.length===0 && (
-                  <tr><td colSpan={5} style={{ ...styles.td, color:"#64748b" }}>Aucun matériel pour l’instant.</td></tr>
-                )}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={4} style={{ ...styles.td, textAlign:"right", fontWeight:800 }}>Total</td>
-                  <td style={{ ...styles.td, fontWeight:800 }}>{formatCAD(total)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </Card>
-
-        {/* Liste des matériels par catégorie avec bouton +1 */}
-        <Card title="Ajouter du matériel au projet">
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  {["Nom","Prix","Catégorie","Actions","Déjà utilisé"].map(h=>(
-                    <th key={h} style={styles.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map(({cat, items})=>(
-                  <React.Fragment key={cat ? cat.id : "__NONE__"}>
-                    <tr style={{ background:"#f8fafc" }}>
-                      <th colSpan={5} style={{ ...styles.th, textAlign:"left" }}>
-                        {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
-                      </th>
-                    </tr>
-                    {items.map(mat=>{
-                      const used = usagesMap.get(mat.id);
-                      return (
-                        <tr key={mat.id} style={styles.row}
-                            onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
-                            onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
-                          <td style={styles.td}>{mat.nom}</td>
-                          <td style={styles.td}>{formatCAD(Number(mat.prix)||0)}</td>
-                          <td style={styles.td}>{mat.categorie || "—"}</td>
-                          <td style={styles.td}>
-                            <Button variant="success" onClick={()=>addPlusOne(mat)}>+1</Button>
-                          </td>
-                          <td style={styles.td}>
-                            <Pill variant="neutral">{used ? (Number(used.qty)||0) : 0}</Pill>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {items.length===0 && (
-                      <tr><td colSpan={5} style={{ ...styles.td, color:"#64748b" }}>Aucun matériel.</td></tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <div style={{fontSize:12, color:"#64748b", marginTop:8}}>
-          Astuce: ouvrir via <code style={{background:"#f1f5f9", padding:"2px 6px", borderRadius:6}}>#/projets/&lt;id&gt;</code>.
-        </div>
       </div>
     </div>
   );
@@ -763,7 +565,7 @@ function BarreAjoutEmployes({ onError }) {
   );
 }
 
-/* ---------------------- Routing helper (LOCAL à PageAccueil) ---------------------- */
+/* ---------------------- Routing helper (LOCAL à pageAccueil) ---------------------- */
 function getRouteFromHash(){
   const raw = window.location.hash.replace(/^#\//, "");
   return raw || "accueil";
@@ -789,7 +591,7 @@ export default function PageAccueil(){
     return ()=> window.removeEventListener("hashchange", onHash);
   },[]);
 
-  // Si l’URL est de la forme "projets/<id>" => panneau détails projet
+  // Si l’URL est de la forme "projets/<id>" => panneau détails/Matériel
   const matchProj = /^projets\/([^/]+)$/.exec(route);
   const openProjectId = matchProj ? matchProj[1] : null;
 
@@ -825,7 +627,7 @@ export default function PageAccueil(){
 
       <PageContainer>
         <TopBar
-          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Tableau des présences & projets</h1>}
+          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Gyrotech</h1>}
           right={null}
         />
 
@@ -867,14 +669,11 @@ export default function PageAccueil(){
         <Card title="Projets">
           <PageProjets />
         </Card>
-
-        {/* Modale d’historique employé */}
-        <HistoriqueEmploye emp={empSel} open={openHist} onClose={closeHistory} />
       </PageContainer>
 
-      {/* Panneau Détails Projet (si URL #/projets/<id>) */}
+      {/* Panneau Matériel (si URL #/projets/<id>) */}
       {openProjectId && (
-        <ProjectDetailsPanel
+        <ProjectMaterielPanel
           projId={openProjectId}
           onClose={()=>{ window.location.hash = "#/projets"; }}
           setParentError={setError}
@@ -883,28 +682,3 @@ export default function PageAccueil(){
     </>
   );
 }
-
-/* ------------------------------------------------------------
-   RÈGLES FIRESTORE à ajouter (si Permission denied sur usages):
-   ------------------------------------------------------------
-   match /databases/{database}/documents {
-     match /projets/{projId}/usagesMateriels/{uId} {
-       allow read: if request.auth != null;
-       allow create: if request.auth != null
-         && request.resource.data.keys().hasOnly(['materielId','nom','categorie','prix','qty','createdAt','updatedAt'])
-         && (request.resource.data.materielId is string)
-         && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
-         && (request.resource.data.categorie == null || request.resource.data.categorie is string)
-         && ((request.resource.data.prix is int) || (request.resource.data.prix is float))
-         && ((request.resource.data.qty is int) || (request.resource.data.qty is float))
-         && (request.resource.data.createdAt is timestamp)
-         && (request.resource.data.updatedAt is timestamp);
-       allow update: if request.auth != null
-         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['nom','categorie','prix','qty','updatedAt'])
-         && ((request.resource.data.prix is int) || (request.resource.data.prix is float))
-         && ((request.resource.data.qty is int) || (request.resource.data.qty is float))
-         && (request.resource.data.updatedAt is timestamp);
-       allow delete: if request.auth != null;
-     }
-   }
-*/

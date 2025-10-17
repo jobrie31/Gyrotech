@@ -1,9 +1,5 @@
-// src/PageListeProjet.jsx
-// Liste des projets SANS punch, avec :
-// 1) Popup "Créer un nouveau projet" (champs alignés VERTICALEMENT)
-// 2) Détails en colonne verticale + texte plus petit
-// 3) Édition dans Détails (plus d'édition inline)
-// 4) Colonne "Situation" (Ouvert/Fermé) avec confirmation et tri : ouverts en haut
+// src/PageListeProjet.jsx — PAGE COMPLÈTE DES PROJETS AVEC TOUTES LES INFORMATIONS
+// + Bouton "Matériel" par projet (ouvre #/projets/<id> pour ajouter/voir/retirer des usages)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { db } from "./firebaseConfig";
@@ -17,8 +13,6 @@ import {
   getDoc,
   setDoc,
   query,
-  where,
-  getDocs,
   orderBy,
 } from "firebase/firestore";
 
@@ -31,13 +25,6 @@ function dayKey(d){
 function todayKey(){ return dayKey(new Date()); }
 function addDays(d,delta){ const x = new Date(d); x.setDate(x.getDate()+delta); return x; }
 
-function fmtDateTime(ts){
-  if(!ts) return "—";
-  try{
-    const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleString("fr-CA",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
-  }catch{ return "—"; }
-}
 function fmtTimeOnly(ts){
   if(!ts) return "—";
   try{
@@ -87,9 +74,8 @@ function useProjets(setError) {
           list.push({ id: d.id, ouvert: data.ouvert ?? true, ...data });
         });
 
-        // Tri: ouverts d'abord (ouvert=true), puis fermés; ensuite par numéro d'unité puis nom
+        // Ouverts d'abord, puis fermés; ensuite par numéro d'unité puis nom
         list.sort((a, b) => {
-          // ouverts (true) => -1
           if ((a.ouvert ? 0 : 1) !== (b.ouvert ? 0 : 1)) {
             return (a.ouvert ? 0 : 1) - (b.ouvert ? 0 : 1);
           }
@@ -245,7 +231,7 @@ function PopupCreateProjet({ open, onClose, onError }) {
         plaque: cleanPlaque || null,
         odometre: cleanOdo ? Number(cleanOdo) : null,
         vin: cleanVin || null,
-        ouvert: true, // par défaut ouvert
+        ouvert: true,
       };
       const nom = buildNom(payload);
 
@@ -334,7 +320,7 @@ function PopupCreateProjet({ open, onClose, onError }) {
   );
 }
 
-/* ---------------------- Détails + Édition (vertical + petit texte) ---------------------- */
+/* ---------------------- Détails + Édition ---------------------- */
 function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation }) {
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -433,13 +419,13 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
           borderRadius: 16,
           padding: 18,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-          fontSize: 14, // texte plus petit
+          fontSize: 14,
         }}
       >
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: 8 }}>
           <div style={{ fontWeight: 900, fontSize: 18 }}>Détails du projet</div>
           <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-            {/* Bouton Situation (dans détails aussi) */}
+            {/* Bouton Situation */}
             <button
               onClick={()=> onToggleSituation?.(projet)}
               style={projet.ouvert ? btnSituationOpen : btnSituationClosed}
@@ -455,13 +441,23 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
                 <button onClick={save} style={btnPrimary}>Enregistrer</button>
               </>
             )}
+
+            {/* 👉 Matériel */}
+            <button
+              onClick={()=>{ window.location.hash = `#/projets/${projet.id}`; }}
+              style={btnBlue}
+              title="Ouvrir le matériel de ce projet (ajout/suppression)"
+            >
+              Matériel
+            </button>
+
             <button onClick={onClose} title="Fermer" style={{ border:"none", background:"transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>×</button>
           </div>
         </div>
 
         {error && <ErrorBanner error={error} onClose={()=>setError(null)} />}
 
-        {/* INFOS PROJET EN COLONNE VERTICALE */}
+        {/* INFOS PROJET */}
         {!editing ? (
           <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:12 }}>
             <InfoV label="Nom" value={projet.nom || "—"} />
@@ -475,7 +471,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
             <InfoV label="VIN" value={projet.vin || "—"} />
           </div>
         ) : (
-          // FORMULAIRE D'ÉDITION (vertical)
+          // FORMULAIRE D'ÉDITION
           <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:12 }}>
             <FieldV label="Numéro d’unité">
               <input value={numeroUnite} onChange={(e)=>setNumeroUnite(e.target.value)} style={input} />
@@ -510,9 +506,14 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
         </div>
 
         <div style={{ display: "flex", alignItems:"center", gap: 8, marginBottom: 6 }}>
-          <button onClick={prevDay} style={btnGhost}>◀ Jour précédent</button>
+          <button onClick={()=>setDay(d=>addDays(d,-1))} style={btnGhost}>◀ Jour précédent</button>
           <div style={{ fontWeight: 700 }}>{key}</div>
-          <button onClick={nextDay} style={btnGhost}>Jour suivant ▶</button>
+          <button onClick={()=>{
+            setDay(d=>{
+              const tmr = addDays(d,+1);
+              return dayKey(tmr) > todayKey() ? d : tmr;
+            });
+          }} style={btnGhost}>Jour suivant ▶</button>
         </div>
 
         <table style={{ width:"100%", borderCollapse:"collapse", border:"1px solid #eee", borderRadius: 12 }}>
@@ -548,8 +549,8 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
   );
 }
 
-/* ---------------------- Ligne (sans édition inline) ---------------------- */
-function RowProjet({ p, onClickRow, onToggleSituation }) {
+/* ---------------------- Ligne (avec actions) ---------------------- */
+function RowProjet({ p, onClickRow, onToggleSituation, onOpenMaterial }) {
   const cell = (content)=> <td style={td}>{content}</td>;
 
   const handleToggle = async (e)=>{
@@ -578,7 +579,24 @@ function RowProjet({ p, onClickRow, onToggleSituation }) {
       {cell(p.plaque || "—")}
       {cell(typeof p.odometre === "number" ? p.odometre.toLocaleString("fr-CA") : (p.odometre || "—"))}
       {cell(p.vin || "—")}
-      <td style={td}><span style={{opacity:0.6}}>Cliquer pour détails</span></td>
+      <td style={{ ...td }} onClick={(e)=>e.stopPropagation()}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button
+            onClick={()=> onClickRow?.(p)}
+            style={btnSecondary}
+            title="Ouvrir les détails"
+          >
+            Détails
+          </button>
+          <button
+            onClick={()=> onOpenMaterial?.(p)}
+            style={btnBlue}
+            title="Ouvrir le matériel (ajout / suppression)"
+          >
+            Matériel
+          </button>
+        </div>
+      </td>
     </tr>
   );
 }
@@ -594,10 +612,6 @@ export default function PageListeProjet() {
   const openDetails = (p)=> setDetails({ open: true, projet: p });
   const closeDetails = ()=> setDetails({ open: false, projet: null });
 
-  const refreshAfterSave = ()=> {
-    // onSnapshot s'occupe déjà de rafraîchir; ce callback est là si tu veux un toast
-  };
-
   const toggleSituation = async (proj)=>{
     try{
       await updateDoc(doc(db, "projets", proj.id), { ouvert: !(proj.ouvert ?? true) });
@@ -605,6 +619,12 @@ export default function PageListeProjet() {
       console.error(e);
       setError(e?.message || String(e));
     }
+  };
+
+  // 👉 ouvre la page matériel via routeur (#/projets/<id>)
+  const openMaterial = (p)=>{
+    if(!p?.id) return;
+    window.location.hash = `#/projets/${p.id}`;
   };
 
   return (
@@ -631,7 +651,7 @@ export default function PageListeProjet() {
           }}
         >
           <thead>
-            <tr style={{ background: "#f6f7f8" }}>
+            <tr style={{ background:"#f6f7f8" }}>
               <th style={th}>Nom</th>
               <th style={th}>Situation</th>{/* AVANT "Unité" */}
               <th style={th}>Unité</th>
@@ -646,7 +666,13 @@ export default function PageListeProjet() {
           </thead>
           <tbody>
             {projets.map((p) => (
-              <RowProjet key={p.id} p={p} onClickRow={openDetails} onToggleSituation={toggleSituation} />
+              <RowProjet
+                key={p.id}
+                p={p}
+                onClickRow={openDetails}
+                onToggleSituation={toggleSituation}
+                onOpenMaterial={openMaterial}
+              />
             ))}
             {projets.length === 0 && (
               <tr>
@@ -665,7 +691,7 @@ export default function PageListeProjet() {
         open={details.open}
         onClose={closeDetails}
         projet={details.projet}
-        onSaved={refreshAfterSave}
+        onSaved={()=>{}}
         onToggleSituation={(p)=>{
           if (!window.confirm(`Voulez-vous ${p.ouvert ? "fermer" : "ouvrir"} ce projet ?`)) return;
           toggleSituation(p);
@@ -761,6 +787,15 @@ const btnSituationClosed = {
   color: "#b91c1c",
   borderRadius: 9999,
   padding: "6px 10px",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+const btnBlue = {
+  border: "none",
+  background: "#2563eb",
+  color: "#fff",
+  borderRadius: 10,
+  padding: "8px 12px",
   cursor: "pointer",
   fontWeight: 800,
 };
