@@ -1,4 +1,4 @@
-// pageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS menu)
+// pageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
 // Nécessite: UIPro.jsx dans le même dossier src/
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -18,7 +18,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 import PageProjets from "./PageProjets";
-import Horloge from "./Horloge";
+// import Horloge from "./Horloge"; // ⬅️ plus utilisé (l’horloge est déplacée dans le titre)
 import PageListeProjet from "./PageListeProjet"; // (optionnel) si tu l’utilises
 import ProjectMaterielPanel from "./ProjectMaterielPanel"; // ✅ panneau partagé pour le matériel
 
@@ -26,7 +26,7 @@ import ProjectMaterielPanel from "./ProjectMaterielPanel"; // ✅ panneau partag
 import { styles, Card, Pill, Button, PageContainer, TopBar } from "./UIPro";
 
 /* ---------------------- Utils ---------------------- */
-function pad2(n) { return n.toString().padStart(2, "0"); }
+function pad2(n){ return n.toString().padStart(2,"0"); }
 function dayKey(d){
   const x = d instanceof Date ? d : new Date(d);
   return `${x.getFullYear()}-${pad2(x.getMonth()+1)}-${pad2(x.getDate())}`;
@@ -38,13 +38,6 @@ function fmtDateTime(ts){
   try{
     const d = ts.toDate ? ts.toDate() : new Date(ts);
     return d.toLocaleString("fr-CA",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
-  }catch{ return "—"; }
-}
-function fmtTimeOnly(ts){
-  if(!ts) return "—";
-  try{
-    const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleTimeString("fr-CA",{hour:"2-digit",minute:"2-digit"});
   }catch{ return "—"; }
 }
 function fmtHM(ms){
@@ -69,7 +62,7 @@ async function ensureDay(empId, key=todayKey()){
       breakStartMs: null,
       breakTotalMs: 0,
       createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(), // ✅ créé avec updatedAt
+      updatedAt: serverTimestamp(),
     });
   }
   return ref;
@@ -84,7 +77,7 @@ async function getOpenEmpSegments(empId, key=todayKey()){
 async function closeAllOpenSessions(empId, key=todayKey()){
   const docs = await getOpenEmpSegments(empId, key);
   await Promise.all(
-    docs.map(d=> updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() })) // ✅ updatedAt requis
+    docs.map(d=> updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() }))
   );
 }
 
@@ -97,7 +90,7 @@ async function openEmpSession(empId, key=todayKey()){
     start: serverTimestamp(),
     end: null,
     createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(), // ✅
+    updatedAt: serverTimestamp(),
   });
   return added;
 }
@@ -110,7 +103,7 @@ async function ensureProjDay(projId, key=todayKey()){
   const ref = projDayRef(projId,key);
   const snap = await getDoc(ref);
   if(!snap.exists()){
-    await setDoc(ref,{ start: null, end: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
+    await setDoc(ref,{ start: null, end: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
   }
   return ref;
 }
@@ -130,7 +123,7 @@ async function openProjSessionForEmp(projId, empId, empName, key=todayKey()){
     start: serverTimestamp(),
     end: null,
     createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(), // ✅
+    updatedAt: serverTimestamp(),
   });
   return added;
 }
@@ -138,7 +131,7 @@ async function openProjSessionForEmp(projId, empId, empName, key=todayKey()){
 async function closeProjSessionsForEmp(projId, empId, key=todayKey()){
   const docs = await getOpenProjSegsForEmp(projId, empId, key);
   await Promise.all(
-    docs.map(d=> updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() })) // ✅
+    docs.map(d=> updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() }))
   );
 }
 
@@ -232,14 +225,14 @@ async function doPunchWithProject(emp, proj){
     await openProjSessionForEmp(proj.id, emp.id, emp.nom || null, key);
 
     if(empSegRef){
-      await updateDoc(empSegRef, { jobId: proj.id, jobName: proj.nom || null, updatedAt: serverTimestamp() }); // ✅
+      await updateDoc(empSegRef, { jobId: proj.id, jobName: proj.nom || null, updatedAt: serverTimestamp() });
     }
 
     const pdRef = projDayRef(proj.id, key);
     const pdSnap = await getDoc(pdRef);
     const pd = pdSnap.data() || {};
     if(!pd.start){
-      await updateDoc(pdRef, { start: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
+      await updateDoc(pdRef, { start: serverTimestamp(), updatedAt: serverTimestamp() });
     }
 
     await updateDoc(doc(db,"employes",emp.id), {
@@ -253,14 +246,13 @@ async function doPunchWithProject(emp, proj){
   const edSnap = await getDoc(edRef);
   const ed = edSnap.data() || {};
   if(!ed.start){
-    await updateDoc(edRef, { start: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
+    await updateDoc(edRef, { start: serverTimestamp(), updatedAt: serverTimestamp() });
   }
 }
 
 async function doDepunchWithProject(emp){
   const key = todayKey();
 
-  // Récupère les segments employés ouverts + leurs jobId
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
   const jobIds = Array.from(new Set(
     openEmpSegs
@@ -268,12 +260,9 @@ async function doDepunchWithProject(emp){
       .filter(v=>typeof v === "string" && v.length > 0)
   ));
 
-  // Ferme les segments projet correspondants
   await Promise.all(jobIds.map(jid => closeProjSessionsForEmp(jid, emp.id, key)));
-  // Ferme tous les segments employés
   await closeAllOpenSessions(emp.id, key);
-  // Marque la fin de la timecard employé (avec updatedAt)
-  await updateDoc(dayRef(emp.id, key), { end: serverTimestamp(), updatedAt: serverTimestamp() }); // ✅
+  await updateDoc(dayRef(emp.id, key), { end: serverTimestamp(), updatedAt: serverTimestamp() });
 }
 
 /* ---------------------- UI de base ---------------------- */
@@ -288,36 +277,84 @@ function ErrorBanner({ error, onClose}){
   );
 }
 
+/* ------- Popup “ajouter travailleur” inline ------- */
+function AddWorkerInline({ onAdded, onError }) {
+  const [open, setOpen] = useState(false);
+  const [nom, setNom] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const clean = nom.trim();
+    if (!clean) return;
+    try {
+      setBusy(true);
+      await addDoc(collection(db, "employes"), {
+        nom: clean,
+        createdAt: serverTimestamp(),
+      });
+      setNom("");
+      setOpen(false);
+      onAdded?.();
+    } catch (err) {
+      console.error(err);
+      onError?.(err?.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Button variant="primary" onClick={()=>setOpen(v=>!v)}>
+        {open ? "Annuler" : "Ajouter travailleur"}
+      </Button>
+      {open && (
+        <form onSubmit={submit} style={{ marginTop: 10, display:"flex", gap:8, alignItems:"center" }}>
+          <input
+            value={nom}
+            onChange={(e)=>setNom(e.target.value)}
+            placeholder="Nom de l’employé"
+            style={{ ...styles.input, minWidth: 280, height: 42 }}
+          />
+          <Button type="submit" variant="success" disabled={busy}>
+            Ajouter
+          </Button>
+        </form>
+      )}
+    </>
+  );
+}
+
 /* ------- Mini fenêtre (popup) ------- */
-function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }){
+function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
   const [step, setStep] = useState("confirm"); // "confirm" | "choose"
   const [altNone, setAltNone] = useState(!initialProj);
   const [altProjId, setAltProjId] = useState(initialProj?.id || "");
 
-  useEffect(()=>{
-    if(open){
+  useEffect(() => {
+    if (open) {
       setStep("confirm");
       setAltNone(!initialProj);
       setAltProjId(initialProj?.id || "");
     }
-  },[open, initialProj?.id]);
+  }, [open, initialProj?.id]);
 
-  if(!open) return null;
+  if (!open) return null;
 
   const confirmText = initialProj
     ? `Continuer projet : ${initialProj.nom || "(sans nom)"} ?`
     : "Continuer sans projet ?";
 
-  const goChoose = ()=>{
+  const goChoose = () => {
     setStep("choose");
-    if(!initialProj){ setAltNone(false); setAltProjId(""); }
+    if (!initialProj) { setAltNone(false); setAltProjId(""); }
     else { setAltNone(false); setAltProjId(initialProj.id || ""); }
   };
 
-  const handleConfirmDirect = ()=> onConfirm(initialProj || null);
-
-  const handleConfirmChoice = ()=>{
-    const chosen = altNone ? null : (projets.find(p=>p.id===altProjId) || null);
+  const handleConfirmDirect = () => onConfirm(initialProj || null);
+  const handleConfirmChoice = () => {
+    const chosen = altNone ? null : (projets.find(p => p.id === altProjId) || null);
     onConfirm(chosen);
   };
 
@@ -410,10 +447,10 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
 
   useEffect(()=>{ setProjSel(emp?.lastProjectId || ""); }, [emp?.lastProjectId]);
 
-  const statusCell = present ? <Pill variant="success">Présent</Pill>
-    : card?.end ? <Pill variant="neutral">Terminé</Pill>
-    : card?.start ? <Pill variant="warning">Absent</Pill>
-    : <Pill variant="neutral">—</Pill>;
+  // ✅ statut simplifié: Actif / Inactif
+  const statusCell = present
+    ? <Pill variant="success">Actif</Pill>
+    : <Pill variant="neutral">Inactif</Pill>;
 
   const handlePunchClick = (e) => {
     e.stopPropagation();
@@ -450,27 +487,35 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
 
   return (
     <>
-      <tr onClick={() => onOpenHistory(emp)}
-          style={styles.row}
-          onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
-          onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
+      <tr
+        onClick={() => onOpenHistory(emp)}
+        style={styles.row}
+        onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
+        onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}
+      >
         <td style={styles.td}>{emp.nom || "—"}</td>
         <td style={styles.td}>{statusCell}</td>
-        <td style={styles.td}>{fmtDateTime(card?.start)}</td>
-        <td style={styles.td}>{fmtDateTime(card?.end)}</td>
         <td style={styles.td}>{fmtHM(totalMs)}</td>
 
-        {/* Sélecteur Projet + GROS BOUTON */}
-        <td style={styles.td} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+        {/* Colonne Projet — prend toute la largeur, gros boutons */}
+        <td style={{ ...styles.td, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
             <select
               value={projSel}
               onChange={(e)=> setProjSel(e.target.value)}
               aria-label="Projet pour ce punch"
-              style={{ ...styles.input, minWidth:220, height:38, cursor: present ? "not-allowed" : "pointer", opacity: present ? 0.7 : 1 }}
+              style={{
+                ...styles.input,
+                flex: "1 1 320px",
+                minWidth: 260,
+                height: 44,
+                fontSize: 16,
+                cursor: present ? "not-allowed" : "pointer",
+                opacity: present ? 0.7 : 1
+              }}
               disabled={present}
             >
-              <option value="">— Projet pour ce punch —</option>
+              <option value="">— Projet —</option>
               {projets.map(p => (
                 <option key={p.id} value={p.id}>{p.nom || "(sans nom)"}</option>
               ))}
@@ -482,7 +527,7 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
               disabled={pending}
               aria-label={present ? "Dépuncher" : "Puncher"}
               variant={present ? "danger" : "success"}
-              style={{ width:180, height:46, fontSize:16 }}
+              style={{ width: 220, height: 52, fontSize: 18, fontWeight: 800 }}
             >
               {present ? "Dépunch" : "Punch"}
             </Button>
@@ -502,73 +547,61 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
   );
 }
 
-/* ---------------------- Barre d’ajout employés ---------------------- */
-function BarreAjoutEmployes({ onError }) {
-  const [open, setOpen] = useState(false);
-  const [nom, setNom] = useState("");
-  const [msg, setMsg] = useState("");
-
-  const submit = async (e) => {
-    e.preventDefault();
-    const clean = nom.trim();
-    if (!clean) {
-      setMsg("Nom requis.");
-      return;
-    }
-    try {
-      await addDoc(collection(db, "employes"), {
-        nom: clean,
-        createdAt: serverTimestamp(),
-      });
-      setNom("");
-      setMsg("Ajouté ✔");
-      setTimeout(() => setMsg(""), 1200);
-      setOpen(false);
-    } catch (err) {
-      console.error(err);
-      onError?.(err?.message || String(err));
-      setMsg("Erreur d'ajout");
-    }
-  };
-
-  return (
-    <Card
-      title="👥 Travailleurs"
-      right={
-        <Button
-          variant="neutral"
-          onClick={() => setOpen((v) => !v)}
-          title="Ajouter un employé"
-        >
-          {open ? "–" : "+"}
-        </Button>
-      }
-    >
-      {open && (
-        <form
-          onSubmit={submit}
-          style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}
-        >
-          <input
-            value={nom}
-            onChange={(e) => setNom(e.target.value)}
-            placeholder="Nom de l’employé"
-            style={{ ...styles.input, minWidth: 260 }}
-          />
-          <Button type="submit" variant="success">
-            Ajouter
-          </Button>
-          {msg && <span style={{ color: "#2563eb", fontSize: 14 }}>{msg}</span>}
-        </form>
-      )}
-    </Card>
-  );
-}
-
 /* ---------------------- Routing helper (LOCAL à pageAccueil) ---------------------- */
 function getRouteFromHash(){
   const raw = window.location.hash.replace(/^#\//, "");
   return raw || "accueil";
+}
+
+/* ---------- Composant interne : Horloge compacte à droite du TopBar ---------- */
+function ClockBadge({ now }) {
+  const heure = now.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const dateStr = now.toLocaleDateString("fr-CA", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "2-digit",
+  });
+
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.9)",
+        backdropFilter: "blur(4px)",
+        border: "1px solid #e5e7eb",
+        borderRadius: 14,
+        padding: "10px 14px",
+        boxShadow: "0 10px 24px rgba(0,0,0,0.15)",
+        fontFamily:
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+        color: "#111827",
+        textAlign: "center",
+        minWidth: 220,
+        lineHeight: 1.15,
+      }}
+      aria-label="Heure et date courantes"
+    >
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 700,
+          letterSpacing: 0.3,
+          textTransform: "capitalize",
+          marginBottom: 2,
+        }}
+      >
+        {dateStr}
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 1 }}>
+        {heure}
+      </div>
+    </div>
+  );
 }
 
 /* ---------------------- Page ---------------------- */
@@ -576,6 +609,13 @@ export default function PageAccueil(){
   const [error,setError] = useState(null);
   const employes = useEmployes(setError);
   const projets = useProjets(setError);
+
+  // ⏱️ Heure (pour le bloc dans le titre)
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const [openHist, setOpenHist] = useState(false);
   const [empSel, setEmpSel] = useState(null);
@@ -599,15 +639,11 @@ export default function PageAccueil(){
   if (route === "projets") {
     return (
       <>
-        {/* Horloge tout en haut, centrée */}
-        <div style={{ width:"100%", display:"flex", justifyContent:"center", margin:"8px 0 16px" }}>
-          <Horloge />
-        </div>
-
+        {/* (bannière Horloge supprimée ici) */}
         <PageContainer>
           <TopBar
             left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Projets</h1>}
-            right={null}
+            right={<ClockBadge now={now} />}
           />
           <Card>
             <PageListeProjet />
@@ -620,29 +656,25 @@ export default function PageAccueil(){
   // Accueil
   return (
     <>
-      {/* Horloge tout en haut, centrée */}
-      <div style={{ width:"100%", display:"flex", justifyContent:"center", margin:"8px 0 16px" }}>
-        <Horloge />
-      </div>
-
+      {/* (bannière Horloge supprimée ici) */}
       <PageContainer>
         <TopBar
           left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Gyrotech</h1>}
-          right={null}
+          right={<ClockBadge now={now} />}
         />
 
         <ErrorBanner error={error} onClose={()=>setError(null)} />
 
-        {/* Barre d’ajout */}
-        <BarreAjoutEmployes onError={setError} />
-
         {/* ===== Tableau EMPLOYÉS ===== */}
-        <Card title="Feuille de présence (aujourd’hui)">
+        <Card
+          title="👥 Travailleurs"
+          right={<AddWorkerInline onError={setError} />}
+        >
           <div style={styles.tableWrap}>
             <table style={styles.table}>
               <thead>
                 <tr>
-                  {["Nom","Statut","Première entrée","Dernier dépunch","Total (jour)","Projet + Pointage"].map((h,i)=>(
+                  {["Nom","Statut","Total (jour)","Projet"].map((h,i)=>(
                     <th key={i} style={styles.th}>{h}</th>
                   ))}
                 </tr>
@@ -658,7 +690,7 @@ export default function PageAccueil(){
                   />
                 ))}
                 {employes.length===0 && (
-                  <tr><td colSpan={6} style={{ ...styles.td, color:"#64748b" }}>Aucun employé pour l’instant.</td></tr>
+                  <tr><td colSpan={4} style={{ ...styles.td, color:"#64748b" }}>Aucun employé pour l’instant.</td></tr>
                 )}
               </tbody>
             </table>

@@ -1,7 +1,8 @@
 // src/PageListeProjet.jsx — PAGE COMPLÈTE DES PROJETS AVEC TOUTES LES INFORMATIONS
-// + Bouton "Matériel" par projet (ouvre #/projets/<id> pour ajouter/voir/retirer des usages)
+// + Bouton "Matériel" par projet (ouvre #/projets/<id>)
+// + Bouton "PDF" par projet (ouvre un gestionnaire d'upload/listing de PDF)
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "./firebaseConfig";
 import {
   collection,
@@ -15,6 +16,16 @@ import {
   query,
   orderBy,
 } from "firebase/firestore";
+
+// 👇 Assure-toi que firebaseConfig exporte bien `storage` (getStorage(app))
+import { storage } from "./firebaseConfig";
+import {
+  ref as storageRef,
+  uploadBytes,
+  getDownloadURL,
+  listAll,
+  deleteObject, // <- suppression
+} from "firebase/storage";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n){return n.toString().padStart(2,"0");}
@@ -171,6 +182,192 @@ function ErrorBanner({ error, onClose }) {
       >
         OK
       </button>
+    </div>
+  );
+}
+
+/* ---------------------- Popup PDF Manager ---------------------- */
+function PopupPDFManager({ open, onClose, projet }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [files, setFiles] = useState([]);
+  const inputRef = useRef(null);
+
+  // Liste les PDFs déjà téléversés (Storage : projets/<id>/pdfs/)
+  useEffect(()=>{
+    if(!open || !projet?.id) return;
+    let cancelled = false;
+    (async ()=>{
+      try{
+        const base = storageRef(storage, `projets/${projet.id}/pdfs`);
+        const res = await listAll(base).catch(()=>({ items: [] }));
+        // Récupérer les URLs en parallèle
+        const entries = await Promise.all(
+          (res.items || []).map(async (itemRef) => {
+            const url = await getDownloadURL(itemRef);
+            const name = itemRef.name;
+            return { name, url };
+          })
+        );
+        if(!cancelled) setFiles(entries.sort((a,b)=>a.name.localeCompare(b.name)));
+      }catch(e){
+        if(!cancelled){
+          console.error(e);
+          setError(e?.message || String(e));
+        }
+      }
+    })();
+    return ()=>{ cancelled = true; };
+  },[open, projet?.id]);
+
+  const pickFile = ()=> inputRef.current?.click();
+
+  const onPicked = async (e)=>{
+    const file = e.target.files?.[0];
+    e.target.value = ""; // reset pour pouvoir re-sélectionner le même nom
+    if(!file) return;
+    if(file.type !== "application/pdf"){
+      setError("Sélectionne un fichier PDF (.pdf).");
+      return;
+    }
+    if(!projet?.id){
+      setError("Projet invalide.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try{
+      const safeName = file.name.replace(/[^\w.\-()]/g, "_");
+      const stamp = new Date().toISOString().replace(/[:.]/g,"-");
+      const path = `projets/${projet.id}/pdfs/${stamp}_${safeName}`;
+      const dest = storageRef(storage, path);
+      await uploadBytes(dest, file, { contentType: "application/pdf" });
+      const url = await getDownloadURL(dest);
+      setFiles((prev)=> [...prev, { name: `${stamp}_${safeName}`, url }].sort((a,b)=>a.name.localeCompare(b.name)));
+    }catch(e){
+      console.error(e);
+      setError(e?.message || String(e));
+    }finally{
+      setBusy(false);
+    }
+  };
+
+  // ❌ Supprimer un PDF (avec confirmation)
+  const onDelete = async (name) => {
+    if (!projet?.id) return;
+    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer « ${name} » ?`)) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      const fileRef = storageRef(storage, `projets/${projet.id}/pdfs/${name}`);
+      await deleteObject(fileRef);
+      setFiles((prev) => prev.filter((f) => f.name !== name));
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if(!open || !projet) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position:"fixed",
+        inset:0,
+        zIndex:10000,
+        background:"rgba(0,0,0,0.55)",
+        display:"flex",
+        alignItems:"center",
+        justifyContent:"center",
+        padding:16
+      }}
+    >
+      <div
+        onClick={(e)=>e.stopPropagation()}
+        style={{
+          background:"#fff",
+          border:"1px solid #e5e7eb",
+          width:"min(720px, 96vw)",
+          maxHeight:"92vh",
+          overflow:"auto",
+          borderRadius:16,
+          padding:18,
+          boxShadow:"0 28px 64px rgba(0,0,0,0.30)",
+          fontSize:14
+        }}
+      >
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: 8 }}>
+          <div style={{ fontWeight:900, fontSize:18 }}>
+            PDF – {projet.nom || "(projet)"}
+          </div>
+          <button onClick={onClose} title="Fermer"
+            style={{ border:"none", background:"transparent", fontSize:24, cursor:"pointer", lineHeight:1 }}>×</button>
+        </div>
+
+        {error && <ErrorBanner error={error} onClose={()=>setError(null)} />}
+
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
+          <button onClick={pickFile} style={btnPrimary} disabled={busy}>
+            {busy ? "Téléversement..." : "Ajouter un PDF"}
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="application/pdf"
+            onChange={onPicked}
+            style={{ display:"none" }}
+          />
+        </div>
+
+        <div style={{ fontWeight:800, margin:"6px 0 8px" }}>Fichiers du projet</div>
+        <table style={{ width:"100%", borderCollapse:"collapse", border:"1px solid #eee", borderRadius:12 }}>
+          <thead>
+            <tr style={{ background:"#f6f7f8" }}>
+              <th style={th}>Nom</th>
+              <th style={th}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {files.map((f, i)=>(
+              <tr key={i}>
+                <td style={{ ...td, wordBreak:"break-word" }}>{f.name}</td>
+                <td style={td}>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>Ouvrir</a>
+                    <button
+                      onClick={()=>{ navigator.clipboard?.writeText(f.url); }}
+                      style={btnSecondary}
+                      title="Copier l’URL"
+                    >
+                      Copier l’URL
+                    </button>
+                    <button
+                      onClick={() => onDelete(f.name)}
+                      style={btnDanger}
+                      disabled={busy}
+                      title="Supprimer définitivement ce PDF"
+                    >
+                      Supprimer
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {files.length===0 && (
+              <tr>
+                <td colSpan={2} style={{ padding:12, color:"#666" }}>Aucun PDF pour l’instant.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -526,7 +723,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
             </tr>
           </thead>
           <tbody>
-            {sessions.map((s, i)=>{
+            {(sessions||[]).map((s, i)=>{
               const st = s.start?.toDate ? s.start.toDate() : null;
               const en = s.end?.toDate ? s.end.toDate() : null;
               const dur = computeTotalMs([s]);
@@ -539,7 +736,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
                 </tr>
               );
             })}
-            {sessions.length===0 && (
+            {(!sessions || sessions.length===0) && (
               <tr><td colSpan={4} style={{ padding:12, color:"#666" }}>Aucune session ce jour.</td></tr>
             )}
           </tbody>
@@ -550,7 +747,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation 
 }
 
 /* ---------------------- Ligne (avec actions) ---------------------- */
-function RowProjet({ p, onClickRow, onToggleSituation, onOpenMaterial }) {
+function RowProjet({ p, onClickRow, onToggleSituation, onOpenMaterial, onOpenPDF }) {
   const cell = (content)=> <td style={td}>{content}</td>;
 
   const handleToggle = async (e)=>{
@@ -595,6 +792,14 @@ function RowProjet({ p, onClickRow, onToggleSituation, onOpenMaterial }) {
           >
             Matériel
           </button>
+          {/* 👉 Nouveau bouton PDF */}
+          <button
+            onClick={()=> onOpenPDF?.(p)}
+            style={btnPDF}
+            title="Ajouter/Ouvrir des PDF du projet"
+          >
+            PDF
+          </button>
         </div>
       </td>
     </tr>
@@ -608,6 +813,8 @@ export default function PageListeProjet() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [details, setDetails] = useState({ open: false, projet: null });
+
+  const [pdfMgr, setPdfMgr] = useState({ open:false, projet:null });
 
   const openDetails = (p)=> setDetails({ open: true, projet: p });
   const closeDetails = ()=> setDetails({ open: false, projet: null });
@@ -625,6 +832,11 @@ export default function PageListeProjet() {
   const openMaterial = (p)=>{
     if(!p?.id) return;
     window.location.hash = `#/projets/${p.id}`;
+  };
+
+  const openPDF = (p)=>{
+    if(!p?.id) return;
+    setPdfMgr({ open:true, projet:p });
   };
 
   return (
@@ -672,6 +884,7 @@ export default function PageListeProjet() {
                 onClickRow={openDetails}
                 onToggleSituation={toggleSituation}
                 onOpenMaterial={openMaterial}
+                onOpenPDF={openPDF}
               />
             ))}
             {projets.length === 0 && (
@@ -696,6 +909,11 @@ export default function PageListeProjet() {
           if (!window.confirm(`Voulez-vous ${p.ouvert ? "fermer" : "ouvrir"} ce projet ?`)) return;
           toggleSituation(p);
         }}
+      />
+      <PopupPDFManager
+        open={pdfMgr.open}
+        onClose={()=>setPdfMgr({ open:false, projet:null })}
+        projet={pdfMgr.projet}
       />
     </div>
   );
@@ -794,6 +1012,24 @@ const btnBlue = {
   border: "none",
   background: "#2563eb",
   color: "#fff",
+  borderRadius: 10,
+  padding: "8px 12px",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+const btnPDF = {
+  border: "none",
+  background: "#0ea5e9",
+  color: "#fff",
+  borderRadius: 10,
+  padding: "8px 12px",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+const btnDanger = {
+  border: "1px solid #ef4444",
+  background: "#fee2e2",
+  color: "#b91c1c",
   borderRadius: 10,
   padding: "8px 12px",
   cursor: "pointer",

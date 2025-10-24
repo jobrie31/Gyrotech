@@ -8,7 +8,7 @@ import {
   doc,
   getDoc,
   setDoc,
-  addDoc,            // ✅ manquait
+  addDoc,
   onSnapshot,
   serverTimestamp,
   query,
@@ -77,9 +77,7 @@ function useProjets(setError){
         list.push({id:d.id, ouvert: data.ouvert ?? true, ...data});
       });
 
-      // Tri identique à PageListeProjet:
-      // 1) ouverts (true) d'abord, puis fermés
-      // 2) numeroUnite (string pad), puis nom (ou marque+modele)
+      // Tri identique à PageListeProjet
       list.sort((a,b)=>{
         const ao = a.ouvert ? 0 : 1;
         const bo = b.ouvert ? 0 : 1;
@@ -111,10 +109,7 @@ function useDayP(projId, key, setError){
 function useSessionsP(projId, key, setError){
   const [list,setList] = useState([]);
   const [tick,setTick] = useState(0);
-  useEffect(()=>{
-    const t = setInterval(()=>setTick(x=>x+1),15000);
-    return ()=>clearInterval(t);
-  },[]);
+  useEffect(()=>{ const t = setInterval(()=>setTick(x=>x+1),15000); return ()=>clearInterval(t); },[]);
   useEffect(()=>{
     if(!projId||!key) return;
     const qSeg = query(segColP(projId,key), orderBy("start","asc"));
@@ -144,6 +139,50 @@ function usePresenceTodayP(projId, setError){
   const totalMs = useMemo(()=> computeTotalMs(sessions),[sessions]);
   const hasOpen = useMemo(()=> sessions.some(s=>!s.end),[sessions]);
   return { key, card, sessions, totalMs, hasOpen };
+}
+
+/* ✅ NOUVEAU: agrégats sur TOUT l’historique du projet */
+function useProjectLifetimeStats(projId, setError){
+  const [firstEverStart, setFirstEverStart] = useState(null); // Date | null
+  const [totalAllMs, setTotalAllMs] = useState(0);
+
+  useEffect(()=>{
+    if(!projId) return;
+    // Écoute les journées; au moindre changement on recalcule tout (simple et robuste)
+    const col = collection(db, "projets", projId, "timecards");
+    const unsub = onSnapshot(col, async (daysSnap)=>{
+      try{
+        let first = null;
+        let total = 0;
+
+        const dayDocs = daysSnap.docs;
+        // Pour chaque journée, on lit ses segments (séquentiel pour la clarté)
+        for (const d of dayDocs){
+          const segSnap = await getDocs(query(collection(d.ref, "segments"), orderBy("start","asc")));
+          segSnap.forEach(seg=>{
+            const s = seg.data();
+            const st = s.start?.toDate ? s.start.toDate() : (s.start? new Date(s.start) : null);
+            const en = s.end?.toDate ? s.end.toDate() : (s.end? new Date(s.end) : null);
+            if (st){
+              if (!first || st < first) first = st;
+              const dur = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
+              total += dur;
+            }
+          });
+        }
+
+        setFirstEverStart(first);
+        setTotalAllMs(total);
+      }catch(err){
+        console.error(err);
+        setError?.(err?.message || String(err));
+      }
+    }, (err)=> setError?.(err?.message || String(err)));
+
+    return ()=>unsub();
+  },[projId, setError]);
+
+  return { firstEverStart, totalAllMs };
 }
 
 /* ---------------------- UI de base ---------------------- */
@@ -198,11 +237,11 @@ function HistoriqueProjet({ proj, open, onClose }){
 
         <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12}}>
           <div style={{border:"1px solid #eee",borderRadius:10,padding:12}}>
-            <div style={{fontSize:12,color:"#666"}}>Première entrée</div>
+            <div style={{fontSize:12,color:"#666"}}>Première entrée (jour)</div>
             <div style={{fontSize:18,fontWeight:700}}>{fmtTimeOnly(card?.start)}</div>
           </div>
           <div style={{border:"1px solid #eee",borderRadius:10,padding:12}}>
-            <div style={{fontSize:12,color:"#666"}}>Dernier dépunch</div>
+            <div style={{fontSize:12,color:"#666"}}>Dernier dépunch (jour)</div>
             <div style={{fontSize:18,fontWeight:700}}>{fmtTimeOnly(card?.end)}</div>
           </div>
           <div style={{border:"1px solid #eee",borderRadius:10,padding:12}}>
@@ -246,7 +285,11 @@ function HistoriqueProjet({ proj, open, onClose }){
 
 /* ---------------------- Lignes / Tableau (clic => matériel) ---------------------- */
 function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
+  // Présence du jour (pour statut actuel)
   const { card, totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
+
+  // ✅ Agrégats "tout temps"
+  const { firstEverStart, totalAllMs } = useProjectLifetimeStats(proj.id, setError);
 
   const statutLabel = hasOpen ? "Actif" : (card?.end ? "Terminé" : (card?.start ? "Inactif" : "—"));
   const statutStyle = {
@@ -295,9 +338,20 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtDateTime(card?.start)}</td>
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtDateTime(card?.end)}</td>
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalMs)}</td>
+      {/* ✅ Première entrée de TOUTE l’historique */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        {fmtDateTime(firstEverStart)}
+      </td>
+
+      {/* ❌ Ancienne colonne "Dernier dépunch" remplacée par ✅ Total (tous jours) */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        {fmtHM(totalAllMs)}
+      </td>
+
+      {/* Total du jour (on garde la vue jour pour info rapide) */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        {fmtHM(totalMs)}
+      </td>
 
       {/* Actions */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }} onClick={(e)=>e.stopPropagation()}>
@@ -365,8 +419,8 @@ export default function PageProjets(){
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Nom</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Situation</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Statut</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Première entrée</th>
-              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Dernier dépunch</th>
+              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Première entrée (tout temps)</th>
+              <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Total (tous jours)</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Total (jour)</th>
               <th style={{ textAlign:"left", padding:10, borderBottom:"1px solid #e0e0e0" }}>Actions</th>
             </tr>

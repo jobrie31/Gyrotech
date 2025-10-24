@@ -1,0 +1,32 @@
+[
+  {
+    "origin": [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "http://localhost:3000",
+      "https://gyrotech-a3234.web.app",
+      "https://gyrotech-a3234.firebaseapp.com"
+    ],
+    "method": ["GET", "POST", "PUT", "HEAD", "DELETE", "PATCH", "OPTIONS"],
+    "responseHeader": [
+      "Authorization",
+      "Content-Type",
+      "x-goog-meta-*",
+      "x-goog-acl",
+      "x-goog-date",
+      "x-goog-if-generation-match",
+      "x-goog-if-metageneration-match",
+      "x-goog-user-project",
+      "x-goog-content-length-range",
+      "x-goog-encryption-algorithm",
+      "x-goog-encryption-key",
+      "x-goog-encryption-key-sha256",
+      "x-goog-upload-command",
+      "x-goog-upload-content-length",
+      "x-goog-upload-content-type",
+      "x-goog-upload-protocol",
+      "x-goog-upload-url"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

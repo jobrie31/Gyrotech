@@ -15,7 +15,10 @@ const firebaseConfig = {
   apiKey: "AIzaSyDPjKwMAhzACa0w4xyebpcsJkeStjiDyYM",
   authDomain: "gyrotech-a3234.firebaseapp.com",
   projectId: "gyrotech-a3234",
-  storageBucket: "gyrotech-a3234.appspot.com",
+
+  // ✅ utilise le VRAI bucket (celui que tu vois dans Cloud Console)
+  storageBucket: "gyrotech-a3234.firebasestorage.app",
+
   messagingSenderId: "1006226251481",
   appId: "1:1006226251481:web:45f06094e07b40f2b828c8",
 };
@@ -23,7 +26,9 @@ const firebaseConfig = {
 // 🔥 Init
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
-export const storage = getStorage(app);
+
+// ✅ force aussi le bucket côté SDK (optionnel mais sûr)
+export const storage = getStorage(app, "gs://gyrotech-a3234.firebasestorage.app");
 
 // 👤 Auth + connexion anonyme auto (persistance locale)
 export const auth = getAuth(app);
@@ -40,4 +45,3 @@ onAuthStateChanged(auth, (user) => {
     console.log("Signed in as:", user.email || `anon:${user.uid}`);
   }
 });
-
