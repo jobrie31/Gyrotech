@@ -166,8 +166,8 @@ async function removeMaterialQty({ projId, matId, amount, confirmDelete = true }
   });
 }
 
-/* ---------- component ---------- */
-export default function ProjectMaterielPanel({ projId, onClose, setParentError }) {
+// src/ProjectMaterielPanel.jsx
+export default function ProjectMaterielPanel({ projId, onClose, setParentError, inline = false }) {
   const [error, setError] = useState(null);
   const proj = useProject(projId, setError);
   const categories = useCategories(setError);
@@ -176,14 +176,12 @@ export default function ProjectMaterielPanel({ projId, onClose, setParentError }
 
   useEffect(() => { if (error) setParentError?.(error); }, [error, setParentError]);
 
-  // Map: materielId -> usage doc
   const usagesMap = useMemo(() => {
     const m = new Map();
     usages.forEach((u) => m.set(u.id, u));
     return m;
   }, [usages]);
 
-  // Groupes par catégorie + état local des quantités à saisir
   const [qtyById, setQtyById] = useState({});
   const groups = useMemo(() => {
     const map = new Map();
@@ -203,27 +201,22 @@ export default function ProjectMaterielPanel({ projId, onClose, setParentError }
 
   const addWithQty = async (mat) => {
     try {
-      // ✅ Quantité ≥ 1 (validation AVANT écriture)
       const amount = asInt(qtyById[mat.id] ?? 1);
       if (!Number.isFinite(amount) || amount < 1) {
         setError("La quantité doit être au moins 1.");
         return;
       }
       await addMaterialQty({ projId, mat, amount });
-      setQty(mat.id, ""); // reset champ
+      setQty(mat.id, "");
     } catch (err) {
       setError(err?.message || String(err));
     }
   };
 
-  // Bouton "Enlever…" sur la ligne d’un article déjà utilisé
   const removeSome = async (u) => {
     try {
-      const raw = window.prompt(
-        `Enlever combien d’éléments de "${u.nom}" ?\nQuantité actuelle: ${u.qty}`,
-        "1"
-      );
-      if (raw == null) return; // annulé
+      const raw = window.prompt(`Enlever combien d’éléments de "${u.nom}" ?\nQuantité actuelle: ${u.qty}`, "1");
+      if (raw == null) return;
       const n = asInt(raw);
       if (!Number.isFinite(n) || n <= 0) {
         setError("Quantité à enlever invalide.");
@@ -241,119 +234,131 @@ export default function ProjectMaterielPanel({ projId, onClose, setParentError }
 
   if (!projId) return null;
 
+  // ----- CONTENU DU PANEL (identique visuellement) -----
+  const content = (
+    <div style={{ width: "100%" }}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <h3 style={{margin:0}}>Matériel — {proj?.nom || "…"}</h3>
+        {!inline && <Button variant="neutral" onClick={onClose}>Fermer</Button>}
+      </div>
+
+      <ErrorBanner error={error} onClose={() => setError(null)} />
+
+      <Card title="Matériel utilisé (résumé)">
+        <div style={styles.tableWrap}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                {["Matériel", "Catégorie", "Prix unitaire", "Quantité", "Sous-total", "Actions"].map((h) => (
+                  <th key={h} style={styles.th}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {usages.map((u) => (
+                <tr key={u.id} style={styles.row}
+                    onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
+                    onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
+                  <td style={styles.td}>{u.nom}</td>
+                  <td style={styles.td}>{u.categorie || "—"}</td>
+                  <td style={styles.td}>{formatCAD(Number(u.prix) || 0)}</td>
+                  <td style={styles.td}>{Number(u.qty) || 0}</td>
+                  <td style={styles.td}>{formatCAD((Number(u.prix) || 0) * (Number(u.qty) || 0))}</td>
+                  <td style={styles.td}>
+                    <Button variant="neutral" onClick={() => removeSome(u)}>Enlever…</Button>
+                  </td>
+                </tr>
+              ))}
+              {usages.length === 0 && (
+                <tr><td colSpan={6} style={{ ...styles.td, color: "#64748b" }}>Aucun matériel pour l’instant.</td></tr>
+              )}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={5} style={{ ...styles.td, textAlign: "right", fontWeight: 800 }}>Total</td>
+                <td style={{ ...styles.td, fontWeight: 800 }}>{formatCAD(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </Card>
+
+      <Card title="Ajouter du matériel au projet">
+        <div style={styles.tableWrap}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                {["Nom", "Prix", "Catégorie", "Quantité", "Actions", "Déjà utilisé"].map((h) => (
+                  <th key={h} style={styles.th}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map(({ cat, items }) => (
+                <React.Fragment key={cat ? cat.id : "__NONE__"}>
+                  <tr style={{ background: "#f8fafc" }}>
+                    <th colSpan={6} style={{ ...styles.th, textAlign: "left" }}>
+                      {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
+                    </th>
+                  </tr>
+
+                  {items.map((mat) => {
+                    const used = usagesMap.get(mat.id);
+                    return (
+                      <tr key={mat.id} style={styles.row}
+                          onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
+                          onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
+                        <td style={styles.td}>{mat.nom}</td>
+                        <td style={styles.td}>{formatCAD(Number(mat.prix) || 0)}</td>
+                        <td style={styles.td}>{mat.categorie || "—"}</td>
+                        <td style={styles.td}>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={qtyById[mat.id] ?? ""}
+                            onChange={(e) => setQty(mat.id, e.target.value)}
+                            placeholder="Qté (≥ 1)"
+                            style={{ ...styles.input, width: 110, height: 36 }}
+                          />
+                        </td>
+                        <td style={styles.td}>
+                          <Button variant="success" onClick={() => addWithQty(mat)}>Ajouter</Button>
+                        </td>
+                        <td style={styles.td}>
+                          <Pill variant="neutral">{used ? (Number(used.qty) || 0) : 0}</Pill>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {items.length === 0 && (
+                    <tr><td colSpan={6} style={{ ...styles.td, color: "#64748b" }}>Aucun matériel.</td></tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ----- RENDU -----
+  if (inline) {
+    // rendu “section” (pas d’overlay)
+    return (
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
+        {content}
+      </div>
+    );
+  }
+
+  // rendu modal (ancien comportement)
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.35)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
       <div style={{background:"#fff", width:"min(1100px, 96vw)", maxHeight:"92vh", overflow:"auto", borderRadius:14, padding:16, boxShadow:"0 18px 50px rgba(0,0,0,0.25)"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <h3 style={{margin:0}}>Détails du projet — {proj?.nom || "..."}</h3>
-          <Button variant="neutral" onClick={onClose}>Fermer</Button>
-        </div>
-
-        <ErrorBanner error={error} onClose={() => setError(null)} />
-
-        {/* Résumé (colonne Actions pour ENLEVER…) */}
-        <Card title="Matériel utilisé (résumé)">
-          <div style={{ overflowX: "auto" }}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  {["Matériel", "Catégorie", "Prix unitaire", "Quantité", "Sous-total", "Actions"].map((h) => (
-                    <th key={h} style={styles.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {usages.map((u) => (
-                  <tr key={u.id} style={styles.row}
-                      onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
-                      onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
-                    <td style={styles.td}>{u.nom}</td>
-                    <td style={styles.td}>{u.categorie || "—"}</td>
-                    <td style={styles.td}>{formatCAD(Number(u.prix) || 0)}</td>
-                    <td style={styles.td}>{Number(u.qty) || 0}</td>
-                    <td style={styles.td}>{formatCAD((Number(u.prix) || 0) * (Number(u.qty) || 0))}</td>
-                    <td style={styles.td}>
-                      <Button variant="neutral" onClick={() => removeSome(u)}>Enlever…</Button>
-                    </td>
-                  </tr>
-                ))}
-                {usages.length === 0 && (
-                  <tr><td colSpan={6} style={{ ...styles.td, color: "#64748b" }}>Aucun matériel pour l’instant.</td></tr>
-                )}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={5} style={{ ...styles.td, textAlign: "right", fontWeight: 800 }}>Total</td>
-                  <td style={{ ...styles.td, fontWeight: 800 }}>{formatCAD(total)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </Card>
-
-        {/* Ajouter avec quantité (min=1, placeholder mis à jour) */}
-        <Card title="Ajouter du matériel au projet">
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  {["Nom", "Prix", "Catégorie", "Quantité", "Actions", "Déjà utilisé"].map((h) => (
-                    <th key={h} style={styles.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map(({ cat, items }) => (
-                  <React.Fragment key={cat ? cat.id : "__NONE__"}>
-                    <tr style={{ background: "#f8fafc" }}>
-                      <th colSpan={6} style={{ ...styles.th, textAlign: "left" }}>
-                        {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
-                      </th>
-                    </tr>
-
-                    {items.map((mat) => {
-                      const used = usagesMap.get(mat.id);
-                      return (
-                        <tr key={mat.id} style={styles.row}
-                            onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
-                            onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
-                          <td style={styles.td}>{mat.nom}</td>
-                          <td style={styles.td}>{formatCAD(Number(mat.prix) || 0)}</td>
-                          <td style={styles.td}>{mat.categorie || "—"}</td>
-                          <td style={styles.td}>
-                            <input
-                              type="number"
-                              min="1"   // ✅ quantité minimale 1
-                              step="1"
-                              value={qtyById[mat.id] ?? ""}
-                              onChange={(e) => setQty(mat.id, e.target.value)}
-                              placeholder="Qté (≥ 1)"
-                              style={{ ...styles.input, width: 110, height: 36 }}
-                            />
-                          </td>
-                          <td style={styles.td}>
-                            <Button variant="success" onClick={() => addWithQty(mat)}>Ajouter</Button>
-                          </td>
-                          <td style={styles.td}>
-                            <Pill variant="neutral">{used ? (Number(used.qty) || 0) : 0}</Pill>
-                          </td>
-                        </tr>
-                      );
-                    })}
-
-                    {items.length === 0 && (
-                      <tr><td colSpan={6} style={{ ...styles.td, color: "#64748b" }}>Aucun matériel.</td></tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>
-          Astuce: ouvrir via <code style={{background:"#f1f5f9", padding:"2px 6px", borderRadius:6}}>#/projets/&lt;id&gt;</code>.
-        </div>
+        {content}
       </div>
     </div>
   );

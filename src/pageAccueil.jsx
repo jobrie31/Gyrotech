@@ -150,12 +150,22 @@ function useEmployes(setError){
   return rows;
 }
 
-function useProjets(setError){
+/** ⚠️ Ne retourne que les projets OUVERTS (ouvert !== false) pour le punch */
+function useOpenProjets(setError){
   const [rows,setRows] = useState([]);
   useEffect(()=>{
     const c = collection(db,"projets");
     const unsub = onSnapshot(c,(snap)=>{
-      const list=[]; snap.forEach(d=>list.push({id:d.id,...d.data()}));
+      let list=[]; 
+      snap.forEach(d=>{
+        const data = d.data();
+        // Normalisation: si `ouvert` est absent => considéré ouvert
+        const isOpen = data?.ouvert !== false;
+        list.push({ id:d.id, ...data, ouvert:isOpen });
+      });
+      // garder uniquement ouverts
+      list = list.filter(p => p.ouvert === true);
+      // tri
       list.sort((a,b)=> (a.nom||"").localeCompare(b.nom||""));
       setRows(list);
     },(err)=> setError(err?.message||String(err)));
@@ -216,6 +226,11 @@ function usePresenceToday(empId, setError){
 /* ---------------------- Actions Punch / Dépunch (Employés + Projet lié) ---------------------- */
 async function doPunchWithProject(emp, proj){
   const key = todayKey();
+
+  // 🚫 Sécurité: empêche de puncher sur un projet FERMÉ
+  if (proj && proj.ouvert === false) {
+    throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
+  }
 
   await ensureDay(emp.id, key);
   const empSegRef = await openEmpSession(emp.id, key);
@@ -447,6 +462,13 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
 
   useEffect(()=>{ setProjSel(emp?.lastProjectId || ""); }, [emp?.lastProjectId]);
 
+  // Si le dernier projet mémorisé n'est plus ouvert, on nettoie la sélection
+  useEffect(()=>{
+    if (projSel && !projets.some(p => p.id === projSel)) {
+      setProjSel("");
+    }
+  }, [projets, projSel]);
+
   // ✅ statut simplifié: Actif / Inactif
   const statusCell = present
     ? <Pill variant="success">Actif</Pill>
@@ -466,6 +488,9 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
       setPending(true);
       setProjSel(projOrNull?.id || "");
       await doPunchWithProject(emp, projOrNull || null);
+    } catch (e) {
+      console.error(e);
+      setError?.(e?.message || String(e));
     } finally {
       setPending(false);
     }
@@ -480,6 +505,9 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
         const chosenProj = projSel ? projets.find(x => x.id === projSel) : null;
         await doPunchWithProject(emp, chosenProj || null);
       }
+    } catch (e) {
+      console.error(e);
+      setError?.(e?.message || String(e));
     } finally {
       setPending(false);
     }
@@ -608,7 +636,7 @@ function ClockBadge({ now }) {
 export default function PageAccueil(){
   const [error,setError] = useState(null);
   const employes = useEmployes(setError);
-  const projets = useProjets(setError);
+  const projetsOuverts = useOpenProjets(setError); // ✅ seulement projets OUVERTS pour le punch
 
   // ⏱️ Heure (pour le bloc dans le titre)
   const [now, setNow] = useState(new Date());
@@ -686,7 +714,7 @@ export default function PageAccueil(){
                     emp={e}
                     onOpenHistory={openHistory}
                     setError={setError}
-                    projets={projets}
+                    projets={projetsOuverts} // ✅ seulement ouverts ici
                   />
                 ))}
                 {employes.length===0 && (
