@@ -1,9 +1,4 @@
-// src/PageListeProjet.jsx — Liste des projets + Détails (Historique/Materiel inline) + PDF
-// - Onglets dans la fiche projet: Historique (tout) OU Matériel (panel inline)
-// - Résumé: Date d’ouverture + Total d’heures du projet
-// - Historique: agrégé (toutes les journées), avec bouton supprimer (petit) par ligne
-// - Bouton "Matériel" ouvre la fiche directement sur l’onglet Matériel (inline, pas de page séparée)
-
+// src/PageListeProjet.jsx — Liste + Détails jam-packed + Matériel (panel inline simplifié)
 import React, { useEffect, useRef, useState } from "react";
 import { db, storage } from "./firebaseConfig";
 import {
@@ -24,7 +19,6 @@ import {
   deleteObject,
 } from "firebase/storage";
 
-// 👉 Le panel de matériel (doit supporter la prop `inline`)
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 
 /* ---------------------- Utils ---------------------- */
@@ -43,14 +37,6 @@ function fmtHM(ms) {
   const m = Math.floor((s % 3600) / 60);
   return `${h}:${m.toString().padStart(2, "0")}`;
 }
-function buildNom({ numeroUnite, marque, modele, annee }) {
-  const pieces = [];
-  if (numeroUnite) pieces.push(`#${numeroUnite}`);
-  if (marque) pieces.push(marque);
-  if (modele) pieces.push(modele);
-  if (annee) pieces.push(String(annee));
-  return pieces.join(" ").trim() || "(sans nom)";
-}
 
 /* ---------------------- Hooks ---------------------- */
 function useProjets(setError) {
@@ -63,23 +49,14 @@ function useProjets(setError) {
         const list = [];
         snap.forEach((d) => {
           const data = d.data();
-          const isOpen = data?.ouvert !== false; // défaut = ouvert
+          const isOpen = data?.ouvert !== false;
           list.push({ id: d.id, ouvert: isOpen, ...data });
         });
-        // Ouverts d'abord, puis fermés; ensuite par unité puis nom
         list.sort((a, b) => {
           if ((a.ouvert ? 0 : 1) !== (b.ouvert ? 0 : 1)) {
             return (a.ouvert ? 0 : 1) - (b.ouvert ? 0 : 1);
           }
-          const A =
-            (a.numeroUnite ?? "").toString().padStart(6, "0") +
-            " " +
-            (a.nom || `${a.marque || ""} ${a.modele || ""}`.trim());
-          const B =
-            (b.numeroUnite ?? "").toString().padStart(6, "0") +
-            " " +
-            (b.nom || `${b.marque || ""} ${b.modele || ""}`.trim());
-          return A.localeCompare(B, "fr-CA");
+          return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
         });
         setRows(list);
       },
@@ -99,12 +76,13 @@ function ErrorBanner({ error, onClose }) {
         background: "#fdecea",
         color: "#b71c1c",
         border: "1px solid #f5c6cb",
-        padding: "8px 12px",
+        padding: "6px 10px",
         borderRadius: 8,
-        marginBottom: 12,
+        marginBottom: 10,
         display: "flex",
         alignItems: "center",
-        gap: 12,
+        gap: 10,
+        fontSize: 13,
       }}
     >
       <strong>Erreur :</strong>
@@ -116,7 +94,7 @@ function ErrorBanner({ error, onClose }) {
           background: "#b71c1c",
           color: "white",
           borderRadius: 6,
-          padding: "6px 10px",
+          padding: "4px 8px",
           cursor: "pointer",
         }}
       >
@@ -155,9 +133,7 @@ function PopupPDFManager({ open, onClose, projet }) {
         }
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [open, projet?.id]);
 
   const pickFile = () => inputRef.current?.click();
@@ -166,14 +142,9 @@ function PopupPDFManager({ open, onClose, projet }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    if (file.type !== "application/pdf") {
-      setError("Sélectionne un fichier PDF (.pdf).");
-      return;
-    }
-    if (!projet?.id) {
-      setError("Projet invalide.");
-      return;
-    }
+    if (file.type !== "application/pdf") return setError("Sélectionne un PDF (.pdf).");
+    if (!projet?.id) return setError("Projet invalide.");
+
     setBusy(true);
     setError(null);
     try {
@@ -198,8 +169,7 @@ function PopupPDFManager({ open, onClose, projet }) {
 
   const onDelete = async (name) => {
     if (!projet?.id) return;
-    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer « ${name} » ?`)) return;
-
+    if (!window.confirm(`Supprimer « ${name} » ?`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -217,105 +187,56 @@ function PopupPDFManager({ open, onClose, projet }) {
   if (!open || !projet) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "rgba(0,0,0,0.55)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          width: "min(720px, 96vw)",
-          maxHeight: "92vh",
-          overflow: "auto",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-          fontSize: 14,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>
-            PDF – {projet.nom || "(projet)"}
-          </div>
-          <button
-            onClick={onClose}
-            title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}
-          >
-            ×
-          </button>
+    <div role="dialog" aria-modal="true" onClick={onClose}
+      style={{ position:"fixed", inset:0, zIndex:10000, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background:"#fff", border:"1px solid #e5e7eb", width:"min(720px, 96vw)", maxHeight:"92vh", overflow:"auto", borderRadius:16, padding:18, boxShadow:"0 28px 64px rgba(0,0,0,0.30)", fontSize:14 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <div style={{ fontWeight:900, fontSize:18 }}>PDF – {projet.nom || "(projet)"}</div>
+          <button onClick={onClose} title="Fermer" style={{ border:"none", background:"transparent", fontSize:24, cursor:"pointer", lineHeight:1 }}>×</button>
         </div>
 
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
           <button onClick={pickFile} style={btnPrimary} disabled={busy}>
             {busy ? "Téléversement..." : "Ajouter un PDF"}
           </button>
-          <input ref={inputRef} type="file" accept="application/pdf" onChange={onPicked} style={{ display: "none" }} />
+          <input ref={inputRef} type="file" accept="application/pdf" onChange={onPicked} style={{ display:"none" }} />
         </div>
 
-        <div style={{ fontWeight: 800, margin: "6px 0 8px" }}>Fichiers du projet</div>
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 12 }}>
+        <div style={{ fontWeight:800, margin:"6px 0 8px" }}>Fichiers du projet</div>
+        <table style={{ width:"100%", borderCollapse:"collapse", border:"1px solid #eee", borderRadius:12 }}>
           <thead>
-            <tr style={{ background: "#f6f7f8" }}>
+            <tr style={{ background:"#f6f7f8" }}>
               <th style={th}>Nom</th>
               <th style={th}>Actions</th>
             </tr>
           </thead>
-        <tbody>
-          {files.map((f, i) => (
-            <tr key={i}>
-              <td style={{ ...td, wordBreak: "break-word" }}>{f.name}</td>
-              <td style={td}>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>Ouvrir</a>
-                  <button
-                    onClick={() => navigator.clipboard?.writeText(f.url)}
-                    style={btnSecondary}
-                    title="Copier l’URL"
-                  >
-                    Copier l’URL
-                  </button>
-                  <button
-                    onClick={() => onDelete(f.name)}
-                    style={btnDanger}
-                    disabled={busy}
-                    title="Supprimer définitivement ce PDF"
-                  >
-                    Supprimer
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-          {files.length === 0 && (
-            <tr>
-              <td colSpan={2} style={{ padding: 12, color: "#666" }}>Aucun PDF pour l’instant.</td>
-            </tr>
-          )}
-        </tbody>
+          <tbody>
+            {files.map((f, i) => (
+              <tr key={i}>
+                <td style={{ ...td, wordBreak:"break-word" }}>{f.name}</td>
+                <td style={td}>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>Ouvrir</a>
+                    <button onClick={() => navigator.clipboard?.writeText(f.url)} style={btnSecondary} title="Copier l’URL">Copier l’URL</button>
+                    <button onClick={() => onDelete(f.name)} style={btnDanger} disabled={busy}>Supprimer</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {files.length === 0 && <tr><td colSpan={2} style={{ padding:12, color:"#666" }}>Aucun PDF.</td></tr>}
+          </tbody>
         </table>
       </div>
     </div>
   );
 }
 
-/* ---------------------- Popup création (vertical) ---------------------- */
+/* ---------------------- Popup création (NOM SIMPLE) ---------------------- */
 function PopupCreateProjet({ open, onClose, onError }) {
+  const [nom, setNom] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
   const [marque, setMarque] = useState("");
@@ -327,20 +248,16 @@ function PopupCreateProjet({ open, onClose, onError }) {
 
   useEffect(() => {
     if (open) {
-      setNumeroUnite("");
-      setAnnee("");
-      setMarque("");
-      setModele("");
-      setPlaque("");
-      setOdometre("");
-      setVin("");
-      setMsg("");
+      setNom("");
+      setNumeroUnite(""); setAnnee(""); setMarque(""); setModele("");
+      setPlaque(""); setOdometre(""); setVin(""); setMsg("");
     }
   }, [open]);
 
   const submit = async (e) => {
     e.preventDefault();
     try {
+      const cleanNom = nom.trim();
       const cleanUnite = numeroUnite.trim();
       const cleanAnnee = annee.trim();
       const cleanMarque = marque.trim();
@@ -349,20 +266,12 @@ function PopupCreateProjet({ open, onClose, onError }) {
       const cleanOdo = odometre.trim();
       const cleanVin = vin.trim().toUpperCase();
 
-      if (!cleanMarque && !cleanModele && !cleanUnite) {
-        setMsg("Spécifie au moins Marque/Modèle ou Numéro d’unité.");
-        return;
-      }
-      if (cleanAnnee && !/^\d{4}$/.test(cleanAnnee)) {
-        setMsg("Année invalide (format AAAA).");
-        return;
-      }
-      if (cleanOdo && isNaN(Number(cleanOdo))) {
-        setMsg("Odomètre doit être un nombre.");
-        return;
-      }
+      if (!cleanNom) return setMsg("Indique un nom de projet (simple).");
+      if (cleanAnnee && !/^\d{4}$/.test(cleanAnnee)) return setMsg("Année invalide (format AAAA).");
+      if (cleanOdo && isNaN(Number(cleanOdo))) return setMsg("Odomètre doit être un nombre.");
 
-      const payload = {
+      await addDoc(collection(db, "projets"), {
+        nom: cleanNom,
         numeroUnite: cleanUnite || null,
         annee: cleanAnnee ? Number(cleanAnnee) : null,
         marque: cleanMarque || null,
@@ -371,12 +280,6 @@ function PopupCreateProjet({ open, onClose, onError }) {
         odometre: cleanOdo ? Number(cleanOdo) : null,
         vin: cleanVin || null,
         ouvert: true,
-      };
-      const nom = buildNom(payload);
-
-      await addDoc(collection(db, "projets"), {
-        ...payload,
-        nom,
         createdAt: serverTimestamp(),
       });
 
@@ -391,41 +294,21 @@ function PopupCreateProjet({ open, onClose, onError }) {
   if (!open) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "rgba(0,0,0,0.7)",
-        backdropFilter: "blur(3px)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          width: "min(640px, 96vw)",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 800, fontSize: 18 }}>Créer un nouveau projet</div>
-          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 26, cursor: "pointer", lineHeight: 1 }}>×</button>
+    <div role="dialog" aria-modal="true" onClick={onClose}
+      style={{ position:"fixed", inset:0, zIndex:10000, background:"rgba(0,0,0,0.7)", backdropFilter:"blur(3px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background:"#fff", border:"1px solid #e5e7eb", width:"min(640px, 96vw)", borderRadius:16, padding:18, boxShadow:"0 28px 64px rgba(0,0,0,0.30)" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <div style={{ fontWeight:800, fontSize:18 }}>Créer un nouveau projet</div>
+          <button onClick={onClose} title="Fermer" style={{ border:"none", background:"transparent", fontSize:26, cursor:"pointer", lineHeight:1 }}>×</button>
         </div>
 
-        {msg && <div style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "8px 10px", borderRadius: 8, marginBottom: 10 }}>{msg}</div>}
+        {msg && <div style={{ color:"#b45309", background:"#fffbeb", border:"1px solid #fde68a", padding:"8px 10px", borderRadius:8, marginBottom:10 }}>{msg}</div>}
 
-        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <form onSubmit={submit} style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          <FieldV label="Nom du projet (simple)">
+            <input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex.: Entretien camion 12" style={input} />
+          </FieldV>
           <FieldV label="Numéro d’unité">
             <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} placeholder="Ex.: 1234" style={input} />
           </FieldV>
@@ -448,7 +331,7 @@ function PopupCreateProjet({ open, onClose, onError }) {
             <input value={vin} onChange={(e) => setVin(e.target.value)} placeholder="17 caractères" style={input} />
           </FieldV>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+          <div style={{ display:"flex", gap:8, marginTop:2 }}>
             <button type="button" onClick={onClose} style={btnGhost}>Annuler</button>
             <button type="submit" style={btnPrimary}>Enregistrer</button>
           </div>
@@ -458,13 +341,14 @@ function PopupCreateProjet({ open, onClose, onError }) {
   );
 }
 
-/* ---------------------- Détails + Onglets (Historique / Matériel inline) ---------------------- */
+/* ---------------------- Détails + Onglets (jam-packed) ---------------------- */
 function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation, initialTab = "historique" }) {
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
-  const [tab, setTab] = useState(initialTab); // "historique" | "materiel"
+  const [tab, setTab] = useState(initialTab);
 
-  // drafts
+  // drafts (inclut NOM)
+  const [nom, setNom] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
   const [marque, setMarque] = useState("");
@@ -473,19 +357,17 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
   const [odometre, setOdometre] = useState("");
   const [vin, setVin] = useState("");
 
-  // Historique agrégé (tout)
-  const [histRows, setHistRows] = useState([]); // {date, empName, empId, totalMs}
+  // Historique agrégé
+  const [histRows, setHistRows] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
   const [totalMsAll, setTotalMsAll] = useState(0);
   const [histReload, setHistReload] = useState(0);
 
-  useEffect(() => {
-    if (open) setTab(initialTab);
-  }, [open, initialTab]);
-
+  useEffect(() => { if (open) setTab(initialTab); }, [open, initialTab]);
   useEffect(() => {
     if (open && projet) {
       setEditing(false);
+      setNom(projet.nom ?? "");
       setNumeroUnite(projet.numeroUnite ?? "");
       setAnnee(projet.annee != null ? String(projet.annee) : "");
       setMarque(projet.marque ?? "");
@@ -526,7 +408,6 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
             map.set(k, prev);
           });
         }
-
         const rows = Array.from(map.values()).sort((a, b) => {
           if (a.date !== b.date) return b.date.localeCompare(a.date);
           return (a.empName || "").localeCompare(b.empName || "");
@@ -545,7 +426,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
   const onDeleteHistRow = async (row) => {
     if (!projet?.id) return;
     const labelEmp = row.empName || "cet employé";
-    const ok = window.confirm(`Êtes-vous sûr de vouloir supprimer toutes les entrées du ${row.date} pour ${labelEmp} ?`);
+    const ok = window.confirm(`Supprimer toutes les entrées du ${row.date} pour ${labelEmp} ?`);
     if (!ok) return;
 
     setHistLoading(true);
@@ -556,9 +437,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
       segSnap.forEach((sdoc) => {
         const s = sdoc.data();
         const match = row.empId ? s.empId === row.empId : (s.empName || "—") === (row.empName || "—");
-        if (match) {
-          deletions.push(deleteDoc(doc(db, "projets", projet.id, "timecards", row.date, "segments", sdoc.id)));
-        }
+        if (match) deletions.push(deleteDoc(doc(db, "projets", projet.id, "timecards", row.date, "segments", sdoc.id)));
       });
       await Promise.all(deletions);
       setHistReload((x) => x + 1);
@@ -572,15 +451,12 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
 
   const save = async () => {
     try {
-      if (annee && !/^\d{4}$/.test(annee.trim())) {
-        setError("Année invalide (format AAAA).");
-        return;
-      }
-      if (odometre && isNaN(Number(odometre.trim()))) {
-        setError("Odomètre doit être un nombre.");
-        return;
-      }
+      if (!nom.trim()) return setError("Nom requis.");
+      if (annee && !/^\d{4}$/.test(annee.trim())) return setError("Année invalide (AAAA).");
+      if (odometre && isNaN(Number(odometre.trim()))) return setError("Odomètre doit être un nombre.");
+
       const payload = {
+        nom: nom.trim(),
         numeroUnite: numeroUnite.trim() || null,
         annee: annee ? Number(annee.trim()) : null,
         marque: marque.trim() || null,
@@ -589,8 +465,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
         odometre: odometre ? Number(odometre.trim()) : null,
         vin: vin.trim().toUpperCase() || null,
       };
-      const nom = buildNom(payload);
-      await updateDoc(doc(db, "projets", projet.id), { ...payload, nom });
+      await updateDoc(doc(db, "projets", projet.id), payload);
       setEditing(false);
       onSaved?.();
     } catch (e) {
@@ -602,44 +477,16 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
   if (!open || !projet) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          width: "min(950px, 96vw)",
-          maxHeight: "92vh",
-          overflow: "auto",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-          fontSize: 14,
-        }}
-      >
+    <div role="dialog" aria-modal="true" onClick={onClose}
+      style={{ position:"fixed", inset:0, zIndex:10000, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background:"#fff", border:"1px solid #e5e7eb", width:"min(950px, 96vw)", maxHeight:"92vh", overflow:"auto", borderRadius:16, padding:16, boxShadow:"0 28px 64px rgba(0,0,0,0.30)", fontSize:13 }}>
         {/* Header + actions */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>Détails du projet</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {/* Onglets */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+          <div style={{ fontWeight:900, fontSize:17 }}>Détails du projet</div>
+          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
             <button onClick={() => setTab("historique")} style={tab === "historique" ? btnTabActive : btnTab}>Historique</button>
-            <button onClick={() => setTab("materiel")} style={tab === "materiel" ? btnTabActive : btnTab}>Matériel</button>
-
-            {/* Situation + Edition */}
+            <button onClick={() => setTab("materiel")}   style={tab === "materiel"   ? btnTabActive : btnTab}>Matériel</button>
             <button
               onClick={() => onToggleSituation?.(projet)}
               style={projet.ouvert ? btnSituationOpen : btnSituationClosed}
@@ -655,27 +502,49 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
                 <button onClick={save} style={btnPrimary}>Enregistrer</button>
               </>
             )}
-            <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>×</button>
+            <button onClick={onClose} title="Fermer" style={{ border:"none", background:"transparent", fontSize:22, cursor:"pointer", lineHeight:1 }}>×</button>
           </div>
         </div>
 
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        {/* ======= INFOS PROJET ======= */}
+        {/* ======= INFOS PROJET (jam-packed inline) ======= */}
         {!editing ? (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px", marginBottom: 12, fontSize: 12 }}>
-            <InfoV small label="Nom" value={projet.nom || "—"} />
-            <InfoV small label="Situation" value={projet.ouvert ? "Ouvert" : "Fermé"} valueStyle={!projet.ouvert ? { color: "#b91c1c" } : { color: "#166534" }} />
-            <InfoV small label="Numéro d’unité" value={projet.numeroUnite || "—"} />
-            <InfoV small label="Année" value={projet.annee ?? "—"} />
-            <InfoV small label="Marque" value={projet.marque || "—"} />
-            <InfoV small label="Modèle" value={projet.modele || "—"} />
-            <InfoV small label="Plaque" value={projet.plaque || "—"} />
-            <InfoV small label="Odomètre" value={typeof projet.odometre === "number" ? projet.odometre.toLocaleString("fr-CA") : projet.odometre || "—"} />
-            <InfoV small label="VIN" value={projet.vin || "—"} />
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 6,
+              rowGap: 6,
+              alignItems: "center",
+              marginBottom: 8
+            }}
+          >
+            <KVInline k="Nom" v={projet.nom || "—"} />
+            <KVInline
+              k="Situation"
+              v={projet.ouvert ? "Ouvert" : "Fermé"}
+              success={!!projet.ouvert}
+              danger={!projet.ouvert}
+            />
+            <KVInline k="Unité" v={projet.numeroUnite || "—"} />
+            <KVInline k="Année" v={projet.annee ?? "—"} />
+            <KVInline k="Marque" v={projet.marque || "—"} />
+            <KVInline k="Modèle" v={projet.modele || "—"} />
+            <KVInline k="Plaque" v={projet.plaque || "—"} />
+            <KVInline
+              k="Odomètre"
+              v={
+                typeof projet.odometre === "number"
+                  ? projet.odometre.toLocaleString("fr-CA")
+                  : (projet.odometre || "—")
+              }
+            />
+            <KVInline k="VIN" v={projet.vin || "—"} />
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8, marginBottom:8 }}>
+            <FieldV label="Nom du projet"><input value={nom} onChange={(e) => setNom(e.target.value)} style={input} /></FieldV>
             <FieldV label="Numéro d’unité"><input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={input} /></FieldV>
             <FieldV label="Année"><input value={annee} onChange={(e) => setAnnee(e.target.value)} placeholder="AAAA" inputMode="numeric" style={input} /></FieldV>
             <FieldV label="Marque"><input value={marque} onChange={(e) => setMarque(e.target.value)} style={input} /></FieldV>
@@ -686,20 +555,20 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
           </div>
         )}
 
-        {/* ======= RÉSUMÉ PROJET ======= */}
-        <div style={{ fontWeight: 800, margin: "2px 0 6px", fontSize: 12 }}>Résumé du projet</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 10 }}>
+        {/* ======= RÉSUMÉ ======= */}
+        <div style={{ fontWeight:800, margin:"2px 0 6px", fontSize:11 }}>Résumé du projet</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8, marginBottom:8 }}>
           <CardKV k="Date d’ouverture" v={fmtDate(projet?.createdAt)} />
           <CardKV k="Total d’heures (tout le projet)" v={fmtHM(totalMsAll)} />
         </div>
 
-        {/* ======= CONTENU VARIABLE ======= */}
+        {/* ======= CONTENU ======= */}
         {tab === "historique" ? (
           <>
-            <div style={{ fontWeight: 800, margin: "6px 0 8px" }}>Historique — tout</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 12, fontSize: 12 }}>
+            <div style={{ fontWeight:800, margin:"4px 0 6px", fontSize:12 }}>Historique — tout</div>
+            <table style={{ width:"100%", borderCollapse:"collapse", border:"1px solid #eee", borderRadius:12, fontSize:12 }}>
               <thead>
-                <tr style={{ background: "#f6f7f8" }}>
+                <tr style={{ background:"#f6f7f8" }}>
                   <th style={th}>Jour</th>
                   <th style={th}>Heures</th>
                   <th style={th}>Employé</th>
@@ -707,31 +576,24 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
                 </tr>
               </thead>
               <tbody>
-                {histLoading && (<tr><td colSpan={4} style={{ padding: 12, color: "#666" }}>Chargement…</td></tr>)}
+                {histLoading && (<tr><td colSpan={4} style={{ padding:12, color:"#666" }}>Chargement…</td></tr>)}
                 {!histLoading && histRows.map((r, i) => (
                   <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
                     <td style={td}>{r.date}</td>
                     <td style={td}>{fmtHM(r.totalMs)}</td>
                     <td style={td}>{r.empName || "—"}</td>
                     <td style={td}>
-                      <button
-                        onClick={() => onDeleteHistRow(r)}
-                        style={btnTinyDanger}
-                        title="Supprimer cette journée pour cet employé"
-                      >
-                        🗑
-                      </button>
+                      <button onClick={() => onDeleteHistRow(r)} style={btnTinyDanger} title="Supprimer cette journée pour cet employé">🗑</button>
                     </td>
                   </tr>
                 ))}
                 {!histLoading && histRows.length === 0 && (
-                  <tr><td colSpan={4} style={{ padding: 12, color: "#666" }}>Aucun historique.</td></tr>
+                  <tr><td colSpan={4} style={{ padding:12, color:"#666" }}>Aucun historique.</td></tr>
                 )}
               </tbody>
             </table>
           </>
         ) : (
-          // 👉 Matériel : panel “inline”
           <ProjectMaterielPanel
             projId={projet.id}
             inline
@@ -744,7 +606,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
   );
 }
 
-/* ---------------------- Ligne (avec actions) ---------------------- */
+/* ---------------------- Ligne ---------------------- */
 function RowProjet({ p, onClickRow, onOpenDetailsMaterial, onToggleSituation, onOpenPDF }) {
   const cell = (content) => <td style={td}>{content}</td>;
 
@@ -756,14 +618,10 @@ function RowProjet({ p, onClickRow, onOpenDetailsMaterial, onToggleSituation, on
   };
 
   return (
-    <tr onClick={() => onClickRow?.(p)} style={{ cursor: "pointer" }}>
+    <tr onClick={() => onClickRow?.(p)} style={{ cursor:"pointer" }}>
       {cell(p.nom || "—")}
       <td style={td} onClick={(e) => e.stopPropagation()}>
-        <button
-          onClick={handleToggle}
-          style={p.ouvert ? btnSituationOpen : btnSituationClosed}
-          title="Basculer la situation"
-        >
+        <button onClick={handleToggle} style={p.ouvert ? btnSituationOpen : btnSituationClosed} title="Basculer la situation">
           {p.ouvert ? "Ouvert" : "Fermé"}
         </button>
       </td>
@@ -775,28 +633,10 @@ function RowProjet({ p, onClickRow, onOpenDetailsMaterial, onToggleSituation, on
       {cell(typeof p.odometre === "number" ? p.odometre.toLocaleString("fr-CA") : (p.odometre || "—"))}
       {cell(p.vin || "—")}
       <td style={{ ...td }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
-            onClick={() => onClickRow?.(p)}
-            style={btnSecondary}
-            title="Ouvrir les détails"
-          >
-            Détails
-          </button>
-          <button
-            onClick={() => onOpenDetailsMaterial?.(p)}
-            style={btnBlue}
-            title="Voir le matériel (inline)"
-          >
-            Matériel
-          </button>
-          <button
-            onClick={() => onOpenPDF?.(p)}
-            style={btnPDF}
-            title="PDF du projet"
-          >
-            PDF
-          </button>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={() => onClickRow?.(p)} style={btnSecondary} title="Ouvrir les détails">Détails</button>
+          <button onClick={() => onOpenDetailsMaterial?.(p)} style={btnBlue} title="Voir le matériel (inline)">Matériel</button>
+          <button onClick={() => onOpenPDF?.(p)} style={btnPDF} title="PDF du projet">PDF</button>
         </div>
       </td>
     </tr>
@@ -809,11 +649,11 @@ export default function PageListeProjet() {
   const projets = useProjets(setError);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [details, setDetails] = useState({ open: false, projet: null, tab: "historique" });
-  const [pdfMgr, setPdfMgr] = useState({ open: false, projet: null });
+  const [details, setDetails] = useState({ open:false, projet:null, tab:"historique" });
+  const [pdfMgr, setPdfMgr] = useState({ open:false, projet:null });
 
-  const openDetails = (p, tab = "historique") => setDetails({ open: true, projet: p, tab });
-  const closeDetails = () => setDetails({ open: false, projet: null, tab: "historique" });
+  const openDetails = (p, tab = "historique") => setDetails({ open:true, projet:p, tab });
+  const closeDetails = () => setDetails({ open:false, projet:null, tab:"historique" });
 
   const toggleSituation = async (proj) => {
     try {
@@ -824,34 +664,26 @@ export default function PageListeProjet() {
     }
   };
 
-  const openPDF = (p) => setPdfMgr({ open: true, projet: p });
-  const closePDF = () => setPdfMgr({ open: false, projet: null });
+  const openPDF = (p) => setPdfMgr({ open:true, projet:p });
+  const closePDF = () => setPdfMgr({ open:false, projet:null });
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+    <div style={{ padding:20, fontFamily:"Arial, system-ui, -apple-system" }}>
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
       {/* Barre top */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
-        <h2 style={{ margin: 0 }}>📁 Projets</h2>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, gap:8, flexWrap:"wrap" }}>
+        <h2 style={{ margin:0 }}>📁 Projets</h2>
         <div>
           <button onClick={() => setCreateOpen(true)} style={btnPrimary}>Créer un nouveau projet</button>
         </div>
       </div>
 
       {/* Tableau */}
-      <div style={{ overflowX: "auto" }}>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            background: "#fff",
-            border: "1px solid #eee",
-            borderRadius: 12,
-          }}
-        >
+      <div style={{ overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", background:"#fff", border:"1px solid #eee", borderRadius:12 }}>
           <thead>
-            <tr style={{ background: "#f6f7f8" }}>
+            <tr style={{ background:"#f6f7f8" }}>
               <th style={th}>Nom</th>
               <th style={th}>Situation</th>
               <th style={th}>Unité</th>
@@ -877,7 +709,7 @@ export default function PageListeProjet() {
             ))}
             {projets.length === 0 && (
               <tr>
-                <td colSpan={10} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={10} style={{ padding:12, color:"#666" }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>
@@ -907,17 +739,17 @@ export default function PageListeProjet() {
 /* ---------------------- Petits composants UI ---------------------- */
 function FieldV({ label, children }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <label style={{ fontSize: 12, color: "#444" }}>{label}</label>
+    <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+      <label style={{ fontSize:11, color:"#444" }}>{label}</label>
       {children}
     </div>
   );
 }
 function InfoV({ label, value, valueStyle, small }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <div style={{ fontSize: small ? 10 : 11, color: "#666" }}>{label}</div>
-      <div style={{ fontSize: small ? 12 : 14, fontWeight: small ? 600 : 700, wordBreak: "break-word", ...(valueStyle || {}) }}>
+    <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
+      <div style={{ fontSize: small ? 9 : 10, color:"#666" }}>{label}</div>
+      <div style={{ fontSize: small ? 11 : 13, fontWeight: small ? 600 : 700, wordBreak:"break-word", ...(valueStyle || {}) }}>
         {value}
       </div>
     </div>
@@ -925,125 +757,52 @@ function InfoV({ label, value, valueStyle, small }) {
 }
 function CardKV({ k, v }) {
   return (
-    <div style={{ border: "1px solid #eee", borderRadius: 10, padding: "8px 10px" }}>
-      <div style={{ fontSize: 10, color: "#666" }}>{k}</div>
-      <div style={{ fontSize: 13, fontWeight: 700 }}>{v}</div>
+    <div style={{ border:"1px solid #eee", borderRadius:10, padding:"6px 8px" }}>
+      <div style={{ fontSize:10, color:"#666" }}>{k}</div>
+      <div style={{ fontSize:13, fontWeight:700 }}>{v}</div>
+    </div>
+  );
+}
+
+/* ——— Jam-packed chip (clé:valeur) ——— */
+function KVInline({ k, v, danger, success }) {
+  return (
+    <div style={{
+      display: "inline-flex",
+      alignItems: "baseline",
+      gap: 6,
+      padding: "2px 8px",
+      border: "1px solid #e5e7eb",
+      borderRadius: 999,
+      whiteSpace: "nowrap",
+      fontSize: 12,
+      lineHeight: 1.2,
+      background: "#fff"
+    }}>
+      <span style={{ color: "#6b7280" }}>{k}:</span>
+      <strong style={{
+        color: danger ? "#b91c1c" : success ? "#166534" : "#111827",
+        fontWeight: 700
+      }}>
+        {v}
+      </strong>
     </div>
   );
 }
 
 /* ---------------------- Styles ---------------------- */
-const th = {
-  textAlign: "left",
-  padding: 10,
-  borderBottom: "1px solid #e0e0e0",
-  whiteSpace: "nowrap",
-};
-const td = {
-  padding: 10,
-  borderBottom: "1px solid #eee",
-};
-const input = {
-  width: "100%",
-  padding: "8px 10px",
-  border: "1px solid #ccc",
-  borderRadius: 8,
-  background: "#fff",
-};
+const th = { textAlign:"left", padding:8, borderBottom:"1px solid #e0e0e0", whiteSpace:"nowrap" };
+const td = { padding:8, borderBottom:"1px solid #eee" };
+const input = { width:"100%", padding:"8px 10px", border:"1px solid #ccc", borderRadius:8, background:"#fff" };
 
-const btnPrimary = {
-  border: "none",
-  background: "#2563eb",
-  color: "#fff",
-  borderRadius: 10,
-  padding: "10px 16px",
-  cursor: "pointer",
-  fontWeight: 800,
-  boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
-};
-const btnSecondary = {
-  border: "1px solid #cbd5e1",
-  background: "#f8fafc",
-  borderRadius: 10,
-  padding: "8px 12px",
-  cursor: "pointer",
-  fontWeight: 700,
-};
-const btnGhost = {
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  borderRadius: 10,
-  padding: "8px 12px",
-  cursor: "pointer",
-  fontWeight: 700,
-};
-const btnSituationOpen = {
-  border: "1px solid #16a34a",
-  background: "#dcfce7",
-  color: "#166534",
-  borderRadius: 9999,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 800,
-};
-const btnSituationClosed = {
-  border: "1px solid #ef4444",
-  background: "#fee2e2",
-  color: "#b91c1c",
-  borderRadius: 9999,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 800,
-};
-const btnBlue = {
-  border: "none",
-  background: "#2563eb",
-  color: "#fff",
-  borderRadius: 10,
-  padding: "8px 12px",
-  cursor: "pointer",
-  fontWeight: 800,
-};
-const btnPDF = {
-  border: "none",
-  background: "#0ea5e9",
-  color: "#fff",
-  borderRadius: 10,
-  padding: "8px 12px",
-  cursor: "pointer",
-  fontWeight: 800,
-};
-const btnDanger = {
-  border: "1px solid #ef4444",
-  background: "#fee2e2",
-  color: "#b91c1c",
-  borderRadius: 10,
-  padding: "8px 12px",
-  cursor: "pointer",
-  fontWeight: 800,
-};
-const btnTinyDanger = {
-  border: "1px solid #ef4444",
-  background: "#fff",
-  color: "#b91c1c",
-  borderRadius: 8,
-  padding: "4px 6px",
-  cursor: "pointer",
-  fontWeight: 800,
-  fontSize: 11,
-  lineHeight: 1,
-};
-const btnTab = {
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  borderRadius: 9999,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 700,
-  fontSize: 12,
-};
-const btnTabActive = {
-  ...btnTab,
-  borderColor: "#2563eb",
-  background: "#eff6ff",
-};
+const btnPrimary = { border:"none", background:"#2563eb", color:"#fff", borderRadius:10, padding:"8px 14px", cursor:"pointer", fontWeight:800, boxShadow:"0 8px 18px rgba(37,99,235,0.25)" };
+const btnSecondary = { border:"1px solid #cbd5e1", background:"#f8fafc", borderRadius:10, padding:"6px 10px", cursor:"pointer", fontWeight:700 };
+const btnGhost = { border:"1px solid #e5e7eb", background:"#fff", borderRadius:10, padding:"6px 10px", cursor:"pointer", fontWeight:700 };
+const btnSituationOpen  = { border:"1px solid #16a34a", background:"#dcfce7", color:"#166534", borderRadius:999, padding:"4px 10px", cursor:"pointer", fontWeight:800 };
+const btnSituationClosed= { border:"1px solid #ef4444", background:"#fee2e2", color:"#b91c1c", borderRadius:999, padding:"4px 10px", cursor:"pointer", fontWeight:800 };
+const btnBlue = { border:"none", background:"#0ea5e9", color:"#fff", borderRadius:10, padding:"6px 10px", cursor:"pointer", fontWeight:800 };
+const btnPDF = { ...btnBlue, background:"#2563eb" };
+const btnDanger = { border:"1px solid #ef4444", background:"#fee2e2", color:"#b91c1c", borderRadius:10, padding:"6px 10px", cursor:"pointer", fontWeight:800 };
+const btnTinyDanger = { border:"1px solid #ef4444", background:"#fff", color:"#b91c1c", borderRadius:8, padding:"4px 6px", cursor:"pointer", fontWeight:800, fontSize:11, lineHeight:1 };
+const btnTab = { border:"1px solid #e5e7eb", background:"#fff", borderRadius:9999, padding:"4px 10px", cursor:"pointer", fontWeight:700, fontSize:12 };
+const btnTabActive = { ...btnTab, borderColor:"#2563eb", background:"#eff6ff" };

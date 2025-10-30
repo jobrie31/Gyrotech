@@ -1,5 +1,5 @@
-// src/ProjectMaterielPanel.jsx — Panel inchangé visuellement, avec ajout + enlever, quantité ≥ 1
-import React, { useEffect, useMemo, useState } from "react";
+// src/ProjectMaterielPanel.jsx — Matériel simple + panneau "Ajouter" en accordéon
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
@@ -7,21 +7,13 @@ import {
   query,
   orderBy,
   serverTimestamp,
-  setDoc,
   runTransaction,
-  getDoc,
   increment,
-  deleteDoc,
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 import { styles, Card, Pill, Button } from "./UIPro";
 
 /* ---------- utils ---------- */
-function formatCAD(n) {
-  const x = typeof n === "number" ? n : parseFloat(String(n).replace(",", "."));
-  if (!isFinite(x)) return "—";
-  return x.toLocaleString("fr-CA", { style: "currency", currency: "CAD" });
-}
 const asInt = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : NaN;
@@ -42,7 +34,6 @@ function useProject(projId, setError) {
   }, [projId, setError]);
   return proj;
 }
-
 function useCategories(setError) {
   const [cats, setCats] = useState([]);
   useEffect(() => {
@@ -60,7 +51,6 @@ function useCategories(setError) {
   }, [setError]);
   return cats;
 }
-
 function useMateriels(setError) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
@@ -69,7 +59,7 @@ function useMateriels(setError) {
       qy,
       (snap) => {
         const out = [];
-        snap.forEach((d) => out.push({ id: d.id, ...d.data() }));
+        snap.forEach((d) => out.push({ id: d.id, ...d.data() })); // {id, nom, prix, categorie}
         setRows(out);
       },
       (err) => setError?.(err?.message || String(err))
@@ -78,7 +68,6 @@ function useMateriels(setError) {
   }, [setError]);
   return rows;
 }
-
 function useUsagesMateriels(projId, setError) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
@@ -88,7 +77,7 @@ function useUsagesMateriels(projId, setError) {
       qy,
       (snap) => {
         const out = [];
-        snap.forEach((d) => out.push({ id: d.id, ...d.data() }));
+        snap.forEach((d) => out.push({ id: d.id, ...d.data() })); // {id, nom, qty, prix?, ...}
         setRows(out);
       },
       (err) => setError?.(err?.message || String(err))
@@ -98,38 +87,17 @@ function useUsagesMateriels(projId, setError) {
   return rows;
 }
 
-/* ---------- UI helpers ---------- */
-function ErrorBanner({ error, onClose }) {
-  if (!error) return null;
-  return (
-    <div style={{background:"#fdecea",color:"#7f1d1d",border:"1px solid #f5c6cb",padding:"10px 14px",borderRadius:10,marginBottom:12,display:"flex",alignItems:"center",gap:12,fontSize:16}}>
-      <strong>Erreur :</strong>
-      <span style={{flex:1}}>{error}</span>
-      <Button variant="danger" onClick={onClose}>OK</Button>
-    </div>
-  );
-}
-
-/* ---------- action: add qty safely (rules-friendly) ---------- */
-/**
- * Ajoute une quantité au doc usagesMateriels/<materielId>
- * - si le doc existe: qty += amount (increment)
- * - s'il n'existe pas: création avec qty = amount (number), createdAt & updatedAt
- * NB: pas d'increment() à la création pour respecter les rules.
- */
+/* ---------- actions ---------- */
 async function addMaterialQty({ projId, mat, amount }) {
   const ref = doc(db, "projets", projId, "usagesMateriels", mat.id);
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
-    const payloadCommon = {
-      materielId: mat.id,
-      nom: mat.nom || "",
-      categorie: mat.categorie || null,
-      prix: Number(mat.prix) || 0,
-    };
     if (!snap.exists()) {
       tx.set(ref, {
-        ...payloadCommon,
+        materielId: mat.id,
+        nom: mat.nom || "",
+        categorie: mat.categorie || null,
+        prix: Number(mat.prix) || 0,
         qty: Math.max(0, Number(amount) || 0),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -143,32 +111,39 @@ async function addMaterialQty({ projId, mat, amount }) {
   });
 }
 
-/* ---------- action: remove qty safely ---------- */
-async function removeMaterialQty({ projId, matId, amount, confirmDelete = true }) {
+async function removeOneMaterial({ projId, matId }) {
   const ref = doc(db, "projets", projId, "usagesMateriels", matId);
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
-    if (!snap.exists()) {
-      throw new Error("Impossible d’enlever : cet article n’est pas utilisé dans le projet.");
-    }
+    if (!snap.exists()) return;
     const cur = Number(snap.data().qty) || 0;
-    const n = Math.max(0, Number(amount) || 0);
-    if (n === 0) return;
-
-    if (n >= cur) {
-      if (confirmDelete && !window.confirm("Tu enlèves autant ou plus que la quantité actuelle. Supprimer la ligne ?")) {
-        throw new Error("Suppression annulée.");
-      }
-      tx.delete(ref);
-      return;
+    if (cur <= 1) {
+      tx.delete(ref); // supprime la ligne si on retombe à 0
+    } else {
+      tx.update(ref, { qty: cur - 1, updatedAt: serverTimestamp() });
     }
-    tx.update(ref, { qty: cur - n, updatedAt: serverTimestamp() });
   });
 }
 
-// src/ProjectMaterielPanel.jsx
+/* ---------- UI helpers ---------- */
+function ErrorBanner({ error, onClose }) {
+  if (!error) return null;
+  return (
+    <div style={{background:"#fdecea",color:"#7f1d1d",border:"1px solid #f5c6cb",padding:"8px 12px",borderRadius:10,marginBottom:10,display:"flex",alignItems:"center",gap:10,fontSize:14}}>
+      <strong>Erreur :</strong>
+      <span style={{flex:1}}>{error}</span>
+      <Button variant="danger" onClick={onClose}>OK</Button>
+    </div>
+  );
+}
+
+/* ---------- Main ---------- */
 export default function ProjectMaterielPanel({ projId, onClose, setParentError, inline = false }) {
   const [error, setError] = useState(null);
+  const [q, setQ] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const addRef = useRef(null);
+
   const proj = useProject(projId, setError);
   const categories = useCategories(setError);
   const materiels = useMateriels(setError);
@@ -183,181 +158,196 @@ export default function ProjectMaterielPanel({ projId, onClose, setParentError, 
   }, [usages]);
 
   const [qtyById, setQtyById] = useState({});
+  const setQty = (id, v) => setQtyById((s) => ({ ...s, [id]: v }));
+
   const groups = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    const pass = (r) =>
+      !term ||
+      r.nom?.toLowerCase().includes(term) ||
+      (r.categorie || "").toLowerCase().includes(term);
     const map = new Map();
     categories.forEach((c) => map.set(c.nom, []));
     const none = [];
     materiels.forEach((r) => {
+      if (!pass(r)) return;
       const k = (r.categorie || "").trim();
       if (!k) none.push(r);
       else (map.get(k) || (map.set(k, []), map.get(k))).push(r);
     });
     const out = categories.map((c) => ({ cat: c, items: map.get(c.nom) || [] }));
-    out.push({ cat: null, items: none });
+    if (none.length > 0) out.push({ cat: null, items: none });
     return out;
-  }, [materiels, categories]);
+  }, [materiels, categories, q]);
 
-  const setQty = (id, v) => setQtyById((s) => ({ ...s, [id]: v }));
+  const total = useMemo(
+    () => usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0),
+    [usages]
+  );
+
+  const add1 = (mat) =>
+    addMaterialQty({ projId, mat, amount: 1 }).catch((e) => setError(e.message || String(e)));
+
+  const dec1 = (u) =>
+    removeOneMaterial({ projId, matId: u.id }).catch((e) => setError(e.message || String(e)));
 
   const addWithQty = async (mat) => {
+    const amount = asInt(qtyById[mat.id] ?? 1);
+    if (!Number.isFinite(amount) || amount < 1) return setError("Qté ≥ 1.");
     try {
-      const amount = asInt(qtyById[mat.id] ?? 1);
-      if (!Number.isFinite(amount) || amount < 1) {
-        setError("La quantité doit être au moins 1.");
-        return;
-      }
       await addMaterialQty({ projId, mat, amount });
       setQty(mat.id, "");
-    } catch (err) {
-      setError(err?.message || String(err));
+    } catch (e) {
+      setError(e?.message || String(e));
     }
   };
 
-  const removeSome = async (u) => {
-    try {
-      const raw = window.prompt(`Enlever combien d’éléments de "${u.nom}" ?\nQuantité actuelle: ${u.qty}`, "1");
-      if (raw == null) return;
-      const n = asInt(raw);
-      if (!Number.isFinite(n) || n <= 0) {
-        setError("Quantité à enlever invalide.");
-        return;
-      }
-      await removeMaterialQty({ projId, matId: u.id, amount: n, confirmDelete: true });
-    } catch (err) {
-      setError(err?.message || String(err));
-    }
+  const toggleAdd = () => {
+    setShowAdd((s) => !s);
+    setTimeout(() => {
+      if (addRef.current) addRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 10);
   };
-
-  const total = useMemo(() => {
-    return usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0);
-  }, [usages]);
 
   if (!projId) return null;
 
-  // ----- CONTENU DU PANEL (identique visuellement) -----
   const content = (
     <div style={{ width: "100%" }}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
         <h3 style={{margin:0}}>Matériel — {proj?.nom || "…"}</h3>
-        {!inline && <Button variant="neutral" onClick={onClose}>Fermer</Button>}
+        <div style={{display:"flex", gap:8}}>
+          <Button variant={showAdd ? "neutral" : "primary"} onClick={toggleAdd}>
+            {showAdd ? "Fermer l’ajout" : "Ajouter du matériel"}
+          </Button>
+          {!inline && <Button variant="neutral" onClick={onClose}>Fermer</Button>}
+        </div>
       </div>
 
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      <Card title="Matériel utilisé (résumé)">
-        <div style={styles.tableWrap}>
-          <table style={styles.table}>
+      {/* Résumé très compact */}
+      <Card title="Utilisé dans ce projet (simple)">
+        <div style={{ ...styles.tableWrap, maxHeight:"unset", overflow:"visible" }}>
+          <table style={{ ...styles.table, borderCollapse:"separate", borderSpacing:0, width:"100%" }}>
             <thead>
               <tr>
-                {["Matériel", "Catégorie", "Prix unitaire", "Quantité", "Sous-total", "Actions"].map((h) => (
-                  <th key={h} style={styles.th}>{h}</th>
+                {["Matériel", "Quantité", "Actions"].map((h, i) => (
+                  <th key={h} style={{ ...styles.th, padding:"6px 8px", ...(i===1?{width:110,textAlign:"center"}:{}), ...(i===2?{width:160,textAlign:"right"}:{}) }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {usages.map((u) => (
-                <tr key={u.id} style={styles.row}
-                    onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
-                    onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
-                  <td style={styles.td}>{u.nom}</td>
-                  <td style={styles.td}>{u.categorie || "—"}</td>
-                  <td style={styles.td}>{formatCAD(Number(u.prix) || 0)}</td>
-                  <td style={styles.td}>{Number(u.qty) || 0}</td>
-                  <td style={styles.td}>{formatCAD((Number(u.prix) || 0) * (Number(u.qty) || 0))}</td>
-                  <td style={styles.td}>
-                    <Button variant="neutral" onClick={() => removeSome(u)}>Enlever…</Button>
+                <tr key={u.id} style={{ background:"white", borderBottom:"1px dashed #e2e8f0", height:34 }}>
+                  <td style={{ ...styles.td, padding:"6px 8px" }}>{u.nom}</td>
+                  <td style={{ ...styles.td, padding:"6px 8px", textAlign:"center", fontWeight:700 }}>{Number(u.qty) || 0}</td>
+                  <td style={{ ...styles.td, padding:"4px 8px", textAlign:"right" }}>
+                    <div style={{ display:"inline-flex", gap:6 }}>
+                      <Button variant="neutral" onClick={() => dec1(u)} title="-1" style={{ padding:"2px 8px" }}>−1</Button>
+                      <Button variant="neutral" onClick={() => add1({ id: u.id, nom: u.nom, categorie: u.categorie, prix: u.prix })} title="+1" style={{ padding:"2px 8px" }}>+1</Button>
+                    </div>
                   </td>
                 </tr>
               ))}
               {usages.length === 0 && (
-                <tr><td colSpan={6} style={{ ...styles.td, color: "#64748b" }}>Aucun matériel pour l’instant.</td></tr>
+                <tr><td colSpan={3} style={{ ...styles.td, color:"#64748b" }}>Aucun matériel pour l’instant.</td></tr>
               )}
             </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={5} style={{ ...styles.td, textAlign: "right", fontWeight: 800 }}>Total</td>
-                <td style={{ ...styles.td, fontWeight: 800 }}>{formatCAD(total)}</td>
-              </tr>
-            </tfoot>
           </table>
+        </div>
+        <div style={{ textAlign:"right", marginTop:6, fontWeight:800, fontSize:13 }}>
+          Total estimé: {total.toLocaleString("fr-CA", { style:"currency", currency:"CAD" })}
         </div>
       </Card>
 
-      <Card title="Ajouter du matériel au projet">
-        <div style={styles.tableWrap}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                {["Nom", "Prix", "Catégorie", "Quantité", "Actions", "Déjà utilisé"].map((h) => (
-                  <th key={h} style={styles.th}>{h}</th>
+      {/* Accordéon: ajouter du matériel */}
+      <div ref={addRef} />
+      {showAdd && (
+        <Card title="Ajouter du matériel (catégories)">
+          <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Recherche (nom ou catégorie)…"
+              style={{ ...styles.input, width:260, height:32, padding:"4px 8px" }}
+            />
+            <Pill variant="neutral">
+              {materiels.length} articles dans le catalogue
+            </Pill>
+          </div>
+
+          <div style={{ ...styles.tableWrap, maxHeight:"unset", overflow:"visible" }}>
+            <table style={{ ...styles.table, borderCollapse:"separate", borderSpacing:0, width:"100%" }}>
+              <thead>
+                <tr>
+                  {["Nom", "Quantité", "Ajouter"].map((h, i) => (
+                    <th key={h} style={{ ...styles.th, padding:"6px 8px", ...(i===1?{width:120,textAlign:"center"}:{}), ...(i===2?{width:160,textAlign:"right"}:{}) }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map(({ cat, items }) => (
+                  <React.Fragment key={cat ? cat.id : "__NONE__"}>
+                    <tr>
+                      <th colSpan={3} style={{ ...styles.th, textAlign:"left", background:"#f1f5f9", padding:"8px 10px", borderTop:"6px solid #0ea5e9" }}>
+                        {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
+                      </th>
+                    </tr>
+
+                    {items.map((mat) => {
+                      const used = usagesMap.get(mat.id);
+                      return (
+                        <tr key={mat.id} style={{ background:"white", borderBottom:"1px dashed #e2e8f0", height:34 }}>
+                          <td style={{ ...styles.td, padding:"6px 8px" }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <span style={{ fontWeight:600 }}>{mat.nom}</span>
+                              <span style={{ fontSize:11, color:"#64748b" }}>{used ? `(${used.qty})` : ""}</span>
+                            </div>
+                          </td>
+                          <td style={{ ...styles.td, padding:"6px 8px", textAlign:"center" }}>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={qtyById[mat.id] ?? ""}
+                              onChange={(e) => setQty(mat.id, e.target.value)}
+                              placeholder="Qté"
+                              style={{ ...styles.input, width:90, height:28, padding:"2px 6px", textAlign:"center" }}
+                            />
+                          </td>
+                          <td style={{ ...styles.td, padding:"4px 8px", textAlign:"right" }}>
+                            <div style={{ display:"inline-flex", gap:6 }}>
+                              <Button variant="success" onClick={() => add1(mat)} title="+1" style={{ padding:"2px 8px" }}>+1</Button>
+                              <Button variant="primary" onClick={() => addWithQty(mat)} style={{ padding:"2px 8px" }}>Ajouter</Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {items.length === 0 && (
+                      <tr><td colSpan={3} style={{ ...styles.td, color:"#94a3b8" }}>Aucun article.</td></tr>
+                    )}
+                  </React.Fragment>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map(({ cat, items }) => (
-                <React.Fragment key={cat ? cat.id : "__NONE__"}>
-                  <tr style={{ background: "#f8fafc" }}>
-                    <th colSpan={6} style={{ ...styles.th, textAlign: "left" }}>
-                      {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
-                    </th>
-                  </tr>
-
-                  {items.map((mat) => {
-                    const used = usagesMap.get(mat.id);
-                    return (
-                      <tr key={mat.id} style={styles.row}
-                          onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)}
-                          onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
-                        <td style={styles.td}>{mat.nom}</td>
-                        <td style={styles.td}>{formatCAD(Number(mat.prix) || 0)}</td>
-                        <td style={styles.td}>{mat.categorie || "—"}</td>
-                        <td style={styles.td}>
-                          <input
-                            type="number"
-                            min="1"
-                            step="1"
-                            value={qtyById[mat.id] ?? ""}
-                            onChange={(e) => setQty(mat.id, e.target.value)}
-                            placeholder="Qté (≥ 1)"
-                            style={{ ...styles.input, width: 110, height: 36 }}
-                          />
-                        </td>
-                        <td style={styles.td}>
-                          <Button variant="success" onClick={() => addWithQty(mat)}>Ajouter</Button>
-                        </td>
-                        <td style={styles.td}>
-                          <Pill variant="neutral">{used ? (Number(used.qty) || 0) : 0}</Pill>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {items.length === 0 && (
-                    <tr><td colSpan={6} style={{ ...styles.td, color: "#64748b" }}>Aucun matériel.</td></tr>
-                  )}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
     </div>
   );
 
-  // ----- RENDU -----
   if (inline) {
-    // rendu “section” (pas d’overlay)
     return (
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
+      <div style={{ border:"1px solid #e5e7eb", borderRadius:12, padding:12, background:"#fff" }}>
         {content}
       </div>
     );
   }
-
-  // rendu modal (ancien comportement)
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.35)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
-      <div style={{background:"#fff", width:"min(1100px, 96vw)", maxHeight:"92vh", overflow:"auto", borderRadius:14, padding:16, boxShadow:"0 18px 50px rgba(0,0,0,0.25)"}}>
+      <div style={{background:"#fff", width:"min(980px, 96vw)", maxHeight:"92vh", overflow:"auto", borderRadius:14, padding:16, boxShadow:"0 18px 50px rgba(0,0,0,0.25)"}}>
         {content}
       </div>
     </div>

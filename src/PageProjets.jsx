@@ -1,5 +1,5 @@
 // src/PageProjets.jsx — Tableau Projets (miroir, sans punch)
-// - Clic sur une ligne => ouvre le matériel du projet (#/projets/<id>)
+// - Clic sur une ligne => ouvre le matériel du projet (via callback, sans hash)
 // - Colonne "Actions" avec bouton "Matériel" (+ "Historique" facultatif)
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -12,7 +12,6 @@ import {
   onSnapshot,
   serverTimestamp,
   query,
-  where,
   getDocs,
   orderBy,
 } from "firebase/firestore";
@@ -141,7 +140,7 @@ function usePresenceTodayP(projId, setError){
   return { key, card, sessions, totalMs, hasOpen };
 }
 
-/* ✅ NOUVEAU: agrégats sur TOUT l’historique du projet */
+/* ✅ Agrégats sur TOUT l’historique du projet */
 function useProjectLifetimeStats(projId, setError){
   const [firstEverStart, setFirstEverStart] = useState(null); // Date | null
   const [totalAllMs, setTotalAllMs] = useState(0);
@@ -283,7 +282,7 @@ function HistoriqueProjet({ proj, open, onClose }){
   );
 }
 
-/* ---------------------- Lignes / Tableau (clic => matériel) ---------------------- */
+/* ---------------------- Lignes / Tableau (clic => matériel par callback) ---------------------- */
 function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
   // Présence du jour (pour statut actuel)
   const { card, totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
@@ -309,9 +308,11 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
     </button>
   );
 
+  const openMat = ()=> onOpenMaterial?.(proj.id); // ✅ pas de hash
+
   return (
     <tr
-      onClick={() => onOpenMaterial(proj.id)}
+      onClick={openMat}
       style={{ cursor: "pointer" }}
       onMouseEnter={(e)=> e.currentTarget.style.background="#f8fafc"}
       onMouseLeave={(e)=> e.currentTarget.style.background="transparent"}
@@ -343,26 +344,26 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
         {fmtDateTime(firstEverStart)}
       </td>
 
-      {/* ❌ Ancienne colonne "Dernier dépunch" remplacée par ✅ Total (tous jours) */}
+      {/* ✅ Total (tous jours) */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
         {fmtHM(totalAllMs)}
       </td>
 
-      {/* Total du jour (on garde la vue jour pour info rapide) */}
+      {/* Total du jour */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
         {fmtHM(totalMs)}
       </td>
 
       {/* Actions */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }} onClick={(e)=>e.stopPropagation()}>
-        {btn("Matériel", ()=>onOpenMaterial(proj.id), "#2563eb")}
+        {btn("Matériel", openMat, "#2563eb")}
         {btn("Historique", ()=>onOpenHistory(proj), "#6b7280")}
       </td>
     </tr>
   );
 }
 
-/* ---------------------- Barre d’ajout projets (inchangé) ---------------------- */
+/* ---------------------- Barre d’ajout projets ---------------------- */
 function BarreAjoutProjets({ onError }){
   const [open,setOpen] = useState(false);
   const [nom,setNom] = useState("");
@@ -394,7 +395,7 @@ function BarreAjoutProjets({ onError }){
 }
 
 /* ---------------------- Page ---------------------- */
-export default function PageProjets(){
+export default function PageProjets({ onOpenMaterial }){  // ⬅️ accepte le callback
   const [error,setError] = useState(null);
   const projets = useProjets(setError);
 
@@ -402,11 +403,6 @@ export default function PageProjets(){
   const [projSel, setProjSel] = useState(null);
   const openHistory = (proj)=>{ setProjSel(proj); setOpenHist(true); };
   const closeHistory = ()=>{ setOpenHist(false); setProjSel(null); };
-
-  // 👉 ouvre le panneau "matériel" dans PageAccueil
-  const openMaterial = (id) => {
-    window.location.hash = `#/projets/${id}`;
-  };
 
   return (
     <div style={{ padding:20, fontFamily:"Arial, system-ui, -apple-system" }}>
@@ -431,7 +427,7 @@ export default function PageProjets(){
                 key={p.id}
                 proj={p}
                 onOpenHistory={openHistory}
-                onOpenMaterial={openMaterial}
+                onOpenMaterial={onOpenMaterial}  // ✅ passe le callback
                 setError={setError}
               />
             ))}

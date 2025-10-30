@@ -577,8 +577,9 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
 
 /* ---------------------- Routing helper (LOCAL à pageAccueil) ---------------------- */
 function getRouteFromHash(){
-  const raw = window.location.hash.replace(/^#\//, "");
-  return raw || "accueil";
+  const h = window.location.hash || "";
+  const m = h.match(/^#\/(.+)/);
+  return m ? m[1] : "accueil";
 }
 
 /* ---------- Composant interne : Horloge compacte à droite du TopBar ---------- */
@@ -650,7 +651,7 @@ export default function PageAccueil(){
   const openHistory = (emp)=>{ setEmpSel(emp); setOpenHist(true); };
   const closeHistory = ()=>{ setOpenHist(false); setEmpSel(null); };
 
-  // Router local par hash (pas de menu ici)
+  // Router local par hash (pour #/projets et #/accueil)
   const [route, setRoute] = useState(getRouteFromHash());
   useEffect(()=>{
     const onHash = ()=> setRoute(getRouteFromHash());
@@ -659,15 +660,15 @@ export default function PageAccueil(){
     return ()=> window.removeEventListener("hashchange", onHash);
   },[]);
 
-  // Si l’URL est de la forme "projets/<id>" => panneau détails/Matériel
-  const matchProj = /^projets\/([^/]+)$/.exec(route);
-  const openProjectId = matchProj ? matchProj[1] : null;
+  // ✅ Ouvrir "Matériel" sans changer le hash (pour éviter le flash/reload)
+  const [materialProjId, setMaterialProjId] = useState(null);
+  const openMaterialPanel = (id)=> setMaterialProjId(id);
+  const closeMaterialPanel = ()=> setMaterialProjId(null);
 
   // Vue "liste projets" (si route === "projets" sans id)
   if (route === "projets") {
     return (
       <>
-        {/* (bannière Horloge supprimée ici) */}
         <PageContainer>
           <TopBar
             left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Projets</h1>}
@@ -684,7 +685,6 @@ export default function PageAccueil(){
   // Accueil
   return (
     <>
-      {/* (bannière Horloge supprimée ici) */}
       <PageContainer>
         <TopBar
           left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Gyrotech</h1>}
@@ -727,15 +727,15 @@ export default function PageAccueil(){
 
         {/* ===== Tableau PROJETS ===== */}
         <Card title="Projets">
-          <PageProjets />
+          <PageProjets onOpenMaterial={openMaterialPanel} />
         </Card>
       </PageContainer>
 
-      {/* Panneau Matériel (si URL #/projets/<id>) */}
-      {openProjectId && (
+      {/* ✅ Panneau Matériel (contrôlé par état local, pas de hash) */}
+      {materialProjId && (
         <ProjectMaterielPanel
-          projId={openProjectId}
-          onClose={()=>{ window.location.hash = "#/projets"; }}
+          projId={materialProjId}
+          onClose={closeMaterialPanel}
           setParentError={setError}
         />
       )}
