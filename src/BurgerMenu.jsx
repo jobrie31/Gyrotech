@@ -1,14 +1,14 @@
 // BurgerMenu.jsx — Bouton 3 lignes + tiroir gauche (pages)
-// Navigue via window.location.hash => '#/accueil', '#/projets', '#/materiels'
+// Navigue via window.location.hash => '#/accueil', '#/projets', '#/materiels', '#/reglages'
 
 import React, { useEffect, useState } from "react";
 
-// ✅ Plus d'import de PageMateriels ici — le menu ne rend pas les pages
-
+// ✅ Le menu ne rend pas les pages. Il ne fait que naviguer par hash.
 const defaultPages = [
-  { key: "accueil",  label: "PageAccueil" },
-  { key: "projets",  label: "Projets" },
-  { key: "materiels", label: "Matériels" }, // ✅ nouveau
+  { key: "accueil",   label: "PageAccueil" },
+  { key: "projets",   label: "Projets" },
+  { key: "materiels", label: "Matériels" },
+  { key: "reglages",  label: "Réglages" },
 ];
 
 export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
@@ -33,8 +33,7 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
     setOpen(false);
     if (p.onClick) return p.onClick();
     if (onNavigate) return onNavigate(p.key); // navigation gérée par le parent
-    // fallback: hash routing sans lib
-    window.location.hash = `#/${p.key}`;
+    window.location.hash = `#/${p.key}`;      // fallback hash
   };
 
   return (
@@ -58,6 +57,10 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
           alignItems: "center",
           justifyContent: "center",
           cursor: "pointer",
+          // ⬇️ Cache le bouton quand le menu est ouvert (il ne recouvre plus le header)
+          opacity: open ? 0 : 1,
+          pointerEvents: open ? "none" : "auto",
+          transition: "opacity 150ms ease",
         }}
       >
         <div style={{ display: "inline-block" }}>
@@ -76,7 +79,7 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
           position: "fixed",
           inset: 0,
           pointerEvents: open ? "auto" : "none",
-          zIndex: 11990,
+          zIndex: 20000, // ⬅️ au-dessus du bouton (12000)
         }}
       >
         {/* Overlay assombri */}
@@ -116,9 +119,11 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
               justifyContent: "space-between",
               padding: "14px 14px",
               borderBottom: "1px solid #f1f5f9",
+              position: "relative",
+              zIndex: 1,
             }}
           >
-            <div style={{ fontSize: 18, fontWeight: 800 }}>Menu</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>Menu</div>
             <button
               onClick={() => setOpen(false)}
               aria-label="Fermer le menu"

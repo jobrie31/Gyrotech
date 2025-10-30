@@ -20,6 +20,7 @@ import {
 } from "firebase/storage";
 
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
+import { useAnnees, useMarques, useModeles, useMarqueIdFromName } from "./refData";
 
 /* ---------------------- Utils ---------------------- */
 function fmtDate(ts) {
@@ -76,7 +77,7 @@ function ErrorBanner({ error, onClose }) {
         background: "#fdecea",
         color: "#b71c1c",
         border: "1px solid #f5c6cb",
-        padding: "6px 10px",
+        padding: "6px 10",
         borderRadius: 8,
         marginBottom: 10,
         display: "flex",
@@ -234,13 +235,19 @@ function PopupPDFManager({ open, onClose, projet }) {
   );
 }
 
-/* ---------------------- Popup création (NOM SIMPLE) ---------------------- */
+/* ---------------------- Popup création (SELECTS + Réglages) ---------------------- */
 function PopupCreateProjet({ open, onClose, onError }) {
+  const annees = useAnnees();
+  const marques = useMarques();
+
   const [nom, setNom] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
   const [marque, setMarque] = useState("");
+  const marqueId = useMarqueIdFromName(marques, marque);
+  const modeles = useModeles(marqueId);
   const [modele, setModele] = useState("");
+
   const [plaque, setPlaque] = useState("");
   const [odometre, setOdometre] = useState("");
   const [vin, setVin] = useState("");
@@ -254,28 +261,31 @@ function PopupCreateProjet({ open, onClose, onError }) {
     }
   }, [open]);
 
+  useEffect(() => { setModele(""); }, [marqueId]);
+
   const submit = async (e) => {
     e.preventDefault();
     try {
       const cleanNom = nom.trim();
       const cleanUnite = numeroUnite.trim();
-      const cleanAnnee = annee.trim();
-      const cleanMarque = marque.trim();
-      const cleanModele = modele.trim();
+      const selectedYear = annees.find(a => String(a.id) === String(annee));
+      const cleanAnnee = annee ? Number(selectedYear?.value ?? annee) : null;
+      const cleanMarque = marque.trim() || null;
+      const cleanModele = modele.trim() || null;
       const cleanPlaque = plaque.trim();
       const cleanOdo = odometre.trim();
       const cleanVin = vin.trim().toUpperCase();
 
       if (!cleanNom) return setMsg("Indique un nom de projet (simple).");
-      if (cleanAnnee && !/^\d{4}$/.test(cleanAnnee)) return setMsg("Année invalide (format AAAA).");
+      if (cleanAnnee && !/^\d{4}$/.test(String(cleanAnnee))) return setMsg("Année invalide (format AAAA).");
       if (cleanOdo && isNaN(Number(cleanOdo))) return setMsg("Odomètre doit être un nombre.");
 
       await addDoc(collection(db, "projets"), {
         nom: cleanNom,
         numeroUnite: cleanUnite || null,
         annee: cleanAnnee ? Number(cleanAnnee) : null,
-        marque: cleanMarque || null,
-        modele: cleanModele || null,
+        marque: cleanMarque,
+        modele: cleanModele,
         plaque: cleanPlaque || null,
         odometre: cleanOdo ? Number(cleanOdo) : null,
         vin: cleanVin || null,
@@ -292,6 +302,8 @@ function PopupCreateProjet({ open, onClose, onError }) {
   };
 
   if (!open) return null;
+
+  const goReglages = () => (window.location.hash = "#/reglages");
 
   return (
     <div role="dialog" aria-modal="true" onClick={onClose}
@@ -312,15 +324,45 @@ function PopupCreateProjet({ open, onClose, onError }) {
           <FieldV label="Numéro d’unité">
             <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} placeholder="Ex.: 1234" style={input} />
           </FieldV>
-          <FieldV label="Année">
-            <input value={annee} onChange={(e) => setAnnee(e.target.value)} placeholder="AAAA" inputMode="numeric" style={input} />
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+            <FieldV label="Année">
+              <div style={{ display:"flex", gap:6 }}>
+                <select value={annee} onChange={(e) => setAnnee(e.target.value)} style={select}>
+                  <option value="">—</option>
+                  {annees.map((a) => (
+                    <option key={a.id} value={a.id}>{a.value}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les années">Réglages</button>
+              </div>
+            </FieldV>
+
+            <FieldV label="Marque">
+              <div style={{ display:"flex", gap:6 }}>
+                <select value={marque} onChange={(e) => setMarque(e.target.value)} style={select}>
+                  <option value="">—</option>
+                  {marques.map((m) => (
+                    <option key={m.id} value={m.name}>{m.name}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Ajouter/supprimer des marques">Réglages</button>
+              </div>
+            </FieldV>
+          </div>
+
+          <FieldV label="Modèle (lié à la marque)">
+            <div style={{ display:"flex", gap:6 }}>
+              <select value={modele} onChange={(e) => setModele(e.target.value)} style={select} disabled={!marqueId}>
+                <option value="">—</option>
+                {modeles.map((mo) => (
+                  <option key={mo.id} value={mo.name}>{mo.name}</option>
+                ))}
+              </select>
+              <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les modèles">Réglages</button>
+            </div>
           </FieldV>
-          <FieldV label="Marque">
-            <input value={marque} onChange={(e) => setMarque(e.target.value)} placeholder="Ex.: Ford" style={input} />
-          </FieldV>
-          <FieldV label="Modèle">
-            <input value={modele} onChange={(e) => setModele(e.target.value)} placeholder="Ex.: F-150" style={input} />
-          </FieldV>
+
           <FieldV label="Plaque">
             <input value={plaque} onChange={(e) => setPlaque(e.target.value)} placeholder="Ex.: ABC 123" style={input} />
           </FieldV>
@@ -485,6 +527,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
           <div style={{ fontWeight:900, fontSize:17 }}>Détails du projet</div>
           <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+            {/* 🔴 Bouton Réglages retiré d'ici, comme demandé */}
             <button onClick={() => setTab("historique")} style={tab === "historique" ? btnTabActive : btnTab}>Historique</button>
             <button onClick={() => setTab("materiel")}   style={tab === "materiel"   ? btnTabActive : btnTab}>Matériel</button>
             <button
@@ -672,12 +715,40 @@ export default function PageListeProjet() {
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
       {/* Barre top */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, gap:8, flexWrap:"wrap" }}>
-        <h2 style={{ margin:0 }}>📁 Projets</h2>
-        <div>
-          <button onClick={() => setCreateOpen(true)} style={btnPrimary}>Créer un nouveau projet</button>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
+          alignItems: "center",
+          marginBottom: 10,
+          gap: 8,
+        }}
+      >
+        {/* Colonne vide pour équilibrer la grille */}
+        <div />
+
+        {/* Titre centré et plus gros */}
+        <h1
+          style={{
+            margin: 0,
+            textAlign: "center",
+            fontSize: 32,       // ← plus gros (ajuste à 36 si tu veux)
+            fontWeight: 900,
+            lineHeight: 1.2,
+          }}
+        >
+          📁 Projets
+        </h1>
+
+        {/* Actions à droite (inchangées) */}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <a href="#/reglages" style={btnSecondary}>Réglages</a>
+          <button onClick={() => setCreateOpen(true)} style={btnPrimary}>
+            Créer un nouveau projet
+          </button>
         </div>
       </div>
+
 
       {/* Tableau */}
       <div style={{ overflowX:"auto" }}>
@@ -745,16 +816,6 @@ function FieldV({ label, children }) {
     </div>
   );
 }
-function InfoV({ label, value, valueStyle, small }) {
-  return (
-    <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
-      <div style={{ fontSize: small ? 9 : 10, color:"#666" }}>{label}</div>
-      <div style={{ fontSize: small ? 11 : 13, fontWeight: small ? 600 : 700, wordBreak:"break-word", ...(valueStyle || {}) }}>
-        {value}
-      </div>
-    </div>
-  );
-}
 function CardKV({ k, v }) {
   return (
     <div style={{ border:"1px solid #eee", borderRadius:10, padding:"6px 8px" }}>
@@ -794,9 +855,11 @@ function KVInline({ k, v, danger, success }) {
 const th = { textAlign:"left", padding:8, borderBottom:"1px solid #e0e0e0", whiteSpace:"nowrap" };
 const td = { padding:8, borderBottom:"1px solid #eee" };
 const input = { width:"100%", padding:"8px 10px", border:"1px solid #ccc", borderRadius:8, background:"#fff" };
+const select = { ...input, paddingRight: 28 };
 
 const btnPrimary = { border:"none", background:"#2563eb", color:"#fff", borderRadius:10, padding:"8px 14px", cursor:"pointer", fontWeight:800, boxShadow:"0 8px 18px rgba(37,99,235,0.25)" };
-const btnSecondary = { border:"1px solid #cbd5e1", background:"#f8fafc", borderRadius:10, padding:"6px 10px", cursor:"pointer", fontWeight:700 };
+const btnSecondary = { border:"1px solid #cbd5e1", background:"#f8fafc", borderRadius:10, padding:"6px 10px", cursor:"pointer", fontWeight:700, textDecoration:"none", color:"#111" };
+const btnSecondarySmall = { ...btnSecondary, padding:"4px 8px", fontSize:12 };
 const btnGhost = { border:"1px solid #e5e7eb", background:"#fff", borderRadius:10, padding:"6px 10px", cursor:"pointer", fontWeight:700 };
 const btnSituationOpen  = { border:"1px solid #16a34a", background:"#dcfce7", color:"#166534", borderRadius:999, padding:"4px 10px", cursor:"pointer", fontWeight:800 };
 const btnSituationClosed= { border:"1px solid #ef4444", background:"#fee2e2", color:"#b91c1c", borderRadius:999, padding:"4px 10px", cursor:"pointer", fontWeight:800 };

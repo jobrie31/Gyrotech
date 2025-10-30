@@ -1,13 +1,16 @@
 // App.jsx
 import React, { useEffect, useState } from "react";
 import BurgerMenu from "./BurgerMenu";
-import PageAccueil from "./pageAccueil";       // ✅ casse corrigée
+import PageAccueil from "./pageAccueil";       // ✅ casse comme chez toi
 import PageListeProjet from "./PageListeProjet";
-import PageMateriels from "./PageMateriels";   // ✅ nouveau
+import PageMateriels from "./PageMateriels";
+import PageReglages from "./PageReglages";     // ✅ AJOUT
 
+// ➜ Supporte aussi les sous-chemins (#/projets/xxx, #/materiels/yyy, etc.)
 function getRouteFromHash() {
-  const key = window.location.hash.replace(/^#\//, "");
-  return key || "accueil";
+  const raw = window.location.hash.replace(/^#\//, "");
+  const first = raw.split("/")[0];             // ne garder que le premier segment
+  return first || "accueil";
 }
 
 export default function App() {
@@ -20,11 +23,12 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Items du menu (clé = hash)
+  // ✅ Items du menu (clé = hash). On ajoute "reglages".
   const pages = [
-    { key: "accueil",   label: "pageAccueil" },
+    { key: "accueil",   label: "PageAccueil" },
     { key: "projets",   label: "Projets" },
-    { key: "materiels", label: "Matériels" }, // ✅ nouveau
+    { key: "materiels", label: "Matériels" },
+    { key: "reglages",  label: "Réglages" },   // ← AJOUT
   ];
 
   return (
@@ -33,12 +37,13 @@ export default function App() {
       <BurgerMenu pages={pages} />
 
       {/* Mini-router */}
-      {route === "accueil" && <PageAccueil />}
-      {route === "projets" && <PageListeProjet />}
+      {route === "accueil"   && <PageAccueil />}
+      {route === "projets"   && <PageListeProjet />}
       {route === "materiels" && <PageMateriels />}
+      {route === "reglages"  && <PageReglages />}
 
       {/* Fallback simple */}
-      {!["accueil", "projets", "materiels"].includes(route) && <PageAccueil />}
+      {!["accueil", "projets", "materiels", "reglages"].includes(route) && <PageAccueil />}
     </div>
   );
 }

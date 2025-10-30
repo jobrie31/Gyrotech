@@ -726,7 +726,7 @@ export default function PageAccueil(){
         </Card>
 
         {/* ===== Tableau PROJETS ===== */}
-        <Card title="Projets">
+        <Card title="📁 Projets">
           <PageProjets onOpenMaterial={openMaterialPanel} />
         </Card>
       </PageContainer>
