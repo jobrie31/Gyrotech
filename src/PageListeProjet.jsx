@@ -23,15 +23,38 @@ import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { useAnnees, useMarques, useModeles, useMarqueIdFromName } from "./refData";
 
 /* ---------------------- Utils ---------------------- */
-function fmtDate(ts) {
-  if (!ts) return "—";
+// Format « 10 oct 2025 » / « 30 sept 2025 »
+const MONTHS_FR_ABBR = [
+  "janv", "févr", "mars", "avr", "mai", "juin",
+  "juil", "août", "sept", "oct", "nov", "déc"
+];
+function toDateSafe(ts) {
+  if (!ts) return null;
   try {
-    const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleDateString("fr-CA");
+    if (ts.toDate) return ts.toDate();              // Firestore Timestamp
+    if (typeof ts === "string") {
+      // Supporte "YYYY-MM-DD" pour éviter les décalages de fuseau (UTC)
+      const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) {
+        const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+        return new Date(y, mo, d);
+      }
+      return new Date(ts);
+    }
+    return new Date(ts);
   } catch {
-    return "—";
+    return null;
   }
 }
+function fmtDate(ts) {
+  const d = toDateSafe(ts);
+  if (!d || isNaN(d.getTime())) return "—";
+  const day = String(d.getDate()).padStart(1, "0");
+  const mon = MONTHS_FR_ABBR[d.getMonth()] || "";
+  const year = d.getFullYear();
+  return `${day} ${mon} ${year}`;
+}
+
 function fmtHM(ms) {
   const s = Math.max(0, Math.floor((ms || 0) / 1000));
   const h = Math.floor(s / 3600);
@@ -602,7 +625,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
         <div style={{ fontWeight:800, margin:"2px 0 6px", fontSize:11 }}>Résumé du projet</div>
         <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8, marginBottom:8 }}>
           <CardKV k="Date d’ouverture" v={fmtDate(projet?.createdAt)} />
-          <CardKV k="Total d’heures (tout le projet)" v={fmtHM(totalMsAll)} />
+          <CardKV k="Total d'heures compilées" v={fmtHM(totalMsAll)} />
         </div>
 
         {/* ======= CONTENU ======= */}
@@ -622,7 +645,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation,
                 {histLoading && (<tr><td colSpan={4} style={{ padding:12, color:"#666" }}>Chargement…</td></tr>)}
                 {!histLoading && histRows.map((r, i) => (
                   <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
-                    <td style={td}>{r.date}</td>
+                    <td style={td}>{fmtDate(r.date)}</td>
                     <td style={td}>{fmtHM(r.totalMs)}</td>
                     <td style={td}>{r.empName || "—"}</td>
                     <td style={td}>
@@ -732,7 +755,7 @@ export default function PageListeProjet() {
           style={{
             margin: 0,
             textAlign: "center",
-            fontSize: 32,       // ← plus gros (ajuste à 36 si tu veux)
+            fontSize: 32,
             fontWeight: 900,
             lineHeight: 1.2,
           }}
@@ -748,7 +771,6 @@ export default function PageListeProjet() {
           </button>
         </div>
       </div>
-
 
       {/* Tableau */}
       <div style={{ overflowX:"auto" }}>

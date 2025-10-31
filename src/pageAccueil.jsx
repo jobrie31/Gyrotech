@@ -549,6 +549,19 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets }) {
               ))}
             </select>
 
+            {/* 👇 Nouveau petit bouton “Aucun projet” */}
+            <Button
+              type="button"
+              variant="neutral"
+              onClick={() => setProjSel("")}
+              disabled={present}
+              title="Ne pas lier ce punch à un projet"
+              aria-label="Aucun projet"
+              style={{ height: 44, padding: "0 12px", fontWeight: 800 }}
+            >
+              Aucun projet
+            </Button>
+
             <Button
               type="button"
               onClick={handlePunchClick}
@@ -687,7 +700,7 @@ export default function PageAccueil(){
     <>
       <PageContainer>
         <TopBar
-          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Gyrotech</h1>}
+          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Styro</h1>}
           right={<ClockBadge now={now} />}
         />
 
@@ -726,7 +739,18 @@ export default function PageAccueil(){
         </Card>
 
         {/* ===== Tableau PROJETS ===== */}
-        <Card title="📁 Projets">
+        <Card
+          title="📁 Projets"
+          right={
+            <Button
+              variant="primary"
+              onClick={() => (window.location.hash = "#/projets")}
+              aria-label="Aller à la liste des projets"
+            >
+              projet
+            </Button>
+          }
+        >
           <PageProjets onOpenMaterial={openMaterialPanel} />
         </Card>
       </PageContainer>

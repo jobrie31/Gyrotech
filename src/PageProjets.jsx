@@ -12,7 +12,7 @@ import {
   query,
   getDocs,
   orderBy,
-  deleteDoc,            // ⬅️ ajouté pour la suppression d’une ligne d’historique
+  deleteDoc,
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 
@@ -33,30 +33,34 @@ function addDays(d, delta) {
   return x;
 }
 
-function fmtDateTime(ts) {
-  if (!ts) return "—";
+/* ——— Format date « 10 oct 2025 » ——— */
+const MONTHS_FR_ABBR = [
+  "janv", "févr", "mars", "avr", "mai", "juin",
+  "juil", "août", "sept", "oct", "nov", "déc"
+];
+function toDateSafe(ts) {
+  if (!ts) return null;
   try {
-    const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleString("fr-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    if (ts.toDate) return ts.toDate(); // Firestore Timestamp
+    if (typeof ts === "string") {
+      const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      return new Date(ts);
+    }
+    return new Date(ts);
   } catch {
-    return "—";
+    return null;
   }
 }
-function fmtTimeOnly(ts) {
-  if (!ts) return "—";
-  try {
-    const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "—";
-  }
+function fmtDate(ts) {
+  const d = toDateSafe(ts);
+  if (!d || isNaN(d.getTime())) return "—";
+  const day = d.getDate(); // pas de pad pour rester naturel (10 oct 2025)
+  const mon = MONTHS_FR_ABBR[d.getMonth()] || "";
+  const year = d.getFullYear();
+  return `${day} ${mon} ${year}`;
 }
+
 function fmtHM(ms) {
   const s = Math.max(0, Math.floor((ms || 0) / 1000));
   const h = Math.floor(s / 3600);
@@ -224,10 +228,7 @@ function useProjectLifetimeStats(projId, setError) {
                 : null;
               if (st) {
                 if (!first || st < first) first = st;
-                const dur = Math.max(
-                  0,
-                  (en ? en.getTime() : Date.now()) - st.getTime()
-                );
+                const dur = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
                 total += dur;
               }
             });
@@ -243,7 +244,7 @@ function useProjectLifetimeStats(projId, setError) {
       (err) => setError?.(err?.message || String(err))
     );
 
-  return () => unsub();
+    return () => unsub();
   }, [projId, setError]);
 
   return { firstEverStart, totalAllMs };
@@ -437,12 +438,12 @@ function HistoriqueProjet({ proj, open, onClose }) {
         {/* Résumé rapide */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 12 }}>
           <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Total d’heures (tout le projet)</div>
+            <div style={{ fontSize: 12, color: "#666" }}>Total compilé</div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtHM(totalMsAll)}</div>
           </div>
           <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Créé le</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtDateTime(proj?.createdAt)}</div>
+            <div style={{ fontSize: 12, color: "#666" }}>Date d’ouverture</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtDate(proj?.createdAt)}</div>
           </div>
         </div>
 
@@ -476,7 +477,7 @@ function HistoriqueProjet({ proj, open, onClose }) {
             {!histLoading &&
               histRows.map((r, i) => (
                 <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
-                  <td style={td}>{r.date}</td>
+                  <td style={td}>{fmtDate(r.date)}</td>
                   <td style={td}>{fmtHM(r.totalMs)}</td>
                   <td style={td}>{r.empName || "—"}</td>
                   <td style={td}>
@@ -570,12 +571,15 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
+      {/* ⬇️ Date d’ouverture avec nouveau format */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-        {fmtDateTime(firstEverStart)}
+        {fmtDate(firstEverStart)}
       </td>
 
+      {/* ⬇️ Total compilé (tout le projet) */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalAllMs)}</td>
 
+      {/* ⬇️ Jour (total du jour) */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalMs)}</td>
 
       <td
@@ -633,14 +637,15 @@ export default function PageProjets({ onOpenMaterial }) {
               <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
                 Statut
               </th>
+              {/* ⬇️ libellés mis à jour */}
               <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
-                Première entrée (tout temps)
+                Date d’ouverture
               </th>
               <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
-                Total (tous jours)
+                Total compilé
               </th>
               <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
-                Total (jour)
+                Jour
               </th>
               <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
                 Actions
