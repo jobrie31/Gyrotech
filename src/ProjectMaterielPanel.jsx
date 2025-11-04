@@ -175,7 +175,10 @@ export default function ProjectMaterielPanel({ projId, onClose, setParentError, 
       if (!k) none.push(r);
       else (map.get(k) || (map.set(k, []), map.get(k))).push(r);
     });
-    const out = categories.map((c) => ({ cat: c, items: map.get(c.nom) || [] }));
+    const out = [];
+    categories.forEach((c) => {
+      out.push({ cat: c, items: map.get(c.nom) || [] });
+    });
     if (none.length > 0) out.push({ cat: null, items: none });
     return out;
   }, [materiels, categories, q]);
@@ -286,50 +289,71 @@ export default function ProjectMaterielPanel({ projId, onClose, setParentError, 
                 </tr>
               </thead>
               <tbody>
-                {groups.map(({ cat, items }) => (
-                  <React.Fragment key={cat ? cat.id : "__NONE__"}>
-                    <tr>
-                      <th colSpan={3} style={{ ...styles.th, textAlign:"left", background:"#f1f5f9", padding:"8px 10px", borderTop:"6px solid #0ea5e9" }}>
-                        {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
-                      </th>
-                    </tr>
+                {groups.map(({ cat, items }) => {
+                  const hasSearch = q.trim().length > 0;
 
-                    {items.map((mat) => {
-                      const used = usagesMap.get(mat.id);
-                      return (
-                        <tr key={mat.id} style={{ background:"white", borderBottom:"1px dashed #e2e8f0", height:34 }}>
-                          <td style={{ ...styles.td, padding:"6px 8px" }}>
-                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                              <span style={{ fontWeight:600 }}>{mat.nom}</span>
-                              <span style={{ fontSize:11, color:"#64748b" }}>{used ? `(${used.qty})` : ""}</span>
-                            </div>
-                          </td>
-                          <td style={{ ...styles.td, padding:"6px 8px", textAlign:"center" }}>
-                            <input
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={qtyById[mat.id] ?? ""}
-                              onChange={(e) => setQty(mat.id, e.target.value)}
-                              placeholder="Qté"
-                              style={{ ...styles.input, width:90, height:28, padding:"2px 6px", textAlign:"center" }}
-                            />
-                          </td>
-                          <td style={{ ...styles.td, padding:"4px 8px", textAlign:"right" }}>
-                            <div style={{ display:"inline-flex", gap:6 }}>
-                              <Button variant="success" onClick={() => add1(mat)} title="+1" style={{ padding:"2px 8px" }}>+1</Button>
-                              <Button variant="primary" onClick={() => addWithQty(mat)} style={{ padding:"2px 8px" }}>Ajouter</Button>
-                            </div>
+                  // 🔍 Quand on cherche, on cache les catégories sans items correspondants
+                  if (hasSearch && items.length === 0) return null;
+
+                  return (
+                    <React.Fragment key={cat ? cat.id : "__NONE__"}>
+                      <tr>
+                        <th
+                          colSpan={3}
+                          style={{
+                            ...styles.th,
+                            textAlign:"left",
+                            background:"#f1f5f9",
+                            padding:"8px 10px",
+                            borderTop:"6px solid #0ea5e9"
+                          }}
+                        >
+                          {cat ? (cat.nom || "—") : "— Aucune catégorie —"}
+                        </th>
+                      </tr>
+
+                      {items.map((mat) => {
+                        const used = usagesMap.get(mat.id);
+                        return (
+                          <tr key={mat.id} style={{ background:"white", borderBottom:"1px dashed #e2e8f0", height:34 }}>
+                            <td style={{ ...styles.td, padding:"6px 8px" }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                <span style={{ fontWeight:600 }}>{mat.nom}</span>
+                                <span style={{ fontSize:11, color:"#64748b" }}>{used ? `(${used.qty})` : ""}</span>
+                              </div>
+                            </td>
+                            <td style={{ ...styles.td, padding:"6px 8px", textAlign:"center" }}>
+                              <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={qtyById[mat.id] ?? ""}
+                                onChange={(e) => setQty(mat.id, e.target.value)}
+                                placeholder="Qté"
+                                style={{ ...styles.input, width:90, height:28, padding:"2px 6px", textAlign:"center" }}
+                              />
+                            </td>
+                            <td style={{ ...styles.td, padding:"4px 8px", textAlign:"right" }}>
+                              <div style={{ display:"inline-flex", gap:6 }}>
+                                <Button variant="success" onClick={() => add1(mat)} title="+1" style={{ padding:"2px 8px" }}>+1</Button>
+                                <Button variant="primary" onClick={() => addWithQty(mat)} style={{ padding:"2px 8px" }}>Ajouter</Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {/* On n'affiche "Aucun article." que quand il n'y a PAS de recherche */}
+                      {!hasSearch && items.length === 0 && (
+                        <tr>
+                          <td colSpan={3} style={{ ...styles.td, color:"#94a3b8" }}>
+                            Aucun article.
                           </td>
                         </tr>
-                      );
-                    })}
-
-                    {items.length === 0 && (
-                      <tr><td colSpan={3} style={{ ...styles.td, color:"#94a3b8" }}>Aucun article.</td></tr>
-                    )}
-                  </React.Fragment>
-                ))}
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -381,6 +381,9 @@ function HistoriqueProjet({ proj, open, onClose }) {
     lineHeight: 1
   };
 
+  const tempsOuvertureMinutes = Number(proj?.tempsOuvertureMinutes || 0) || 0;
+  const totalMsWithOpen = totalMsAll + tempsOuvertureMinutes * 60 * 1000;
+
   return (
     <div
       style={{
@@ -438,8 +441,8 @@ function HistoriqueProjet({ proj, open, onClose }) {
         {/* Résumé rapide */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 12 }}>
           <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Total compilé</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtHM(totalMsAll)}</div>
+            <div style={{ fontSize: 12, color: "#666" }}>Total compilé (incl. ouverture)</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtHM(totalMsWithOpen)}</div>
           </div>
           <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
             <div style={{ fontSize: 12, color: "#666" }}>Date d’ouverture</div>
@@ -542,6 +545,9 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
 
   const openMat = () => onOpenMaterial?.(proj.id);
 
+  const tempsOuvertureMinutes = Number(proj.tempsOuvertureMinutes || 0) || 0;
+  const totalAllMsWithOpen = totalAllMs + tempsOuvertureMinutes * 60 * 1000;
+
   return (
     <tr
       onClick={openMat}
@@ -576,8 +582,10 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
         {fmtDate(firstEverStart)}
       </td>
 
-      {/* ⬇️ Total compilé (tout le projet) */}
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalAllMs)}</td>
+      {/* ⬇️ Total compilé (tout le projet, incl. ouverture) */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        {fmtHM(totalAllMsWithOpen)}
+      </td>
 
       {/* ⬇️ Jour (total du jour) */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalMs)}</td>
@@ -628,7 +636,8 @@ export default function PageProjets({ onOpenMaterial }) {
         >
           <thead>
             <tr style={{ background: "#f6f7f8" }}>
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
+              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid " +
+                " #e0e0e0" }}>
                 Nom
               </th>
               <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>

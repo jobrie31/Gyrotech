@@ -4,7 +4,7 @@ import BurgerMenu from "./BurgerMenu";
 import PageAccueil from "./pageAccueil";       // ✅ casse comme chez toi
 import PageListeProjet from "./PageListeProjet";
 import PageMateriels from "./PageMateriels";
-import PageReglages from "./PageReglages";     // ✅ AJOUT
+import PageReglages from "./PageReglages";
 
 // ➜ Supporte aussi les sous-chemins (#/projets/xxx, #/materiels/yyy, etc.)
 function getRouteFromHash() {
@@ -23,12 +23,12 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // ✅ Items du menu (clé = hash). On ajoute "reglages".
+  // ✅ Items du menu (clé = hash) — PAS de "projets-fermes" ici.
   const pages = [
     { key: "accueil",   label: "PageAccueil" },
     { key: "projets",   label: "Projets" },
     { key: "materiels", label: "Matériels" },
-    { key: "reglages",  label: "Réglages" },   // ← AJOUT
+    { key: "reglages",  label: "Réglages" },
   ];
 
   return (
@@ -43,7 +43,9 @@ export default function App() {
       {route === "reglages"  && <PageReglages />}
 
       {/* Fallback simple */}
-      {!["accueil", "projets", "materiels", "reglages"].includes(route) && <PageAccueil />}
+      {!["accueil", "projets", "materiels", "reglages"].includes(route) && (
+        <PageAccueil />
+      )}
     </div>
   );
 }
