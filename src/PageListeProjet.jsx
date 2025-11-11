@@ -588,6 +588,7 @@ function PopupCreateProjet({
   const marques = useMarques();
 
   const [nom, setNom] = useState("");
+  const [clientTelephone, setClientTelephone] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
   const [marque, setMarque] = useState("");
@@ -611,6 +612,7 @@ function PopupCreateProjet({
 
     if (mode === "edit" && projet) {
       setNom(projet.nom ?? "");
+      setClientTelephone(projet.clientTelephone ?? "");
       setNumeroUnite(projet.numeroUnite ?? "");
       setAnnee(projet.annee != null ? String(projet.annee) : "");
       setMarque(projet.marque ?? "");
@@ -622,6 +624,7 @@ function PopupCreateProjet({
       setVin(projet.vin ?? "");
     } else {
       setNom("");
+      setClientTelephone("");
       setNumeroUnite("");
       setAnnee("");
       setMarque("");
@@ -641,6 +644,7 @@ function PopupCreateProjet({
     e.preventDefault();
     try {
       const cleanNom = nom.trim();
+      const cleanClientTel = clientTelephone.trim();
       const cleanUnite = numeroUnite.trim();
       const selectedYear = annees.find(
         (a) => String(a.id) === String(annee)
@@ -663,6 +667,7 @@ function PopupCreateProjet({
 
       const payload = {
         nom: cleanNom,
+        clientTelephone: cleanClientTel || null,
         numeroUnite: cleanUnite || null,
         annee: cleanAnnee ? Number(cleanAnnee) : null,
         marque: cleanMarque,
@@ -778,6 +783,15 @@ function PopupCreateProjet({
               value={nom}
               onChange={(e) => setNom(e.target.value)}
               placeholder="Ex.: Entretien camion 12"
+              style={input}
+            />
+          </FieldV>
+
+          <FieldV label="Téléphone du client">
+            <input
+              value={clientTelephone}
+              onChange={(e) => setClientTelephone(e.target.value)}
+              placeholder="Ex.: 418 555-1234"
               style={input}
             />
           </FieldV>
@@ -930,6 +944,7 @@ function PopupDetailsProjet({
 
   // drafts (inclut NOM)
   const [nom, setNom] = useState("");
+  const [clientTelephone, setClientTelephone] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
   const [marque, setMarque] = useState("");
@@ -952,6 +967,7 @@ function PopupDetailsProjet({
     if (open && projet) {
       setEditing(false);
       setNom(projet.nom ?? "");
+      setClientTelephone(projet.clientTelephone ?? "");
       setNumeroUnite(projet.numeroUnite ?? "");
       setAnnee(projet.annee != null ? String(projet.annee) : "");
       setMarque(projet.marque ?? "");
@@ -1104,6 +1120,7 @@ function PopupDetailsProjet({
 
       const payload = {
         nom: nom.trim(),
+        clientTelephone: clientTelephone.trim() || null,
         numeroUnite: numeroUnite.trim() || null,
         annee: annee ? Number(annee.trim()) : null,
         marque: marque.trim() || null,
@@ -1265,6 +1282,7 @@ function PopupDetailsProjet({
             }}
           >
             <KVInline k="Nom" v={projet.nom || "—"} />
+            <KVInline k="Téléphone client" v={projet.clientTelephone || "—"} />
             <KVInline
               k="Situation"
               v={projet.ouvert ? "Ouvert" : "Fermé"}
@@ -1299,6 +1317,13 @@ function PopupDetailsProjet({
               <input
                 value={nom}
                 onChange={(e) => setNom(e.target.value)}
+                style={input}
+              />
+            </FieldV>
+            <FieldV label="Téléphone du client">
+              <input
+                value={clientTelephone}
+                onChange={(e) => setClientTelephone(e.target.value)}
                 style={input}
               />
             </FieldV>
@@ -1485,6 +1510,7 @@ function RowProjet({
   return (
     <tr onClick={() => onClickRow?.(p)} style={{ cursor: "pointer" }}>
       {cell(p.nom || "—")}
+      {cell(p.clientTelephone || "—")}
       <td style={td} onClick={(e) => e.stopPropagation()}>
         <button
           onClick={handleToggle}
@@ -1700,6 +1726,7 @@ export default function PageListeProjet() {
           <thead>
             <tr style={{ background: "#f6f7f8" }}>
               <th style={th}>Nom</th>
+              <th style={th}>Téléphone</th>
               <th style={th}>Situation</th>
               <th style={th}>Unité</th>
               <th style={th}>Année</th>
@@ -1726,7 +1753,7 @@ export default function PageListeProjet() {
             ))}
             {projets.length === 0 && (
               <tr>
-                <td colSpan={10} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={11} style={{ padding: 12, color: "#666" }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>

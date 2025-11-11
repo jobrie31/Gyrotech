@@ -12,7 +12,6 @@ import {
   query,
   getDocs,
   orderBy,
-  deleteDoc,
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 
@@ -27,16 +26,21 @@ function dayKey(d) {
 function todayKey() {
   return dayKey(new Date());
 }
-function addDays(d, delta) {
-  const x = new Date(d);
-  x.setDate(x.getDate() + delta);
-  return x;
-}
 
 /* ——— Format date « 10 oct 2025 » ——— */
 const MONTHS_FR_ABBR = [
-  "janv", "févr", "mars", "avr", "mai", "juin",
-  "juil", "août", "sept", "oct", "nov", "déc"
+  "janv",
+  "févr",
+  "mars",
+  "avr",
+  "mai",
+  "juin",
+  "juil",
+  "août",
+  "sept",
+  "oct",
+  "nov",
+  "déc",
 ];
 function toDateSafe(ts) {
   if (!ts) return null;
@@ -55,7 +59,7 @@ function toDateSafe(ts) {
 function fmtDate(ts) {
   const d = toDateSafe(ts);
   if (!d || isNaN(d.getTime())) return "—";
-  const day = d.getDate(); // pas de pad pour rester naturel (10 oct 2025)
+  const day = d.getDate(); // pas de pad pour rester naturel
   const mon = MONTHS_FR_ABBR[d.getMonth()] || "";
   const year = d.getFullYear();
   return `${day} ${mon} ${year}`;
@@ -98,11 +102,15 @@ function useProjets(setError) {
     const unsub = onSnapshot(
       c,
       (snap) => {
-        const list = [];
+        let list = [];
         snap.forEach((d) => {
           const data = d.data();
-          list.push({ id: d.id, ouvert: data.ouvert ?? true, ...data });
+          const isOpen = data?.ouvert !== false; // false = fermé, tout le reste = ouvert
+          list.push({ id: d.id, ...data, ouvert: isOpen });
         });
+
+        // ❌ on garde seulement les projets OUVERTS
+        list = list.filter((p) => p.ouvert === true);
 
         // Tri identique à PageListeProjet (ouvert d’abord, puis nom/unité)
         list.sort((a, b) => {
@@ -228,7 +236,10 @@ function useProjectLifetimeStats(projId, setError) {
                 : null;
               if (st) {
                 if (!first || st < first) first = st;
-                const dur = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
+                const dur = Math.max(
+                  0,
+                  (en ? en.getTime() : Date.now()) - st.getTime()
+                );
                 total += dur;
               }
             });
@@ -244,7 +255,7 @@ function useProjectLifetimeStats(projId, setError) {
       (err) => setError?.(err?.message || String(err))
     );
 
-    return () => unsub();
+  return () => unsub();
   }, [projId, setError]);
 
   return { firstEverStart, totalAllMs };
@@ -286,20 +297,21 @@ function ErrorBanner({ error, onClose }) {
   );
 }
 
-/* ---------------------- Historique (modal) — version “PageListeProjet” ---------------------- */
+/* ---------------------- Historique (modal) — SANS supprimer ---------------------- */
 function HistoriqueProjet({ proj, open, onClose }) {
   const [error, setError] = useState(null);
   const [histRows, setHistRows] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
   const [totalMsAll, setTotalMsAll] = useState(0);
-  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     if (!open || !proj?.id) return;
     (async () => {
       setHistLoading(true);
       try {
-        const daysSnap = await getDocs(collection(db, "projets", proj.id, "timecards"));
+        const daysSnap = await getDocs(
+          collection(db, "projets", proj.id, "timecards")
+        );
         const days = [];
         daysSnap.forEach((d) => days.push(d.id));
         days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD desc
@@ -307,19 +319,38 @@ function HistoriqueProjet({ proj, open, onClose }) {
         const map = new Map();
         let sumAllMs = 0;
         for (const key of days) {
-          const segSnap = await getDocs(collection(db, "projets", proj.id, "timecards", key, "segments"));
+          const segSnap = await getDocs(
+            collection(db, "projets", proj.id, "timecards", key, "segments")
+          );
           segSnap.forEach((sdoc) => {
             const s = sdoc.data();
-            const st = s.start?.toDate ? s.start.toDate() : (s.start ? new Date(s.start) : null);
-            const en = s.end?.toDate ? s.end.toDate() : (s.end ? new Date(s.end) : null);
+            const st = s.start?.toDate
+              ? s.start.toDate()
+              : s.start
+              ? new Date(s.start)
+              : null;
+            const en = s.end?.toDate
+              ? s.end.toDate()
+              : s.end
+              ? new Date(s.end)
+              : null;
             if (!st) return;
-            const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
+            const ms = Math.max(
+              0,
+              (en ? en.getTime() : Date.now()) - st.getTime()
+            );
             sumAllMs += ms;
 
             const empName = s.empName || "—";
             const empKey = s.empId || empName;
             const k = `${key}__${empKey}`;
-            const prev = map.get(k) || { date: key, empName, empId: s.empId || null, totalMs: 0 };
+            const prev =
+              map.get(k) || {
+                date: key,
+                empName,
+                empId: s.empId || null,
+                totalMs: 0,
+              };
             prev.totalMs += ms;
             map.set(k, prev);
           });
@@ -337,49 +368,17 @@ function HistoriqueProjet({ proj, open, onClose }) {
         setHistLoading(false);
       }
     })();
-  }, [open, proj?.id, reload]);
-
-  const onDeleteHistRow = async (row) => {
-    if (!proj?.id) return;
-    const labelEmp = row.empName || "cet employé";
-    const ok = window.confirm(`Supprimer toutes les entrées du ${row.date} pour ${labelEmp} ?`);
-    if (!ok) return;
-
-    setHistLoading(true);
-    setError(null);
-    try {
-      const segSnap = await getDocs(collection(db, "projets", proj.id, "timecards", row.date, "segments"));
-      const deletions = [];
-      segSnap.forEach((sdoc) => {
-        const s = sdoc.data();
-        const match = row.empId ? s.empId === row.empId : (s.empName || "—") === (row.empName || "—");
-        if (match) deletions.push(deleteDoc(doc(db, "projets", proj.id, "timecards", row.date, "segments", sdoc.id)));
-      });
-      await Promise.all(deletions);
-      setReload((x) => x + 1);
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    } finally {
-      setHistLoading(false);
-    }
-  };
+  }, [open, proj?.id]);
 
   if (!open || !proj) return null;
 
-  const th = { textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap" };
-  const td = { padding: 10, borderBottom: "1px solid #eee" };
-  const btnTinyDanger = {
-    border: "1px solid #ef4444",
-    background: "#fff",
-    color: "#b91c1c",
-    borderRadius: 8,
-    padding: "4px 6px",
-    cursor: "pointer",
-    fontWeight: 800,
-    fontSize: 11,
-    lineHeight: 1
+  const th = {
+    textAlign: "left",
+    padding: 10,
+    borderBottom: "1px solid #e0e0e0",
+    whiteSpace: "nowrap",
   };
+  const td = { padding: 10, borderBottom: "1px solid #eee" };
 
   const tempsOuvertureMinutes = Number(proj?.tempsOuvertureMinutes || 0) || 0;
   const totalMsWithOpen = totalMsAll + tempsOuvertureMinutes * 60 * 1000;
@@ -409,7 +408,7 @@ function HistoriqueProjet({ proj, open, onClose }) {
           borderRadius: 12,
           padding: 16,
           boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-          fontSize: 13
+          fontSize: 13,
         }}
       >
         <div
@@ -439,19 +438,54 @@ function HistoriqueProjet({ proj, open, onClose }) {
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
         {/* Résumé rapide */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 12 }}>
-          <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Total compilé (incl. ouverture)</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtHM(totalMsWithOpen)}</div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2,1fr)",
+            gap: 12,
+            marginBottom: 12,
+          }}
+        >
+          <div
+            style={{
+              border: "1px solid #eee",
+              borderRadius: 10,
+              padding: 12,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#666" }}>
+              Total compilé (incl. ouverture)
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              {fmtHM(totalMsWithOpen)}
+            </div>
           </div>
-          <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Date d’ouverture</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtDate(proj?.createdAt)}</div>
+          <div
+            style={{
+              border: "1px solid #eee",
+              borderRadius: 10,
+              padding: 12,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#666" }}>
+              Date d’ouverture
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              {fmtDate(proj?.createdAt)}
+            </div>
           </div>
         </div>
 
         {/* Table agrégée (jour × employé) */}
-        <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>Historique — tout</div>
+        <div
+          style={{
+            fontWeight: 800,
+            margin: "4px 0 6px",
+            fontSize: 12,
+          }}
+        >
+          Historique — tout
+        </div>
         <table
           style={{
             width: "100%",
@@ -466,13 +500,12 @@ function HistoriqueProjet({ proj, open, onClose }) {
               <th style={th}>Jour</th>
               <th style={th}>Heures</th>
               <th style={th}>Employé</th>
-              <th style={th}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {histLoading && (
               <tr>
-                <td colSpan={4} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
                   Chargement…
                 </td>
               </tr>
@@ -483,20 +516,11 @@ function HistoriqueProjet({ proj, open, onClose }) {
                   <td style={td}>{fmtDate(r.date)}</td>
                   <td style={td}>{fmtHM(r.totalMs)}</td>
                   <td style={td}>{r.empName || "—"}</td>
-                  <td style={td}>
-                    <button
-                      onClick={() => onDeleteHistRow(r)}
-                      style={btnTinyDanger}
-                      title="Supprimer cette journée pour cet employé"
-                    >
-                      🗑
-                    </button>
-                  </td>
                 </tr>
               ))}
             {!histLoading && histRows.length === 0 && (
               <tr>
-                <td colSpan={4} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
                   Aucun historique.
                 </td>
               </tr>
@@ -508,21 +532,18 @@ function HistoriqueProjet({ proj, open, onClose }) {
   );
 }
 
-/* ---------------------- Lignes / Tableau (clic => matériel par callback) ---------------------- */
+/* ---------------------- Lignes / Tableau (clic = rien, seulement boutons) ---------------------- */
 function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
   const { card, totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
-  const { firstEverStart, totalAllMs } = useProjectLifetimeStats(proj.id, setError);
+  const { firstEverStart, totalAllMs } = useProjectLifetimeStats(
+    proj.id,
+    setError
+  );
 
-  const statutLabel = hasOpen
-    ? "Actif"
-    : card?.end
-    ? "Terminé"
-    : card?.start
-    ? "Inactif"
-    : "—";
+  const statutLabel = hasOpen ? "Actif" : "—";
   const statutStyle = {
     fontWeight: 800,
-    color: hasOpen ? "#166534" : card?.end ? "#444" : card?.start ? "#475569" : "#6b7280",
+    color: hasOpen ? "#166534" : "#6b7280",
   };
 
   const btn = (label, onClick, color = "#2563eb") => (
@@ -543,19 +564,18 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
     </button>
   );
 
-  const openMat = () => onOpenMaterial?.(proj.id);
-
   const tempsOuvertureMinutes = Number(proj.tempsOuvertureMinutes || 0) || 0;
   const totalAllMsWithOpen = totalAllMs + tempsOuvertureMinutes * 60 * 1000;
 
   return (
     <tr
-      onClick={openMat}
-      style={{ cursor: "pointer" }}
+      style={{ cursor: "default" }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{proj.nom || "—"}</td>
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        {proj.nom || "—"}
+      </td>
 
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
         <span
@@ -577,24 +597,24 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
-      {/* ⬇️ Date d’ouverture avec nouveau format */}
+      {/* Date d’ouverture */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
         {fmtDate(firstEverStart)}
       </td>
 
-      {/* ⬇️ Total compilé (tout le projet, incl. ouverture) */}
+      {/* Total compilé (tout le projet, incl. ouverture) */}
       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
         {fmtHM(totalAllMsWithOpen)}
       </td>
 
-      {/* ⬇️ Jour (total du jour) */}
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{fmtHM(totalMs)}</td>
+      {/* Jour (total du jour) */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        {fmtHM(totalMs)}
+      </td>
 
-      <td
-        style={{ padding: 10, borderBottom: "1px solid #eee" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {btn("Matériel", openMat, "#2563eb")}
+      {/* Actions : seulement les boutons, la ligne ne clic plus */}
+      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+        {btn("Matériel", () => onOpenMaterial(proj.id), "#2563eb")}
         {btn("Historique", () => onOpenHistory(proj), "#6b7280")}
       </td>
     </tr>
@@ -636,27 +656,67 @@ export default function PageProjets({ onOpenMaterial }) {
         >
           <thead>
             <tr style={{ background: "#f6f7f8" }}>
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid " +
-                " #e0e0e0" }}>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderBottom: "1px solid #e0e0e0",
+                }}
+              >
                 Nom
               </th>
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderBottom: "1px solid #e0e0e0",
+                }}
+              >
                 Situation
               </th>
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderBottom: "1px solid #e0e0e0",
+                }}
+              >
                 Statut
               </th>
-              {/* ⬇️ libellés mis à jour */}
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderBottom: "1px solid #e0e0e0",
+                }}
+              >
                 Date d’ouverture
               </th>
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderBottom: "1px solid #e0e0e0",
+                }}
+              >
                 Total compilé
               </th>
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderBottom: "1px solid #e0e0e0",
+                }}
+              >
                 Jour
               </th>
-              <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0" }}>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: 10,
+                  borderBottom: "1px solid #e0e0e0",
+                }}
+              >
                 Actions
               </th>
             </tr>
@@ -682,7 +742,11 @@ export default function PageProjets({ onOpenMaterial }) {
         </table>
       </div>
 
-      <HistoriqueProjet proj={projSel} open={openHist} onClose={closeHistory} />
+      <HistoriqueProjet
+        proj={projSel}
+        open={openHist}
+        onClose={closeHistory}
+      />
     </div>
   );
 }
