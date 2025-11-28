@@ -14,6 +14,7 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
+import AutresProjetsSection from "./AutresProjetsSection";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -255,7 +256,7 @@ function useProjectLifetimeStats(projId, setError) {
       (err) => setError?.(err?.message || String(err))
     );
 
-  return () => unsub();
+    return () => unsub();
   }, [projId, setError]);
 
   return { firstEverStart, totalAllMs };
@@ -742,11 +743,10 @@ export default function PageProjets({ onOpenMaterial }) {
         </table>
       </div>
 
-      <HistoriqueProjet
-        proj={projSel}
-        open={openHist}
-        onClose={closeHistory}
-      />
+      {/* --- Section "Autre projet" (nom seulement) --- */}
+      <AutresProjetsSection />
+
+      <HistoriqueProjet proj={projSel} open={openHist} onClose={closeHistory} />
     </div>
   );
 }

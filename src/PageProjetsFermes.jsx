@@ -2,6 +2,9 @@
 // Projets fermés + popup de fermeture complète (PDF)
 
 import React, { useEffect, useState } from "react";
+import html2pdf from "html2pdf.js";
+import { ref, uploadBytes } from "firebase/storage";
+import { httpsCallable } from "firebase/functions";
 import {
   collection,
   doc,
@@ -13,7 +16,7 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
-import { db } from "./firebaseConfig";
+import { db, storage, functions } from "./firebaseConfig";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 
 /* ---------------------- Utils ---------------------- */
@@ -109,7 +112,75 @@ async function computeProjectTotalMs(projId) {
   return total;
 }
 
-/* ---------------------- Impression facture seule ---------------------- */
+/* ---------------------- Génération + upload PDF ---------------------- */
+
+// Génère un PDF « propre » (comme l'impression) et l'upload dans Storage
+async function generateAndUploadInvoicePdf(projet) {
+  const el = document.getElementById("invoice-sheet");
+  if (!el) {
+    throw new Error("Invoice introuvable (#invoice-sheet)");
+  }
+
+  // On recrée une page blanche avec seulement la facture,
+  // comme dans printInvoiceOnly
+  const html = `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Facture Gyrotech</title>
+        <style>
+          body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 24px;
+            background: #ffffff;
+          }
+          h1, h2, h3, h4 {
+            margin: 0;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+          }
+          th, td {
+            padding: 6px;
+            border-bottom: 1px solid #e5e7eb;
+            font-size: 12px;
+          }
+          .no-print {
+            display: none !important;
+          }
+        </style>
+      </head>
+      <body>
+        ${el.outerHTML}
+      </body>
+    </html>
+  `;
+
+  const opt = {
+    margin: 10,
+    filename: `facture-${projet.id || "projet"}.pdf`,
+    image: { type: "jpeg", quality: 0.98 },
+    html2canvas: { scale: 2 },
+    jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+  };
+
+  // Générer le PDF en Blob à partir de ce HTML
+  const pdfBlob = await html2pdf().set(opt).from(html).output("blob");
+
+  // Upload dans Storage
+  const filePath = `factures/${projet.id}.pdf`;
+  const fileRef = ref(storage, filePath);
+
+  await uploadBytes(fileRef, pdfBlob, {
+    contentType: "application/pdf",
+  });
+
+  return filePath;
+}
+
+/* ---------------------- Impression facture seule (optionnel) ---------------------- */
 
 function printInvoiceOnly() {
   const el = document.getElementById("invoice-sheet");
@@ -203,8 +274,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
     // Charger la config facture depuis Firestore
     (async () => {
       try {
-        const ref = doc(db, "config", "facture");
-        const snap = await getDoc(ref);
+        const refCfg = doc(db, "config", "facture");
+        const snap = await getDoc(refCfg);
         if (snap.exists()) {
           const data = snap.data() || {};
           setFactureConfig((prev) => ({
@@ -280,14 +351,30 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
       setLoading(true);
       setError(null);
 
-      // 1) Imprimer seulement la facture
-      printInvoiceOnly();
+      // 1) Générer et uploader le PDF dans Storage
+      const pdfPath = await generateAndUploadInvoicePdf(projet);
+      console.log("Facture uploadée à :", pdfPath);
 
-      // 2) Marquer comme complètement fermé
+      // 2) Appeler la Cloud Function pour envoyer le courriel
+      const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
+
+      // 👉 Adresse de destination fixe pour toi
+      const toEmail = "jlabrie@styro.ca";
+
+      await sendInvoiceEmail({
+        projetId: projet.id,
+        toEmail,
+        subject: `Facture Gyrotech – ${projet.nom || projet.id || "Projet"}`,
+        text: "Bonjour, veuillez trouver ci-joint la facture de votre intervention.",
+        pdfPath,
+      });
+
+      // 3) Marquer le projet comme complètement fermé dans Firestore
       await updateDoc(doc(db, "projets", projet.id), {
         ouvert: false,
         fermeComplet: true,
         fermeCompletAt: serverTimestamp(),
+        factureEnvoyeeA: toEmail,
       });
 
       onClosed?.("full");
@@ -694,7 +781,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
                           borderBottom: "1px solid #f1f5f9",
                         }}
                       >
-                        Main-d&apos;œuvre – {projet.nom || "Travaux mécaniques"}
+                        Main-d&apos;œuvre –{" "}
+                        {projet.nom || "Travaux mécaniques"}
                       </td>
                       <td
                         style={{

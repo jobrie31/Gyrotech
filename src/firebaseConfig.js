@@ -3,6 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";   // 👈 NEW
 
 // ⚙️ Config de ton projet
 const firebaseConfig = {
@@ -20,10 +21,14 @@ const firebaseConfig = {
 // 🔥 Init
 const app = initializeApp(firebaseConfig);
 
+// 🔎 Firestore
 export const db = getFirestore(app);
 
 // ✅ Storage
 export const storage = getStorage(app, "gs://gyrotech-a3234.firebasestorage.app");
+
+// ☁️ Cloud Functions (pour sendInvoiceEmail)
+export const functions = getFunctions(app);
 
 // 👤 Auth (PERSISTENCE SEULEMENT, PAS de login auto anonyme)
 export const auth = getAuth(app);

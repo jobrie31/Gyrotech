@@ -27,6 +27,8 @@ import {
   useMarqueIdFromName,
 } from "./refData";
 import { CloseProjectWizard } from "./PageProjetsFermes";
+import AutresProjetsSection from "./AutresProjetsSection";
+
 
 /* ---------------------- Utils ---------------------- */
 // Format « 10 oct 2025 » / « 30 sept 2025 »
@@ -1761,6 +1763,9 @@ export default function PageListeProjet() {
           </tbody>
         </table>
       </div>
+
+      {/* --- Section "Autre projet" --- */}
+      <AutresProjetsSection />
 
       {/* Popups */}
       <PopupCreateProjet
