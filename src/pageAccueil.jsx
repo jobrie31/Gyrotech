@@ -1,1018 +1,704 @@
-// pageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
-// Nécessite: UIPro.jsx dans le même dossier src/
+import { useEffect, useMemo, useRef, useState } from "react";
+import View3D from "./components/View3D";
+import ExcelPasteModal from "./components/ExcelPasteModal";
+import Login from "./Login";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { loadVans, saveVans, loadMoulures, saveMoulures } from "./services/firestore";
+import "./app.css";
 
-import React, { useEffect, useMemo, useState } from "react";
-import ReactDOM from "react-dom"; // createPortal
-import {
-  collection,
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  addDoc,
-  onSnapshot,
-  serverTimestamp,
-  query,
-  where,
-  getDocs,
-  orderBy,
-} from "firebase/firestore";
-import { db } from "./firebaseConfig";
-import PageProjets from "./PageProjets";
-import PageListeProjet from "./PageListeProjet";
-import ProjectMaterielPanel from "./ProjectMaterielPanel";
-import jsPDF from "jspdf";
-import { styles, Card, Pill, Button, PageContainer, TopBar } from "./UIPro";
+const PALETTE = [
+  "#2563eb","#16a34a","#dc2626","#f59e0b","#9333ea","#0ea5e9","#ef4444","#10b981",
+  "#f97316","#a855f7","#14b8a6","#e11d48","#1f2937","#64748b","#059669","#d97706",
+  "#7c3aed","#16a085","#c0392b","#8e44ad","#2980b9","#2ecc71","#e67e22",
+  "#e84393","#00cec9","#6c5ce7","#fdcb6e","#e17055","#0984e3","#00b894","#2d3436",
+  "#ff7675","#74b9ff","#55efc4","#ffeaa7","#fab1a0","#81ecec","#b2bec3","#a29bfe",
+  "#6366f1","#84cc16","#06b6d4","#f43f5e","#fb923c","#10a37f","#d946ef","#22c55e"
+];
 
-/* ---------------------- Utils ---------------------- */
-function pad2(n) { return n.toString().padStart(2, "0"); }
-function dayKey(d) {
-  const x = d instanceof Date ? d : new Date(d);
-  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
-}
-function todayKey() { return dayKey(new Date()); }
+const DEFAULT_ITEM_WIDTH = 48;
+const DEFAULT_ITEM_QTY   = 1;
 
-function fmtHM(ms) {
-  const s = Math.max(0, Math.floor((ms || 0) / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return `${h}:${m.toString().padStart(2, "0")}`;
-}
-function getCurrentWeekDays() {
-  const now = new Date();
-  const day = now.getDay(); // 0=dim, 1=lun...
-  const sunday = new Date(now);
-  sunday.setHours(0, 0, 0, 0);
-  sunday.setDate(now.getDate() - day);
-  const days = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(sunday);
-    d.setDate(sunday.getDate() + i);
-    days.push({
-      date: d,
-      key: dayKey(d),
-      label: d.toLocaleDateString("fr-CA", {
-        weekday: "short",
-        month: "2-digit",
-        day: "2-digit",
-      }),
-    });
+/* ---------------- Facturation ---------------- */
+function calcBillingFromVansList(vansList) {
+  let total = 0, usedCount = 0;
+  const groups = new Map();
+  for (const v of (vansList||[])) {
+    const key = String(v.group || v.name || "").trim();
+    const costPerVan = Number(v.costPerVan||0);
+    const groupSize  = Number(v.groupSize || 1);
+    if (!key || groupSize <= 1) { total += costPerVan; usedCount += 1; }
+    else {
+      if (!groups.has(key)) groups.set(key, { used:0, costPerVan, groupSize });
+      groups.get(key).used++;
+    }
   }
-  return days;
-}
-
-/* ---------------------- Firestore helpers (Employés) ---------------------- */
-function dayRef(empId, key) { return doc(db, "employes", empId, "timecards", key); }
-function segCol(empId, key) { return collection(db, "employes", empId, "timecards", key, "segments"); }
-
-async function ensureDay(empId, key = todayKey()) {
-  const ref = dayRef(empId, key);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, {
-      start: null,
-      end: null,
-      onBreak: false,
-      breakStartMs: null,
-      breakTotalMs: 0,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+  for (const [,g] of groups) {
+    const packs = Math.ceil(g.used / g.groupSize);
+    total += packs * (g.costPerVan * g.groupSize);
+    usedCount += packs * g.groupSize;
   }
-  return ref;
-}
-async function getOpenEmpSegments(empId, key = todayKey()) {
-  const qOpen = query(segCol(empId, key), where("end", "==", null), orderBy("start", "desc"));
-  const snap = await getDocs(qOpen);
-  return snap.docs;
-}
-async function closeAllOpenSessions(empId, key = todayKey()) {
-  const docs = await getOpenEmpSegments(empId, key);
-  await Promise.all(
-    docs.map((d) =>
-      updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() })
-    )
-  );
-}
-async function openEmpSession(empId, key = todayKey()) {
-  const open = await getOpenEmpSegments(empId, key);
-  if (open.length > 0) return open[0].ref;
-  const added = await addDoc(segCol(empId, key), {
-    jobId: null,
-    jobName: null,
-    start: serverTimestamp(),
-    end: null,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  return added;
+  return { totalCost: total, usedVans: usedCount };
 }
 
-/* ---------------------- Firestore helpers (Projets) ---------------------- */
-function projDayRef(projId, key) { return doc(db, "projets", projId, "timecards", key); }
-function projSegCol(projId, key) { return collection(db, "projets", projId, "timecards", key, "segments"); }
-
-async function ensureProjDay(projId, key = todayKey()) {
-  const ref = projDayRef(projId, key);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, {
-      start: null,
-      end: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  }
-  return ref;
-}
-async function getOpenProjSegsForEmp(projId, empId, key = todayKey()) {
-  const qOpen = query(
-    projSegCol(projId, key),
-    where("end", "==", null),
-    where("empId", "==", empId)
-  );
-  const snap = await getDocs(qOpen);
-  return snap.docs;
-}
-async function openProjSessionForEmp(projId, empId, empName, key = todayKey()) {
-  const open = await getOpenProjSegsForEmp(projId, empId, key);
-  if (open.length > 0) return open[0].ref;
-  const added = await addDoc(projSegCol(projId, key), {
-    empId,
-    empName: empName ?? null,
-    start: serverTimestamp(),
-    end: null,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  return added;
-}
-async function closeProjSessionsForEmp(projId, empId, key = todayKey()) {
-  const docs = await getOpenProjSegsForEmp(projId, empId, key);
-  await Promise.all(
-    docs.map((d) => updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() }))
-  );
-}
-
-/* ---------------------- Firestore helpers (AUTRES PROJETS) ---------------------- */
-// 🔴 Punch DIRECT dans /autresProjets/... (aucun lien avec /projets)
-function otherDayRef(otherId, key) { return doc(db, "autresProjets", otherId, "timecards", key); }
-function otherSegCol(otherId, key) { return collection(db, "autresProjets", otherId, "timecards", key, "segments"); }
-
-async function ensureOtherDay(otherId, key = todayKey()) {
-  const ref = otherDayRef(otherId, key);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, {
-      start: null,
-      end: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  }
-  return ref;
-}
-async function getOpenOtherSegsForEmp(otherId, empId, key = todayKey()) {
-  const qOpen = query(
-    otherSegCol(otherId, key),
-    where("end", "==", null),
-    where("empId", "==", empId)
-  );
-  const snap = await getDocs(qOpen);
-  return snap.docs;
-}
-async function openOtherSessionForEmp(otherId, empId, empName, key = todayKey()) {
-  const open = await getOpenOtherSegsForEmp(otherId, empId, key);
-  if (open.length > 0) return open[0].ref;
-  const added = await addDoc(otherSegCol(otherId, key), {
-    empId,
-    empName: empName ?? null,
-    start: serverTimestamp(),
-    end: null,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  return added;
-}
-async function closeOtherSessionsForEmp(otherId, empId, key = todayKey()) {
-  const docs = await getOpenOtherSegsForEmp(otherId, empId, key);
-  await Promise.all(
-    docs.map((d) => updateDoc(d.ref, { end: serverTimestamp(), updatedAt: serverTimestamp() }))
-  );
-}
-
-/* ---------------------- Hooks ---------------------- */
-function useEmployes(setError) {
+export default function App(){
+  const [vans, setVans] = useState([]);
   const [rows, setRows] = useState([]);
-  useEffect(() => {
-    const c = collection(db, "employes");
-    const unsub = onSnapshot(
-      c,
-      (snap) => {
-        const list = [];
-        snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || ""));
-        setRows(list);
-      },
-      (err) => setError(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [setError]);
-  return rows;
-}
-/** Projets OUVERTS uniquement pour le punch (sélect principal) */
-function useOpenProjets(setError) {
-  const [rows, setRows] = useState([]);
-  useEffect(() => {
-    const c = collection(db, "projets");
-    const unsub = onSnapshot(
-      c,
-      (snap) => {
-        let list = [];
-        snap.forEach((d) => {
-          const data = d.data();
-          const isOpen = data?.ouvert !== false;
-          list.push({ id: d.id, ...data, ouvert: isOpen });
+  const [result, setResult] = useState(null);
+  const [loadingFb, setLoadingFb] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [signedIn, setSignedIn] = useState(false);
+  const [user, setUser] = useState(null);
+  const [showPaste, setShowPaste] = useState(false);
+
+  const [autosave, setAutosave] = useState({vans:"idle",rows:"idle",vansAt:null,rowsAt:null,vansErr:"",rowsErr:""});
+  const hydratingRef = useRef({vans:false,rows:false});
+  const saveTimersRef = useRef({vans:null,rows:null});
+
+  const sv   = (x)=>x??"";
+  const isNum= (k)=>["l","h","cost","maxW","wt","w"].includes(k);
+  const toNum= (x)=>(Number.isFinite(Number(x))?Number(x):0);
+
+  /* ------------- Fusion des lignes par ID ------------- */
+  function consolidateRows(list){
+    const byId = new Map();
+    for (const r of list||[]){
+      const id = String(r?.id??"").trim();
+      const L  = toNum(r?.l), H = toNum(r?.h), WT = toNum(r?.wt);
+      if (!id){ const key = `__noid__${Math.random()}`; byId.set(key,{id:"",l:L,h:H,wt:WT}); continue; }
+      if(!byId.has(id)){ byId.set(id,{id,l:L,h:H,wt:WT}); }
+      else{
+        const t = byId.get(id);
+        byId.set(id,{id,l:Math.max(t.l,L),h:t.h+H,wt:t.wt+WT});
+      }
+    }
+    return [...byId.values()].sort((a,b)=>String(a.id).localeCompare(String(b.id)) || b.l-a.l);
+  }
+
+  /* ------------- Couleurs ------------- */
+  const colorMap = useMemo(()=>{
+    const types = rows.map(r=>String(r.id??"")).filter(Boolean);
+    const uniq  = [...new Set(types)];
+    const map = {}; uniq.forEach((t,i)=>map[t]=PALETTE[i%PALETTE.length]);
+    return map;
+  },[rows]);
+
+  /* ------------- Infos de groupes ------------- */
+  const groupInfo = useMemo(()=>{
+    const map = new Map();
+    vans.forEach((v,idx)=>{
+      const key = String(v.group||v.name||"").trim();
+      if(!key) return;
+      if(!map.has(key)) map.set(key,{firstIdx:idx,count:1,idxs:[idx]});
+      else{ const g=map.get(key); g.count++; g.idxs.push(idx); }
+    });
+    return map;
+  },[vans]);
+
+  /* ------------- Autosave ------------- */
+  const scheduleSave = (kind)=>{
+    if(!signedIn||hydratingRef.current[kind]) return;
+    if(saveTimersRef.current[kind]) clearTimeout(saveTimersRef.current[kind]);
+    setAutosave(s=>({...s,[kind]:"saving",[`${kind}Err`]:""}));
+    saveTimersRef.current[kind]=setTimeout(async()=>{
+      try{
+        if(kind==="vans"){ await saveVans(vans); setAutosave(s=>({...s,vans:"saved",vansAt:new Date()})); }
+        else{ await saveMoulures(rows); setAutosave(s=>({...s,rows:"saved",rowsAt:new Date()})); }
+      }catch(e){ setAutosave(s=>({...s,[kind]:"error",[`${kind}Err`]:String(e?.message||e)})); }
+    },500);
+  };
+  const saveNow = async(kind)=>{
+    if(!signedIn) return;
+    try{
+      if(kind==="vans"){ await saveVans(vans); setAutosave(s=>({...s,vans:"saved",vansAt:new Date()})); }
+      else{ await saveMoulures(rows); setAutosave(s=>({...s,rows:"saved",rowsAt:new Date()})); }
+    }catch(e){ setAutosave(s=>({...s,[kind]:"error",[`${kind}Err`]:String(e?.message||e)})); }
+  };
+  const flushPendingSaves = async()=>{
+    for(const k of ["vans","rows"]){
+      if(saveTimersRef.current[k]){ clearTimeout(saveTimersRef.current[k]); saveTimersRef.current[k]=null; await saveNow(k); }
+    }
+  };
+
+  /* ------------- CRUD ------------- */
+  function updateVan(i,key,val){
+    setVans(prev=>{
+      if(key==="cost"){
+        const target=prev[i]; if(!target) return prev;
+        const groupKey=String(target.group||target.name||"").trim();
+        const newCost = val===""?"":val;
+        if(!groupKey){ return prev.map((x,idx)=>idx===i?{...x,cost:newCost}:x); }
+        return prev.map(vv=>{
+          const k=String(vv.group||vv.name||"").trim();
+          return (k===groupKey)?{...vv,cost:newCost}:vv;
         });
-        list = list.filter((p) => p.ouvert === true);
-        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || ""));
-        setRows(list);
-      },
-      (err) => setError(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [setError]);
-  return rows;
-}
-/** Autres projets (table auxiliaire) pour le bouton dédié */
-function useAutresProjets(setError) {
-  const [rows, setRows] = useState([]);
-  useEffect(() => {
-    const c = collection(db, "autresProjets"); // camelCase
-    const unsub = onSnapshot(
-      c,
-      (snap) => {
-        const items = [];
-        snap.forEach((d) => {
-          const it = d.data();
-          items.push({
-            id: d.id,
-            projId: it.projId || null,
-            nom: it.nom || "",
-            ordre: it.ordre ?? null,
-            note: it.note ?? null,
-            createdAt: it.createdAt ?? null,
-          });
-        });
-        // ordre > nom
-        items.sort((a, b) => {
-          if (a.ordre == null && b.ordre == null) {
-            return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+      }
+      return prev.map((x,idx)=>idx===i?{...x,[key]:isNum(key)?(val===""?"":val):val}:x);
+    });
+    scheduleSave("vans");
+  }
+  function addVan(){ setVans(v=>[...v,{name:"",group:"",l:"",w:"",h:"",cost:"",maxW:""}]); scheduleSave("vans"); }
+  function delVan(i){ setVans(v=>v.filter((_,idx)=>idx!==i)); scheduleSave("vans"); }
+
+  function updateRow(i,key,val){
+    setRows(r=>r.map((row,idx)=>idx===i?{...row,[key]:isNum(key)?(val===""?"":val):val}:row));
+    scheduleSave("rows");
+  }
+  function addRow(){ setRows(r=>[...r,{id:"",l:"",h:"",wt:""}]); scheduleSave("rows"); }
+  function delRow(i){ setRows(r=>r.filter((_,idx)=>idx!==i)); scheduleSave("rows"); }
+  function clearAllRows(){ setRows([]); try{localStorage.removeItem(LS_KEYS.rows);}catch{} scheduleSave("rows"); if(signedIn) saveMoulures([]).catch(()=>{}); }
+  function importRows(rowsImported){
+    setRows(prev=>{
+      const merged = [
+        ...(prev||[]).map(r=>({id:String(r.id||""),l:toNum(r.l),h:toNum(r.h),wt:toNum(r.wt)})),
+        ...(rowsImported||[]).map(r=>({id:String(r.id||""),l:toNum(r.l),h:toNum(r.h),wt:toNum(r.wt)})),
+      ];
+      const arr = consolidateRows(merged);
+      if(signedIn) saveMoulures(arr).catch(()=>{});
+      return arr;
+    });
+    scheduleSave("rows");
+  }
+
+  /* ------------- Init (auth + chargement par utilisateur) ------------- */
+  const LS_KEYS = {vans:"bloclego.vans",rows:"bloclego.rows"};
+  useEffect(()=>{
+    const auth = getAuth();
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      setSignedIn(!!u);
+
+      if (!u) { setVans([]); setRows([]); setResult(null); setLoadingFb(false); return; }
+
+      let lsV=null, lsR=null;
+      try{
+        lsV=JSON.parse(localStorage.getItem(LS_KEYS.vans)||"null");
+        lsR=JSON.parse(localStorage.getItem(LS_KEYS.rows)||"null");
+      }catch{}
+
+      if(Array.isArray(lsV)) setVans(lsV);
+      if(Array.isArray(lsR)) setRows(consolidateRows(lsR));
+
+      setLoadingFb(true); hydratingRef.current.vans=true; hydratingRef.current.rows=true;
+
+      try{
+        const [arrV,arrR]=await Promise.all([loadVans(), loadMoulures()]);
+        const convRows=(arrR||[]).map(r=>({id:String(r.id||""),l:toNum(r.l),h:toNum(r.h),wt:toNum(r.wt)}));
+
+        if(Array.isArray(arrV)&&arrV.length>0){ setVans(arrV); }
+        else if(Array.isArray(lsV)&&lsV.length>0){ saveVans(lsV).catch(()=>{}); }
+
+        if(Array.isArray(convRows)&&convRows.length>0){
+          setRows(prev=>(prev&&prev.length>0?prev:consolidateRows(convRows)));
+        } else if(Array.isArray(lsR)&&lsR.length>0){
+          saveMoulures(consolidateRows(lsR)).catch(()=>{});
+        }
+      } catch(e) {
+        setMsg("Erreur d’authentification ou de chargement initial.");
+      } finally {
+        hydratingRef.current.vans=false; hydratingRef.current.rows=false; setLoadingFb(false);
+      }
+    });
+
+    const handleBeforeUnload=()=>{ flushPendingSaves(); };
+    window.addEventListener("beforeunload",handleBeforeUnload);
+    return ()=>{ window.removeEventListener("beforeunload",handleBeforeUnload); unsub(); };
+  },[]);
+
+  useEffect(()=>{ try{localStorage.setItem(LS_KEYS.vans,JSON.stringify(vans));}catch{} },[vans]);
+  useEffect(()=>{ try{localStorage.setItem(LS_KEYS.rows,JSON.stringify(rows));}catch{} },[rows]);
+
+  /* ------------- Expansion (bundles -> items) ------------- */
+  function expandItems(){
+    const out=[];
+    for(const r of rows){
+      const qty = DEFAULT_ITEM_QTY;
+      const obj = { id:r.id??"", l:toNum(r.l), w:DEFAULT_ITEM_WIDTH, h:toNum(r.h), wt:toNum(r.wt) };
+      if(obj.l>0 && obj.w>0 && obj.h>0 && qty>0){ for(let i=0;i<qty;i++) out.push({...obj}); }
+    }
+    return out;
+  }
+
+  /* ------------- Types de vans ------------- */
+  function normalizeTypes(){
+    return vans.map((v,i)=>{
+      const l=toNum(v.l), w=toNum(v.w), h=toNum(v.h);
+      if(!(l>0&&w>0&&h>0)) return null;
+      const groupKey=String(v.group||v.name||"").trim();
+      const info=groupKey?groupInfo.get(groupKey):null;
+      const groupSize = info?.count ?? 1;
+      let groupCostTotal;
+      if(groupSize>1 && info){ const master=vans[info.firstIdx]||v; groupCostTotal=toNum(master.cost); }
+      else{ groupCostTotal=toNum(v.cost); }
+      const costPerVan = groupSize>1 ? (groupCostTotal/groupSize||0) : groupCostTotal;
+      return {
+        code:String((v.name||"").trim())||`van_${i+1}`,
+        name:String(v.name||""),
+        group:groupKey,
+        l,w,h,
+        costPerVan,
+        groupSize,
+        groupCostTotal,
+        maxW: toNum(v.maxW),
+        _index: i,
+      };
+    }).filter(Boolean);
+  }
+
+  /* ------------- Piles initiales ------------- */
+  function makeInitialPiles(items){
+    return items.map(it=>({
+      h: it.h,
+      len: it.l,
+      wt: Number(it.wt)||0,
+      items: [it]
+    })).sort((a,b)=> (b.len - a.len) || (b.h - a.h));
+  }
+
+  /* ------------- Simulation 2 voies ------------- */
+  function simulateFillOneVan(piles, type, requiredIdxs = null) {
+    const Hcap = type.h;
+    const Lcap = type.l;
+
+    const cols = [{ stacks: [], used: 0 },{ stacks: [], used: 0 }];
+    const chosen = new Set();
+    let weightUsed = 0;
+
+    function evaluatePlacement(col, pIdx) {
+      const p = piles[pIdx];
+      if (!p) return null;
+      if (p.h > Hcap) return null;
+      if (type.maxW > 0 && (weightUsed + (p.wt || 0)) > type.maxW) return null;
+
+      let bestStack = null;
+      for (let s = 0; s < col.stacks.length; s++) {
+        const st = col.stacks[s];
+        if (st.h + p.h <= Hcap) {
+          const newLen = Math.max(st.len, p.len);
+          const delta  = newLen - st.len;
+          const newUsed= col.used + delta;
+          if (newUsed <= Lcap) {
+            if (!bestStack || delta < bestStack.delta || (delta === bestStack.delta && newLen < bestStack.newLen)) {
+              bestStack = { sIdx: s, newLen, delta, newUsed };
+            }
           }
-          if (a.ordre == null) return 1;
-          if (b.ordre == null) return -1;
-          return a.ordre - b.ordre;
-        });
-        setRows(items);
-      },
-      (err) => setError?.(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [setError]);
-  return rows;
-}
+        }
+      }
+      if (bestStack) return { mode:"stack", ...bestStack };
 
-function useDay(empId, key, setError) {
-  const [card, setCard] = useState(null);
-  useEffect(() => {
-    if (!empId || !key) return;
-    const unsub = onSnapshot(
-      dayRef(empId, key),
-      (snap) => setCard(snap.exists() ? snap.data() : null),
-      (err) => setError(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [empId, key, setError]);
-  return card;
-}
-function useSessions(empId, key, setError) {
-  const [list, setList] = useState([]);
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((x) => x + 1), 15000);
-    return () => clearInterval(t);
-  }, []);
-  useEffect(() => {
-    if (!empId || !key) return;
-    const qSeg = query(segCol(empId, key), orderBy("start", "asc"));
-    const unsub = onSnapshot(
-      qSeg,
-      (snap) => {
-        const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
-        setList(rows);
-      },
-      (err) => setError(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [empId, key, setError, tick]);
-  return list;
-}
-function computeTotalMs(sessions) {
-  const now = Date.now();
-  return sessions.reduce((acc, s) => {
-    const st = s.start?.toDate ? s.start.toDate().getTime() : s.start ? new Date(s.start).getTime() : null;
-    const en = s.end?.toDate ? s.end.toDate().getTime() : s.end ? new Date(s.end).getTime() : null;
-    if (!st) return acc;
-    return acc + Math.max(0, (en ?? now) - st);
-  }, 0);
-}
-function usePresenceToday(empId, setError) {
-  const key = todayKey();
-  const card = useDay(empId, key, setError);
-  const sessions = useSessions(empId, key, setError);
-  const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
-  const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
-  return { key, card, sessions, totalMs, hasOpen };
-}
-
-/* ---------------------- Punch / Dépunch ---------------------- */
-async function doPunchWithProject(emp, proj) {
-  const key = todayKey();
-  if (proj && proj.ouvert === false) throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
-
-  await ensureDay(emp.id, key);
-  const empSegRef = await openEmpSession(emp.id, key);
-
-  if (proj) {
-    await ensureProjDay(proj.id, key);
-    await openProjSessionForEmp(proj.id, emp.id, emp.nom || null, key);
-
-    if (empSegRef) {
-      await updateDoc(empSegRef, { jobId: `proj:${proj.id}`, jobName: proj.nom || null, updatedAt: serverTimestamp() });
+      const newUsed = col.used + p.len;
+      if (newUsed <= Lcap) {
+        return { mode:"new", sIdx: col.stacks.length, newLen: p.len, delta: p.len, newUsed };
+      }
+      return null;
     }
-    const pdRef = projDayRef(proj.id, key);
-    const pdSnap = await getDoc(pdRef);
-    const pd = pdSnap.data() || {};
-    if (!pd.start) {
-      await updateDoc(pdRef, { start: serverTimestamp(), updatedAt: serverTimestamp() });
+
+    function applyPlacement(col, pIdx, placement) {
+      const p = piles[pIdx];
+      if (placement.mode === "stack") {
+        const st = col.stacks[placement.sIdx];
+        st.h  += p.h;
+        st.len = placement.newLen;
+        st.idxs.push(pIdx);
+        col.used = placement.newUsed;
+      } else {
+        col.stacks.push({ len: p.len, h: p.h, idxs: [pIdx] });
+        col.used = placement.newUsed;
+      }
+      weightUsed += (p.wt || 0);
+      chosen.add(pIdx);
     }
-    await updateDoc(doc(db, "employes", emp.id), {
-      lastProjectId: proj.id,
-      lastProjectName: proj.nom || null,
-      lastProjectUpdatedAt: serverTimestamp(),
-    });
-  }
-  const edRef = dayRef(emp.id, key);
-  const edSnap = await getDoc(edRef);
-  const ed = edSnap.data() || {};
-  if (!ed.start) {
-    await updateDoc(edRef, { start: serverTimestamp(), updatedAt: serverTimestamp() });
-  }
-}
 
-async function doPunchWithOther(emp, other /* {id, nom} */) {
-  const key = todayKey();
+    function placeIdx(pIdx) {
+      const candidates = [];
+      for (let c = 0; c < cols.length; c++) {
+        const placement = evaluatePlacement(cols[c], pIdx);
+        if (placement) candidates.push({ colIndex: c, placement });
+      }
+      if (!candidates.length) return false;
 
-  await ensureDay(emp.id, key);
-  const empSegRef = await openEmpSession(emp.id, key);
+      candidates.sort((a,b)=>{
+        const A=a.placement, B=b.placement;
+        if (A.delta!==B.delta) return A.delta-B.delta;
+        const aIsStack=A.mode==="stack"?0:1, bIsStack=B.mode==="stack"?0:1;
+        if (aIsStack!==bIsStack) return aIsStack-bIsStack;
+        if (A.newUsed!==B.newUsed) return A.newUsed-B.newUsed;
+        return a.colIndex-b.colIndex;
+      });
 
-  await ensureOtherDay(other.id, key);
-  await openOtherSessionForEmp(other.id, emp.id, emp.nom || null, key);
-
-  if (empSegRef) {
-    await updateDoc(empSegRef, { jobId: `other:${other.id}`, jobName: other.nom || null, updatedAt: serverTimestamp() });
-  }
-
-  const odRef = otherDayRef(other.id, key);
-  const odSnap = await getDoc(odRef);
-  const od = odSnap.data() || {};
-  if (!od.start) {
-    await updateDoc(odRef, { start: serverTimestamp(), updatedAt: serverTimestamp() });
-  }
-
-  await updateDoc(doc(db, "employes", emp.id), {
-    lastOtherId: other.id,
-    lastOtherName: other.nom || null,
-    lastOtherUpdatedAt: serverTimestamp(),
-  });
-}
-
-async function doDepunchWithProject(emp) {
-  const key = todayKey();
-  const openEmpSegs = await getOpenEmpSegments(emp.id, key);
-
-  // Fermer toutes les sessions liées (proj:* et other:*)
-  const jobTokens = Array.from(new Set(openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0)));
-
-  await Promise.all(
-    jobTokens.filter((t) => t.startsWith("proj:")).map(async (t) => {
-      const jid = t.slice(5);
-      await closeProjSessionsForEmp(jid, emp.id, key);
-    })
-  );
-  await Promise.all(
-    jobTokens.filter((t) => t.startsWith("other:")).map(async (t) => {
-      const oid = t.slice(6);
-      await closeOtherSessionsForEmp(oid, emp.id, key);
-    })
-  );
-
-  await closeAllOpenSessions(emp.id, key);
-  await updateDoc(dayRef(emp.id, key), { end: serverTimestamp(), updatedAt: serverTimestamp() });
-}
-
-async function createAndPunchNewProject(emp) {
-  const ref = await addDoc(collection(db, "projets"), {
-    nom: "Nouveau projet",
-    numeroUnite: null,
-    annee: null,
-    marque: null,
-    modele: null,
-    plaque: null,
-    odometre: null,
-    vin: null,
-    ouvert: true,
-    createdAt: serverTimestamp(),
-  });
-  const proj = { id: ref.id, nom: "Nouveau projet", ouvert: true };
-  await doPunchWithProject(emp, proj);
-  try { window.sessionStorage?.setItem("newProjectFromPunch", ref.id); } catch {}
-  window.location.hash = "#/projets";
-}
-
-/* ---------------------- UI de base ---------------------- */
-function ErrorBanner({ error, onClose }) {
-  if (!error) return null;
-  return (
-    <div style={{
-      background: "#fdecea", color: "#7f1d1d", border: "1px solid #f5c6cb",
-      padding: "10px 14px", borderRadius: 10, marginBottom: 12,
-      display: "flex", alignItems: "center", gap: 12, fontSize: 16,
-    }}>
-      <strong>Erreur :</strong>
-      <span style={{ flex: 1 }}>{error}</span>
-      <Button variant="danger" onClick={onClose}>OK</Button>
-    </div>
-  );
-}
-
-/* ------- Modale via Portal : MiniConfirm ------- */
-function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
-  const [step, setStep] = useState("confirm"); // confirm | choose
-  const [altNone, setAltNone] = useState(!initialProj);
-  const [altProjId, setAltProjId] = useState(initialProj?.id || "");
-
-  useEffect(() => {
-    if (open) {
-      setStep("confirm");
-      setAltNone(!initialProj);
-      setAltProjId(initialProj?.id || "");
+      const best=candidates[0];
+      applyPlacement(cols[best.colIndex], pIdx, best.placement);
+      return true;
     }
-  }, [open, initialProj?.id, initialProj]);
 
-  if (!open) return null;
+    const mustList = Array.isArray(requiredIdxs)
+      ? [...requiredIdxs]
+      : (requiredIdxs == null ? [] : [requiredIdxs]);
+    mustList.sort((i,j)=>(piles[j]?.len||0)-(piles[i]?.len||0) || (piles[j]?.h||0)-(piles[i]?.h||0));
+    for (const idx of mustList) {
+      if (!placeIdx(idx)) return { chosen: [], colUsed: [0, 0], weightUsed: 0, plan: cols };
+    }
 
-  const confirmText = initialProj
-    ? `Continuer projet : ${initialProj.nom || "(sans nom)"} ?`
-    : "Continuer sans projet ?";
+    const others = [...piles.keys()].filter(i=>!chosen.has(i))
+      .sort((i,j)=> (piles[j].len-piles[i].len) || (piles[j].h-piles[i].h));
+    for (const i of others) placeIdx(i);
 
-  const modal = (
-    <div role="dialog" aria-modal="true" onClick={onCancel} style={styles.modalBackdrop}>
-      <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-          <div style={{ fontWeight: 800, fontSize: 22 }}>Confirmation du punch</div>
-          <button onClick={onCancel} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}>×</button>
-        </div>
+    return { chosen: [...chosen], colUsed: cols.map(c=>c.used), weightUsed, plan: cols };
+  }
 
-        {step === "confirm" ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ flex: 1, fontSize: 18 }}>{confirmText}</div>
-            <Button variant="success" onClick={() => onConfirm(initialProj || null)}>Oui</Button>
-            <Button variant="danger" onClick={() => setStep("choose")}>Non</Button>
-          </div>
-        ) : (
-          <div>
-            <div style={{ marginBottom: 14, fontSize: 18, fontWeight: 700 }}>Choisir un projet</div>
-            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-              <select
-                value={altNone ? "" : altProjId}
-                disabled={altNone}
-                onChange={(e) => setAltProjId(e.target.value)}
-                aria-label="Sélectionner un projet"
-                style={{ ...styles.input, minWidth: 320, height: 48 }}
-              >
-                <option value="" disabled>— Choisir un projet —</option>
-                {projets.map((p) => (
-                  <option key={p.id} value={p.id}>{p.nom || "(sans nom)"}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => setAltNone((v) => !v)}
-                style={{
-                  height: 48, padding: "0 16px", borderRadius: 9999,
-                  border: altNone ? "2px solid #0ea5e9" : "2px solid #cbd5e1",
-                  background: altNone ? "#e0f2fe" : "#f8fafc",
-                  color: altNone ? "#0c4a6e" : "#334155",
-                  fontWeight: 800, fontSize: 16, cursor: "pointer",
-                  boxShadow: altNone ? "0 6px 16px rgba(14,165,233,0.25)" : "0 6px 16px rgba(0,0,0,0.06)",
-                }}
-                title="Basculer aucun projet"
-              >
-                Aucun projet spécifique
-              </button>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 20 }}>
-              <Button variant="neutral" onClick={onCancel}>Annuler</Button>
-              <Button
-                variant="primary"
-                onClick={() => onConfirm(altNone ? null : (projets.find((p) => p.id === altProjId) || null))}
-                style={{ opacity: !altNone && !altProjId ? 0.6 : 1 }}
-                disabled={!altNone && !altProjId}
-              >
-                Confirmer le punch
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  /* ------------- Mise en plan 3D ------------- */
+  function enforceTallestAtBottom(placed,laneWidth){
+    const groups=new Map();
+    for(const b of placed){
+      const ySlot=b.y<laneWidth?0:1;
+      const key=`${b.x}|${ySlot}`;
+      if(!groups.has(key)) groups.set(key,[]);
+      groups.get(key).push(b);
+    }
+    const out=[];
+    for(const [,list] of groups){
+      list.sort((a,b)=>(b.l-a.l)||(b.h-a.h)||((b.l*b.w*b.h)-(a.l*a.w*a.h)));
+      let z=0; for(const b of list){ out.push({...b,z}); z+=b.h; }
+    }
+    if(out.length!==placed.length){
+      return placed.slice().sort((a,b)=>(a.y-b.y)||(a.x-b.x)||(b.l-a.l)||(b.h-a.h)).map(b=>({...b}));
+    }
+    return out;
+  }
 
-  return ReactDOM.createPortal(modal, document.body);
-}
+  function buildVanAndRemove(piles,type,simChosenIdxs,plan){
+    const L=type.l, W=type.w, H=type.h;
+    const laneWidth=DEFAULT_ITEM_WIDTH;
+    let placed=[]; let curW=0;
+    const cols=plan||[{stacks:[],used:0},{stacks:[],used:0}];
+    const usedX=[0,0];
 
-/* ------- Modale via Portal : AutresProjetsModal ------- */
-function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
-  if (!open) return null;
+    for(let c=0;c<cols.length;c++){
+      const yBase = c===0 ? 0 : laneWidth;
+      for(const st of cols[c].stacks){
+        const xBase=usedX[c];
+        let items=[];
+        for(const pIdx of st.idxs){
+          const p=piles[pIdx]; if(!p) continue;
+          items.push(...p.items); curW += (Number(p.wt)||0);
+        }
+        items.sort((a,b)=>(b.h-a.h)||(b.l-a.l)||((b.l*b.w*b.h)-(a.l*a.w*a.h)));
+        let zCursor=0;
+        for(const it of items){
+          placed.push({ type:String(it.id||""), l:it.l, w:laneWidth, h:it.h, x:xBase, y:yBase, z:zCursor, wt:Number(it.wt)||0 });
+          zCursor += it.h;
+        }
+        usedX[c] += st.len;
+      }
+    }
 
-  const modal = (
-    <div role="dialog" aria-modal="true" onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)",
-        backdropFilter: "blur(3px)", display: "flex", alignItems: "center",
-        justifyContent: "center", zIndex: 9999
-      }}>
-      <div onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff", width: "min(720px, 95vw)", maxHeight: "90vh",
-          overflow: "auto", borderRadius: 12, padding: 16,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.2)", fontSize: 14
-        }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <h3 style={{ margin: 0 }}>Autres projets</h3>
-          <button onClick={onClose} style={{ border: "1px solid #ddd", background: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>
-            Fermer
-          </button>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 8 }}>
-          <div style={{ fontWeight: 700, color: "#64748b" }}>Nom</div>
-          <div style={{ fontWeight: 700, color: "#64748b" }}>Action</div>
+    placed = enforceTallestAtBottom(placed,laneWidth);
 
-          {autresProjets.map((ap) => (
-            <React.Fragment key={ap.id}>
-              <div style={{ padding: "6px 0" }}>{ap.nom}</div>
-              <div>
-                <Button variant="primary" onClick={() => onChoose(ap)} style={{ width: "100%" }}>
-                  Choisir
-                </Button>
-              </div>
-            </React.Fragment>
-          ))}
-          {autresProjets.length === 0 && (
-            <div style={{ gridColumn: "1 / -1", color: "#64748b" }}>
-              Aucun autre projet.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+    const toRemove=new Set(simChosenIdxs); const remaining=[];
+    for(let i=0;i<piles.length;i++){ if(!toRemove.has(i)) remaining.push(piles[i]); }
 
-  return ReactDOM.createPortal(modal, document.body);
-}
+    const vanObj = {
+      code:type.code, name:type.name, group:type.group,
+      l:L,w:W,h:H, placed,
+      weightUsed:curW, maxWeight:type.maxW,
+      costPerVan:type.costPerVan, groupSize:type.groupSize, groupCostTotal:type.groupCostTotal,
+      _index: type._index
+    };
+    return {vanObj,remaining};
+  }
 
-/* ---------- Composant interne : Horloge ---------- */
-function ClockBadge({ now }) {
-  const heure = now.toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-  const dateStr = now.toLocaleDateString("fr-CA", { weekday: "long", year: "numeric", month: "long", day: "2-digit" });
-  return (
-    <div style={{
-      background: "rgba(255,255,255,0.9)", backdropFilter: "blur(4px)", border: "1px solid #e5e7eb",
-      borderRadius: 14, padding: "10px 14px", boxShadow: "0 10px 24px rgba(0,0,0,0.15)",
-      fontFamily:
-        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-      color: "#111827", textAlign: "center", minWidth: 220, lineHeight: 1.15,
-    }}>
-      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 0.3, textTransform: "capitalize", marginBottom: 2 }}>
-        {dateStr}
-      </div>
-      <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 1 }}>
-        {heure}
-      </div>
-    </div>
-  );
-}
+  /* ------------- Coût marginal ------------- */
+  function incrementalBilledCost(vansBuilt, candidateType){
+    const groupKey=String(candidateType.group||candidateType.name||"").trim();
+    const groupSize=candidateType.groupSize||1;
+    const costPerVan=candidateType.costPerVan||0;
+    if(groupSize<=1 || !groupKey) return costPerVan;
+    let used=0;
+    for(const v of vansBuilt){ const k=String(v.group||v.name||"").trim(); if(k===groupKey) used++; }
+    const packsBefore=Math.ceil(used/groupSize);
+    const packsAfter =Math.ceil((used+1)/groupSize);
+    const deltaPacks=packsAfter-packsBefore;
+    return deltaPacks * groupSize * costPerVan;
+  }
 
-/* ---------------------- Lignes / Tableau ---------------------- */
-function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets }) {
-  const { sessions, totalMs, hasOpen } = usePresenceToday(emp.id, setError);
-  const present = hasOpen;
+  /* ================= Solveur ================= */
+  function solveOptimalVans(basePiles, types){
+    if(!basePiles.length || !types.length){
+      return { stats:{ usedVans:0,totalCost:0,unplacedCount:basePiles.length }, vans:[] };
+    }
 
-  const [pending, setPending] = useState(false);
-  const [projSel, setProjSel] = useState(emp?.lastProjectId || "");
-  const [newProjRequested, setNewProjRequested] = useState(false);
+    const membersByGroup = new Map();
+    for (const t of types){
+      const g = String(t.group||"").trim();
+      if (!g) continue;
+      if (!membersByGroup.has(g)) membersByGroup.set(g, []);
+      membersByGroup.get(g).push(t);
+    }
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmProj, setConfirmProj] = useState(null);
+    const maxL = Math.max(...types.map(t=>t.l));
+    const Hmax = Math.max(...types.map(t=>t.h));
+    const minCostPerVan = Math.min(...types.map(t=>t.costPerVan || Infinity));
 
-  const [autresOpen, setAutresOpen] = useState(false);
+    let bestCost = Infinity;
+    let bestVans = null;
 
-  const hasOpenNoProject = useMemo(() => sessions.some((s) => !s.end && !s.jobId), [sessions]);
-  const [rowBg, setRowBg] = useState(() => styles.row?.background || "white");
-  useEffect(() => { setProjSel(emp?.lastProjectId || ""); }, [emp?.lastProjectId]);
-  useEffect(() => { if (projSel && !projets.some((p) => p.id === projSel)) setProjSel(""); }, [projets, projSel]);
+    function lowerBound(piles, costSoFar){
+      if(!piles.length) return costSoFar;
+      let totalArea = 0;
+      for (const p of piles) totalArea += (p.len * p.h);
+      const vansByArea = Math.max(1, Math.ceil(totalArea / (2 * maxL * Hmax)));
+      return costSoFar + vansByArea * minCostPerVan;
+    }
 
-  const statusCell = present ? <Pill variant="success">Actif</Pill> : <Pill variant="neutral">Inactif</Pill>;
+    function dfs(piles, vansBuilt, costSoFar){
+      if(!piles.length){
+        if(costSoFar < bestCost){ bestCost = costSoFar; bestVans = vansBuilt; }
+        return;
+      }
+      if(costSoFar >= bestCost) return;
+      if(lowerBound(piles, costSoFar) >= bestCost) return;
 
-  const handlePunchClick = async (e) => {
-    e.stopPropagation();
-    if (present) { togglePunch(); return; }
+      let reqIdx=0;
+      for(let i=1;i<piles.length;i++){
+        if(piles[i].len>piles[reqIdx].len || (piles[i].len===piles[reqIdx].len && piles[i].h>piles[reqIdx].h)) reqIdx=i;
+      }
 
-    if (newProjRequested) {
-      const ok = window.confirm(`Créer un nouveau projet et commencer le temps tout de suite pour ${emp.nom || "cet employé"} ?`);
-      if (!ok) return;
-      try { setPending(true); await createAndPunchNewProject(emp); setNewProjRequested(false); }
-      catch (err) { console.error(err); setError?.(err?.message || String(err)); }
-      finally { setPending(false); }
+      const candidates=[];
+      for(const t of types){
+        if(piles[reqIdx].h>t.h) continue;
+
+        if ((t.groupSize||1) <= 1){
+          const sim1 = simulateFillOneVan(piles, t, reqIdx);
+          if(!sim1.chosen.length) continue;
+          if(t.maxW>0 && (sim1.weightUsed||0)<=0) continue;
+
+          const delta1 = incrementalBilledCost(vansBuilt, t);
+          const lenPacked1 = (sim1.colUsed?.[0]||0) + (sim1.colUsed?.[1]||0);
+
+          candidates.push({ typeSeq:[t], delta: delta1, lenPacked: lenPacked1, simList:[sim1] });
+          continue;
+        }
+
+        const gKey = String(t.group||"").trim();
+        const members = (gKey && membersByGroup.get(gKey)) ? membersByGroup.get(gKey) : [];
+        if ((t.groupSize||1) === 2 && members.length >= 2){
+          const mates = members.filter(m => m._index !== t._index);
+          const deltaPack = incrementalBilledCost(vansBuilt, t);
+
+          for (const m of mates){
+            const sim1 = simulateFillOneVan(piles, t, reqIdx);
+            if(sim1.chosen.length){
+              const built1 = buildVanAndRemove(piles, t, sim1.chosen, sim1.plan);
+              const sim2   = simulateFillOneVan(built1.remaining, m, null);
+              if(sim2.chosen.length){
+                const len1 = (sim1.colUsed?.[0]||0) + (sim1.colUsed?.[1]||0);
+                const len2 = (sim2.colUsed?.[0]||0) + (sim2.colUsed?.[1]||0);
+                candidates.push({ typeSeq:[t, m], delta: deltaPack, lenPacked: len1 + len2, simList:[sim1, sim2] });
+              }
+            }
+            const simA = simulateFillOneVan(piles, m, reqIdx);
+            if(simA.chosen.length){
+              const builtA = buildVanAndRemove(piles, m, simA.chosen, simA.plan);
+              const simB   = simulateFillOneVan(builtA.remaining, t, null);
+              if(simB.chosen.length){
+                const lenA = (simA.colUsed?.[0]||0) + (simA.colUsed?.[1]||0);
+                const lenB = (simB.colUsed?.[0]||0) + (simB.colUsed?.[1]||0);
+                candidates.push({ typeSeq:[m, t], delta: deltaPack, lenPacked: lenA + lenB, simList:[simA, simB] });
+              }
+            }
+          }
+        }
+      }
+
+      if(!candidates.length) return;
+
+      candidates.sort((a,b)=>{
+        if(a.delta!==b.delta) return a.delta-b.delta;
+        if(a.lenPacked!==b.lenPacked) return b.lenPacked-a.lenPacked;
+        return (a.typeSeq?.[0]?.costPerVan||0) - (b.typeSeq?.[0]?.costPerVan||0);
+      });
+
+      for(const cand of candidates){
+        const nextCost = costSoFar + cand.delta;
+        if(nextCost >= bestCost) continue;
+
+        let tmpPiles = JSON.parse(JSON.stringify(piles));
+        let tmpVans  = [...vansBuilt];
+
+        for (let k=0; k<cand.simList.length; k++){
+          const sim = cand.simList[k];
+          const t   = cand.typeSeq[k];
+          const built = buildVanAndRemove(tmpPiles, t, sim.chosen, sim.plan);
+          tmpPiles = built.remaining;
+          tmpVans.push(built.vanObj);
+        }
+
+        dfs(tmpPiles, tmpVans, nextCost);
+      }
+    }
+
+    dfs(JSON.parse(JSON.stringify(basePiles)), [], 0);
+
+    if(!bestVans){ return { stats:{ usedVans:0,totalCost:0,unplacedCount:basePiles.length }, vans:[] }; }
+
+    const billing = calcBillingFromVansList(bestVans);
+    return { stats:{ usedVans: billing.usedVans, totalCost: billing.totalCost, unplacedCount: 0 }, vans: bestVans };
+  }
+
+  /* ------------- RUN ------------- */
+  function run(){
+    const items=expandItems();
+    const types=normalizeTypes();
+    if(!items.length || !types.length){ setResult(null); return; }
+
+    const basePiles = makeInitialPiles(items);
+    const Lmax=Math.max(...types.map(t=>t.l));
+    const infeasible=basePiles.filter(p=>p.len>Lmax);
+    if(infeasible.length){
+      setResult({stats:{usedVans:0,totalCost:0,unplacedCount:infeasible.length},vans:[]});
       return;
     }
 
-    const chosen = projSel ? projets.find((x) => x.id === projSel) : null;
-    setConfirmProj(chosen || null);
-    setConfirmOpen(true);
-  };
-
-  const handleConfirm = async (projOrNull) => {
-    setConfirmOpen(false);
-    try { setPending(true); setProjSel(projOrNull?.id || ""); await doPunchWithProject(emp, projOrNull || null); }
-    catch (e) { console.error(e); setError?.(e?.message || String(e)); }
-    finally { setPending(false); }
-  };
-
-  const togglePunch = async () => {
-    try {
-      setPending(true);
-      if (present) {
-        await doDepunchWithProject(emp);
-      } else {
-        const chosenProj = projSel ? projets.find((x) => x.id === projSel) : null;
-        await doPunchWithProject(emp, chosenProj || null);
-      }
-    } catch (e) {
-      console.error(e);
-      setError?.(e?.message || String(e));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const handleMouseEnter = () => { if (!hasOpenNoProject) setRowBg(styles.rowHover?.background || "#f9fafb"); };
-  const handleMouseLeave = () => { if (!hasOpenNoProject) setRowBg(styles.row?.background || "white"); };
-
-  return (
-    <>
-      <tr
-        onClick={() => onOpenHistory(emp)}
-        style={{ ...styles.row, background: hasOpenNoProject ? "#fef08a" : rowBg, transition: "background 0.25s ease-out" }}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        <td style={styles.td}>{emp.nom || "—"}</td>
-        <td style={styles.td}>{statusCell}</td>
-        <td style={styles.td}>{fmtHM(totalMs)}</td>
-
-        {/* Colonne Projet */}
-        <td style={{ ...styles.td, width: "100%" }} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <select
-              value={projSel}
-              onChange={(e) => { setProjSel(e.target.value); setNewProjRequested(false); }}
-              aria-label="Projet pour ce punch"
-              style={{
-                ...styles.input, flex: "1 1 320px", minWidth: 260, height: 44, fontSize: 16,
-                cursor: present ? "not-allowed" : "pointer", opacity: present ? 0.7 : 1,
-              }}
-              disabled={present}
-            >
-              <option value="">— Projet —</option>
-              {projets.map((p) => (
-                <option key={p.id} value={p.id}>{p.nom || "(sans nom)"}</option>
-              ))}
-            </select>
-
-            {/* Bouton Autres projets (ouvre la modale dédiée) */}
-            <Button
-              type="button"
-              variant="neutral"
-              onClick={() => setAutresOpen(true)}
-              disabled={present}
-              title="Choisir un projet depuis la liste « Autres projets »"
-              aria-label="Autres projets"
-              style={{ height: 44, padding: "0 12px", fontWeight: 800 }}
-            >
-              Autres projets
-            </Button>
-
-            {/* Bouton Nouveau projet */}
-            <Button
-              type="button"
-              variant={newProjRequested ? "primary" : "neutral"}
-              onClick={() => { setNewProjRequested((v) => !v); setProjSel(""); }}
-              disabled={present}
-              title="Créer un nouveau projet à partir de ce punch"
-              aria-label="Nouveau projet"
-              style={{ height: 44, padding: "0 12px", fontWeight: 800 }}
-            >
-              Nouveau projet
-            </Button>
-
-            <Button
-              type="button"
-              onClick={handlePunchClick}
-              disabled={pending}
-              aria-label={present ? "Dépuncher" : "Puncher"}
-              variant={present ? "danger" : "success"}
-              style={{ width: 220, height: 52, fontSize: 18, fontWeight: 800 }}
-            >
-              {present ? "Dépunch" : "Punch"}
-            </Button>
-          </div>
-        </td>
-      </tr>
-
-      {/* Modales via Portal */}
-      <MiniConfirm
-        open={confirmOpen}
-        initialProj={confirmProj}
-        projets={projets}
-        onConfirm={handleConfirm}
-        onCancel={() => setConfirmOpen(false)}
-      />
-
-      <AutresProjetsModal
-        open={autresOpen}
-        autresProjets={autresProjets}
-        onChoose={async (ap) => {
-          try {
-            if (ap.projId) {
-              // 🔗 Si ce "autre projet" est lié à un vrai projet,
-              // on utilise la même logique que le punch normal de projet
-              const proj = {
-                id: ap.projId,
-                nom: ap.nom || "(sans nom)",
-                ouvert: true, // on part du principe qu'il est ouvert
-              };
-              await doPunchWithProject(emp, proj);
-            } else {
-              // 🧩 Compatibilité avec les anciens "autresProjets" sans projId :
-              await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
-            }
-          } catch (e) {
-            alert(e?.message || String(e));
-          } finally {
-            setAutresOpen(false);
-          }
-        }}
-        onClose={() => setAutresOpen(false)}
-      />
-    </>
-  );
-}
-
-/* ---------------------- Routing helper ---------------------- */
-function getRouteFromHash() {
-  const h = window.location.hash || "";
-  const m = h.match(/^#\/(.+)/);
-  return m ? m[1] : "accueil";
-}
-
-/* ---------------------- Page ---------------------- */
-export default function PageAccueil() {
-  const [error, setError] = useState(null);
-  const employes = useEmployes(setError);
-  const projetsOuverts = useOpenProjets(setError);
-  const autresProjets = useAutresProjets(setError); // 🔗 liste « autres projets »
-
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  const [openHist, setOpenHist] = useState(false);
-  const [empSel, setEmpSel] = useState(null);
-  const openHistory = (emp) => { setEmpSel(emp); setOpenHist(true); };
-  const closeHistory = () => { setOpenHist(false); setEmpSel(null); };
-
-  const [route, setRoute] = useState(getRouteFromHash());
-  useEffect(() => {
-    const onHash = () => setRoute(getRouteFromHash());
-    window.addEventListener("hashchange", onHash);
-    onHash();
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
-  const [materialProjId, setMaterialProjId] = useState(null);
-
-  const handleExportHoraire = async () => {
-    try {
-      const weekDays = getCurrentWeekDays();
-      if (!employes || employes.length === 0) {
-        alert("Aucun employé pour générer l’horaire.");
-        return;
-      }
-      const pdf = new jsPDF({ orientation: "landscape" });
-      const semaineTitre = `Semaine du ${weekDays[0].date.toLocaleDateString("fr-CA", { day: "2-digit", month: "2-digit", year: "numeric" })} au ${weekDays[6].date.toLocaleDateString("fr-CA", { day: "2-digit", month: "2-digit", year: "numeric" })}`;
-      pdf.setFontSize(16); pdf.text("Horaire - Temps des travailleurs", 14, 16);
-      pdf.setFontSize(11); pdf.text(semaineTitre, 14, 23);
-      pdf.setFontSize(9);
-      const startYBase = 30;
-      const colX = [14, 70, 100, 130, 160, 190, 220, 250, 280];
-      pdf.text("Employé", colX[0], startYBase);
-      weekDays.forEach((d, i) => pdf.text(d.label, colX[i + 1], startYBase));
-      pdf.text("Total semaine", colX[8], startYBase);
-      let y = startYBase + 6;
-
-      for (const emp of employes) {
-        if (!emp?.id) continue;
-        if (y > 190) {
-          pdf.addPage("landscape");
-          pdf.setFontSize(16); pdf.text("Horaire - Temps des travailleurs (suite)", 14, 16);
-          pdf.setFontSize(11); pdf.text(semaineTitre, 14, 23);
-          pdf.setFontSize(9);
-          pdf.text("Employé", colX[0], startYBase);
-          weekDays.forEach((d, i) => pdf.text(d.label, colX[i + 1], startYBase));
-          pdf.text("Total semaine", colX[8], startYBase);
-          y = startYBase + 6;
-        }
-        pdf.text(emp.nom || "—", colX[0], y);
-        let totalWeekMs = 0;
-        for (let i = 0; i < weekDays.length; i++) {
-          const dayInfo = weekDays[i];
-          const key = dayInfo.key;
-          const qSeg = query(segCol(emp.id, key), orderBy("start", "asc"));
-          const snap = await getDocs(qSeg);
-          const sessions = snap.docs.map((d) => d.data());
-          const totalMs = computeTotalMs(sessions);
-          totalWeekMs += totalMs;
-          const hm = fmtHM(totalMs);
-          pdf.text(hm, colX[i + 1], y);
-        }
-        const hmWeek = fmtHM(totalWeekMs);
-        pdf.text(hmWeek, colX[8], y);
-        y += 6;
-      }
-      pdf.save("horaire-semaine.pdf");
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    }
-  };
-
-  if (route === "projets") {
-    return (
-      <PageContainer>
-        <TopBar
-          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Projets</h1>}
-          right={<ClockBadge now={now} />}
-        />
-        <Card>
-          <PageListeProjet />
-        </Card>
-      </PageContainer>
-    );
+    const finalSolution = solveOptimalVans(basePiles, types);
+    setResult(finalSolution);
   }
 
+  /* ------------- Billing live ------------- */
+  const billing=useMemo(()=>result?calcBillingFromVansList(result.vans||[]):{totalCost:0,usedVans:0},[result]);
+
+  /* ------------- UI ------------- */
   return (
-    <>
-      <PageContainer>
-        <TopBar
-          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Styro</h1>}
-          right={<ClockBadge now={now} />}
-        />
+    <div className="app-container">
+      <h1 className="page-title">🧱 Bloc-LEGO – Chargement optimisé</h1>
 
-        <ErrorBanner error={error} onClose={() => setError(null)} />
+      {!signedIn && <Login user={user} onSignedIn={()=>{}} />}
 
-        {/* ===== Tableau EMPLOYÉS ===== */}
-        <Card
-          title="👥 Travailleurs"
-          right={
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <Button variant="neutral" onClick={handleExportHoraire} aria-label="Voir l’horaire de la semaine (PDF)">
-                Horaire (PDF)
-              </Button>
-              <AddWorkerInline onError={setError} />
+      {signedIn && (
+        <>
+          {/* VANS */}
+          <section className="section-center mt-10">
+            <div className="card card-vans">
+              <div className="card-head">
+                <h2 className="card-title">Vans</h2>
+                <div className="flex-1" />
+                <button onClick={addVan} disabled={!signedIn} className="btn-sm">+ Ajouter une van</button>
+              </div>
+
+              {vans.length===0 && (<div className="hint">Aucune van. Ajoute une ligne pour commencer.</div>)}
+
+              <div className="table-wrap">
+                <table className="tbl tbl-vans">
+                  <thead>
+                    <tr>
+                      <th>Nom</th><th>Groupe (optionnel)</th><th>Longueur X</th><th>Largeur Y</th><th>Hauteur Z</th><th>Coût (total groupe)</th><th>Poids max</th><th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vans.map((v,i)=>{
+                      const key=String(v.group||v.name||"").trim();
+                      const info=key?groupInfo.get(key):null;
+                      const isGroup=info&&info.count>1;
+                      const isMaster=!isGroup || (info && info.firstIdx===i);
+                      const costDisabled = !signedIn || !isMaster;
+                      return (
+                        <tr key={i}>
+                          <td><input value={sv(v.name)} onChange={e=>updateVan(i,"name",e.target.value)} onBlur={()=>saveNow("vans")} disabled={!signedIn} className="td-in"/></td>
+                          <td>
+                            <input
+                              value={sv(v.group)}
+                              onChange={e=>updateVan(i,"group",e.target.value)}
+                              onBlur={()=>saveNow("vans")}
+                              disabled={!signedIn}
+                              className="td-in"
+                              placeholder=""
+                            />
+                          </td>
+                          <td><input type="number" value={sv(v.l)} onChange={e=>updateVan(i,"l",e.target.value)} onBlur={()=>saveNow("vans")} disabled={!signedIn} className="td-in"/></td>
+                          <td><input type="number" value={sv(v.w)} onChange={e=>updateVan(i,"w",e.target.value)} onBlur={()=>saveNow("vans")} disabled={!signedIn} className="td-in"/></td>
+                          <td><input type="number" value={sv(v.h)} onChange={e=>updateVan(i,"h",e.target.value)} onBlur={()=>saveNow("vans")} disabled={!signedIn} className="td-in"/></td>
+                          <td>
+                            <input type="number" value={sv(v.cost)} onChange={e=>updateVan(i,"cost",e.target.value)} onBlur={()=>saveNow("vans")} disabled={costDisabled} className="td-in td-cost"/>
+                            {isGroup && !isMaster && (<div className="cost-note">Coût verrouillé (total du groupe)</div>)}
+                          </td>
+                          <td><input type="number" value={sv(v.maxW)} onChange={e=>updateVan(i,"maxW",e.target.value)} onBlur={()=>saveNow("vans")} disabled={!signedIn} className="td-in"/></td>
+                          <td className="td-right"><button onClick={()=>{ if(window.confirm("Êtes-vous sûr de vouloir supprimer cette van ?")) delVan(i); }} disabled={!signedIn} className="btn-xs">Supprimer</button></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          }
-        >
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  {["Nom", "Statut", "Total (jour)", "Projet"].map((h, i) => (
-                    <th key={i} style={styles.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {employes.map((e) => (
-                  <LigneEmploye
-                    key={e.id}
-                    emp={e}
-                    onOpenHistory={(emp) => { /* historique si tu veux */ }}
-                    setError={setError}
-                    projets={projetsOuverts}
-                    autresProjets={autresProjets}
-                  />
-                ))}
-                {employes.length === 0 && (
-                  <tr>
-                    <td colSpan={4} style={{ ...styles.td, color: "#64748b" }}>
-                      Aucun employé pour l’instant.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          </section>
+
+          {/* BUNDLES */}
+          <section className="section-center mt-16">
+            <div className="card card-rows">
+              <div className="card-head">
+                <h2 className="card-title">Bundles</h2>
+                <div className="flex-1" />
+                <button onClick={()=>setShowPaste(true)} disabled={!signedIn} className="btn-sm">Coller (Excel)</button>
+                <button onClick={()=>{ if(window.confirm("Êtes-vous sûr de vouloir supprimer tous les bundles ?")) clearAllRows(); }} disabled={!signedIn||rows.length===0} className="btn-sm">Tout supprimer</button>
+              </div>
+
+              {rows.length===0 && (<div className="hint">Aucun bundle. Ajoute une ligne ou colle depuis Excel.</div>)}
+
+              <div className="table-wrap small">
+                <table className="tbl tbl-rows">
+                  <thead><tr><th>ID</th><th>L (X)</th><th>H (Z)</th><th>Poids/unité</th><th></th></tr></thead>
+                  <tbody>
+                    {rows.map((r,i)=>(
+                      <tr key={i}>
+                        <td><input value={sv(r.id)} onChange={e=>updateRow(i,"id",e.target.value)} onBlur={()=>saveNow("rows")} className="td-in" disabled={!signedIn}/></td>
+                        <td><input type="number" value={sv(r.l)} onChange={e=>updateRow(i,"l",e.target.value)} onBlur={()=>saveNow("rows")} className="td-in" disabled={!signedIn}/></td>
+                        <td><input type="number" value={sv(r.h)} onChange={e=>updateRow(i,"h",e.target.value)} onBlur={()=>saveNow("rows")} className="td-in" disabled={!signedIn}/></td>
+                        <td><input type="number" value={sv(r.wt)} onChange={e=>updateRow(i,"wt",e.target.value)} onBlur={()=>saveNow("rows")} className="td-in" disabled={!signedIn}/></td>
+                        <td className="td-right"><button onClick={()=>{ if(window.confirm("Êtes-vous sûr de vouloir supprimer ce bundle ?")) delRow(i); }} disabled={!signedIn} className="btn-xs">Supprimer</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="rows-actions">
+                  <button onClick={addRow} disabled={!signedIn} className="btn-sm">+ Ajouter une ligne</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* CALCUL */}
+          <div className="calc-wrap">
+            <button onClick={run} disabled={vans.length===0||rows.length===0} className="btn-calc">CALCULER</button>
           </div>
-        </Card>
 
-        {/* ===== Tableau PROJETS ===== */}
-        <Card
-          title="📁 Projets"
-          right={
-            <Button variant="primary" onClick={() => (window.location.hash = "#/projets")} aria-label="Aller à la liste des projets">
-              projet
-            </Button>
-          }
-        >
-          <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
-        </Card>
-      </PageContainer>
-
-      {/* Panneau Matériel */}
-      {materialProjId && (
-        <ProjectMaterielPanel
-          projId={materialProjId}
-          onClose={() => setMaterialProjId(null)}
-          setParentError={setError}
-        />
+          {/* RÉSULTATS */}
+          {result&&(
+            <section className="section-center mt-20">
+              <div className="card card-results">
+                <h2 className="card-title mb-6">Résultats</h2>
+                <p className="resum"><b>Vannes utilisées:</b> {billing.usedVans} — <b>Coût total:</b> {Number(billing.totalCost).toLocaleString()} — <b>Piles restantes:</b> {result.stats.unplacedCount}</p>
+                <div className="results-grid">
+                  {result.vans.map((v,idx)=>{
+                    const label=`Vanne ${idx+1} - ${sv(v.name)||"—"}${v.group?` (${v.group})`:""}`;
+                    return (
+                      <div key={idx} className="van-card">
+                        <div className="van-title">{label}</div>
+                        <div className="van-weight">Poids: <b>{Number(v.weightUsed||0).toLocaleString()}</b>{v.maxWeight?<> / <b>{Number(v.maxWeight).toLocaleString()}</b></>:null}</div>
+                        <View3D van={v} colorMap={colorMap} height={380} vanLabel={label}/>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+          )}
+        </>
       )}
-    </>
+
+      <ExcelPasteModal open={showPaste} onClose={()=>setShowPaste(false)} onImport={importRows}/>
+
+      {loadingFb && (<div className="loading">Chargement…</div>)}
+      {msg && (<div className="message">{msg}</div>)}
+    </div>
   );
 }
 
-/* ------- Popup “ajouter travailleur” inline ------- */
-function AddWorkerInline({ onAdded, onError }) {
-  const [open, setOpen] = useState(false);
-  const [nom, setNom] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    const clean = nom.trim();
-    if (!clean) return;
-    try {
-      setBusy(true);
-      await addDoc(collection(db, "employes"), { nom: clean, createdAt: serverTimestamp() });
-      setNom(""); setOpen(false); onAdded?.();
-    } catch (err) {
-      console.error(err); onError?.(err?.message || String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <Button variant="primary" onClick={() => setOpen((v) => !v)}>
-        {open ? "Annuler" : "Ajouter travailleur"}
-      </Button>
-      {open && (
-        <form onSubmit={submit} style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={nom}
-            onChange={(e) => setNom(e.target.value)}
-            placeholder="Nom de l’employé"
-            style={{ ...styles.input, minWidth: 280, height: 42 }}
-          />
-          <Button type="submit" variant="success" disabled={busy}>
-            Ajouter
-          </Button>
-        </form>
-      )}
-    </>
-  );
-}
+const tdInput = { padding:"4px 6px", fontSize:12 };
