@@ -1,5 +1,5 @@
 // src/AutresProjetsSection.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { db } from "./firebaseConfig";
 import {
   collection,
@@ -10,6 +10,8 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
+  query,
+  orderBy,
 } from "firebase/firestore";
 
 /* ---------- Utils dates / temps ---------- */
@@ -62,6 +64,76 @@ function fmtHM(ms) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return `${h}:${m.toString().padStart(2, "0")}`;
+}
+
+/* ---------- Helpers pour présence du jour ---------- */
+function pad2(n) {
+  return n.toString().padStart(2, "0");
+}
+function dayKey(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+}
+function todayKey() {
+  return dayKey(new Date());
+}
+
+function segColAutre(projId, key) {
+  return collection(db, "autresProjets", projId, "timecards", key, "segments");
+}
+
+function computeTotalMs(sessions) {
+  const now = Date.now();
+  return sessions.reduce((acc, s) => {
+    const st = s.start?.toDate
+      ? s.start.toDate().getTime()
+      : s.start
+      ? new Date(s.start).getTime()
+      : null;
+    const en = s.end?.toDate
+      ? s.end.toDate().getTime()
+      : s.end
+      ? new Date(s.end).getTime()
+      : null;
+    if (!st) return acc;
+    return acc + Math.max(0, (en ?? now) - st);
+  }, 0);
+}
+
+function useSessionsAutre(projId, key, setError) {
+  const [list, setList] = useState([]);
+  const [tick, setTick] = useState(0);
+
+  // rafraîchir les sessions aux 15s pour avoir les durées live
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (!projId || !key) return;
+    const qSeg = query(segColAutre(projId, key), orderBy("start", "asc"));
+    const unsub = onSnapshot(
+      qSeg,
+      (snap) => {
+        const rows = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        setList(rows);
+      },
+      (err) => setError?.(err?.message || String(err))
+    );
+    return () => unsub();
+  }, [projId, key, setError, tick]);
+
+  return list;
+}
+
+function usePresenceTodayAutre(projId, setError) {
+  const key = todayKey();
+  const sessions = useSessionsAutre(projId, key, setError);
+  const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
+  const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
+  return { key, sessions, totalMs, hasOpen };
 }
 
 /* ---------- UI helpers ---------- */
@@ -212,10 +284,8 @@ function PopupNomAutreProjet({
       if (!clean) return onError?.("Indique un nom.");
 
       if (mode === "edit" && docId) {
-        // Renommer l'entrée dans /autresProjets
         await updateDoc(doc(db, "autresProjets", docId), { nom: clean });
       } else {
-        // Création d'un autre projet dans /autresProjets SEULEMENT
         await addDoc(collection(db, "autresProjets"), {
           nom: clean,
           ordre: null,
@@ -327,7 +397,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
     (async () => {
       setHistLoading(true);
       try {
-        // On parcourt /autresProjets/{id}/timecards/{dayId}/segments
         const daysSnap = await getDocs(
           collection(db, "autresProjets", projet.id, "timecards")
         );
@@ -510,9 +579,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           </button>
         </div>
 
-        {error && (
-          <ErrorBanner error={error} onClose={() => setError(null)} />
-        )}
+        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
         {/* Infos projet */}
         <div
@@ -565,10 +632,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           }}
         >
           <CardKV k="Date de création" v={fmtDate(projet.createdAt)} />
-          <CardKV
-            k="Total d'heures compilées"
-            v={fmtHM(totalMsAll)}
-          />
+          <CardKV k="Total d'heures compilées" v={fmtHM(totalMsAll)} />
         </div>
 
         {/* Historique */}
@@ -638,12 +702,42 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
 }
 
 /* ---------- Ligne du tableau ---------- */
-function RowAutreProjet({ p, onRename, onDelete, onShowDetails }) {
+function RowAutreProjet({
+  p,
+  onRename,
+  onDelete,
+  onShowDetails,
+  allowEdit,
+  setError,
+}) {
+  const { hasOpen } = usePresenceTodayAutre(p.id, setError);
+
+  const statutLabel = hasOpen ? "Actif" : "—";
+  const statutStyle = {
+    fontWeight: 800,
+    color: hasOpen ? "#166534" : "#6b7280",
+  };
+
   return (
     <tr>
+      {/* Nom */}
       <td style={td}>{p.nom || "—"}</td>
+
+      {/* Statut */}
       <td style={td}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <span style={statutStyle}>{statutLabel}</span>
+      </td>
+
+      {/* Actions alignées complètement à droite */}
+      <td style={{ ...td, textAlign: "right" }}>
+        <div
+          style={{
+            display: "inline-flex",
+            gap: 8,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+          }}
+        >
           <button
             onClick={() => onShowDetails?.(p)}
             style={btnSecondary}
@@ -651,16 +745,20 @@ function RowAutreProjet({ p, onRename, onDelete, onShowDetails }) {
           >
             Historique
           </button>
-          <button onClick={() => onRename?.(p)} style={btnSecondary}>
-            Renommer
-          </button>
-          <button
-            onClick={() => onDelete?.(p)}
-            style={btnDanger}
-            title="Supprimer"
-          >
-            Supprimer
-          </button>
+          {allowEdit && (
+            <>
+              <button onClick={() => onRename?.(p)} style={btnSecondary}>
+                Renommer
+              </button>
+              <button
+                onClick={() => onDelete?.(p)}
+                style={btnDanger}
+                title="Supprimer"
+              >
+                Supprimer
+              </button>
+            </>
+          )}
         </div>
       </td>
     </tr>
@@ -668,7 +766,10 @@ function RowAutreProjet({ p, onRename, onDelete, onShowDetails }) {
 }
 
 /* ---------- Section principale ---------- */
-export default function AutresProjetsSection() {
+export default function AutresProjetsSection({
+  allowEdit = true,
+  showHeader = true,
+}) {
   const [error, setError] = useState(null);
   const [rows, setRows] = useState([]);
 
@@ -731,23 +832,34 @@ export default function AutresProjetsSection() {
     <div style={{ marginTop: 24 }}>
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      {/* En-tête + bouton créer */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 8,
-          alignItems: "center",
-          marginBottom: 8,
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 900, lineHeight: 1.2 }}>
-          📁 Autre projet
-        </h2>
-        <button type="button" onClick={openCreate} style={btnPrimary}>
-          Créer nouveau projet
-        </button>
-      </div>
+      {/* En-tête + bouton créer (optionnel) */}
+      {showHeader && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 8,
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
+          <h2
+            style={{
+              margin: 0,
+              fontSize: 22,
+              fontWeight: 900,
+              lineHeight: 1.2,
+            }}
+          >
+            📁 Autres projets
+          </h2>
+          {allowEdit && (
+            <button type="button" onClick={openCreate} style={btnPrimary}>
+              Créer nouveau projet
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Tableau */}
       <div style={{ overflowX: "auto" }}>
@@ -763,7 +875,8 @@ export default function AutresProjetsSection() {
           <thead>
             <tr style={{ background: "#f6f7f8" }}>
               <th style={th}>Nom</th>
-              <th style={th}>Actions</th>
+              <th style={th}>Statut</th>
+              <th style={{ ...th, textAlign: "right" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -774,11 +887,13 @@ export default function AutresProjetsSection() {
                 onRename={openRename}
                 onDelete={handleDelete}
                 onShowDetails={handleShowDetails}
+                allowEdit={allowEdit}
+                setError={setError}
               />
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={2} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
                   Aucun autre projet pour l’instant.
                 </td>
               </tr>

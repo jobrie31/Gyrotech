@@ -14,7 +14,6 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
-import AutresProjetsSection from "./AutresProjetsSection";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -742,9 +741,6 @@ export default function PageProjets({ onOpenMaterial }) {
           </tbody>
         </table>
       </div>
-
-      {/* --- Section "Autre projet" (nom seulement) --- */}
-      <AutresProjetsSection />
 
       <HistoriqueProjet proj={projSel} open={openHist} onClose={closeHistory} />
     </div>

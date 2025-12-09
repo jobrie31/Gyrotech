@@ -62,6 +62,10 @@ export default function PageReglages() {
   const [factureError, setFactureError] = useState(null);
   const [factureSaved, setFactureSaved] = useState(false);
 
+  // 👉 Savoir si on a un brouillon de projet en cours (pour afficher le bouton Retour)
+  const [hasDraftProjet, setHasDraftProjet] = useState(false);
+
+  // 🔁 Charger config facture
   useEffect(() => {
     (async () => {
       try {
@@ -85,6 +89,16 @@ export default function PageReglages() {
         setFactureLoading(false);
       }
     })();
+  }, []);
+
+  // 🔁 Détecter si on a un brouillon de projet (création en cours)
+  useEffect(() => {
+    try {
+      const flag = window.sessionStorage?.getItem("draftProjetOpen");
+      setHasDraftProjet(flag === "1");
+    } catch (e) {
+      console.error(e);
+    }
   }, []);
 
   const saveFacture = async () => {
@@ -137,7 +151,11 @@ export default function PageReglages() {
     }
   };
   const onDelMarque = async (id) => {
-    if (!window.confirm("Supprimer cette marque ? (les modèles doivent être vides)"))
+    if (
+      !window.confirm(
+        "Supprimer cette marque ? (les modèles doivent être vides)"
+      )
+    )
       return;
     try {
       await deleteMarque(id);
@@ -230,6 +248,10 @@ export default function PageReglages() {
   const [timeError, setTimeError] = useState(null);
   const [timeRowEdits, setTimeRowEdits] = useState({});
 
+  // ⚙️ État pour le dé-punch auto à 17h
+  const [massDepunchLoading, setMassDepunchLoading] = useState(false);
+  const [massDepunchMsg, setMassDepunchMsg] = useState("");
+
   // Projets (liste simple)
   useEffect(() => {
     (async () => {
@@ -270,7 +292,7 @@ export default function PageReglages() {
     })();
   }, []);
 
-  // Charger les segments du projet + date
+  // Charger les segments du projet + date (pour l'édition manuelle)
   useEffect(() => {
     if (!timeDate || !timeProjId) {
       setTimeSegments([]);
@@ -463,6 +485,135 @@ export default function PageReglages() {
     }
   };
 
+  /* ========= DÉ-PUNCH AUTOMATIQUE À 17H (tant que la page est ouverte) ========= */
+
+  useEffect(() => {
+    let timerId;
+    let running = false;
+
+    const checkAndDepunch = async () => {
+      try {
+        if (running) return;
+
+        const now = new Date();
+        const hours = now.getHours();
+        const minutes = now.getMinutes();
+
+        // Date du jour "YYYY-MM-DD"
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, "0");
+        const d = String(now.getDate()).padStart(2, "0");
+        const dateKey = `${y}-${m}-${d}`;
+
+        // On se rappelle si on a déjà fait le dé-punch auto aujourd'hui
+        const lastDone =
+          window.localStorage?.getItem("massDepunchLastDate") || null;
+
+        // On déclenche si : il est 17h ou plus, et pas encore fait aujourd'hui
+        if (hours >= 17 && lastDone !== dateKey) {
+          running = true;
+          setMassDepunchLoading(true);
+          setMassDepunchMsg("");
+          setTimeError(null);
+
+          // Fin fixée à 17:00 précise aujourd'hui
+          const endTime = new Date(
+            y,
+            now.getMonth(),
+            now.getDate(),
+            17,
+            0,
+            0,
+            0
+          );
+
+          let countSegs = 0;
+
+          // 1) On va chercher tous les employés
+          const empSnap = await getDocs(collection(db, "employes"));
+
+          for (const empDoc of empSnap.docs) {
+            const empId = empDoc.id;
+
+            // Segments du jour pour cet employé
+            const segCol = collection(
+              db,
+              "employes",
+              empId,
+              "timecards",
+              dateKey,
+              "segments"
+            );
+            const segSnap = await getDocs(segCol);
+
+            for (const segDoc of segSnap.docs) {
+              const segData = segDoc.data();
+
+              // Si déjà dépunché → on saute
+              if (segData.end) continue;
+
+              const jobId = segData.jobId;
+              const startTs = segData.start;
+
+              // ✅ Côté employé : on ferme à 17h
+              await updateDoc(segDoc.ref, {
+                end: endTime,
+                updatedAt: serverTimestamp(),
+              });
+              countSegs++;
+
+              // ✅ Côté projet : on cherche le segment correspondant (même jobId, même start, même empId)
+              if (jobId && startTs) {
+                const projSegCol = collection(
+                  db,
+                  "projets",
+                  jobId,
+                  "timecards",
+                  dateKey,
+                  "segments"
+                );
+                const qProj = query(
+                  projSegCol,
+                  where("empId", "==", empId),
+                  where("start", "==", startTs)
+                );
+                const projSnap = await getDocs(qProj);
+                for (const pDoc of projSnap.docs) {
+                  await updateDoc(pDoc.ref, {
+                    end: endTime,
+                    updatedAt: serverTimestamp(),
+                  });
+                }
+              }
+            }
+          }
+
+          window.localStorage?.setItem("massDepunchLastDate", dateKey);
+          setMassDepunchMsg(
+            countSegs
+              ? `Dé-punch auto terminé : ${countSegs} punch(s) fermés à 17h.`
+              : "Dé-punch auto : aucun punch ouvert trouvé pour aujourd'hui."
+          );
+        }
+      } catch (e) {
+        console.error(e);
+        setTimeError(e?.message || String(e));
+      } finally {
+        running = false;
+        setMassDepunchLoading(false);
+      }
+    };
+
+    // On check immédiatement au montage,
+    // puis toutes les 60 secondes.
+    checkAndDepunch();
+    timerId = window.setInterval(checkAndDepunch, 60 * 1000);
+
+    return () => {
+      if (timerId) window.clearInterval(timerId);
+    };
+  }, []);
+
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       {/* En-tête centré et plus gros */}
@@ -486,6 +637,20 @@ export default function PageReglages() {
         >
           ⚙️ Réglages
         </h1>
+
+        {hasDraftProjet && (
+          <button
+            type="button"
+            onClick={() => {
+              // Retour à la liste de projets : PageListeProjet + PopupCreateProjet
+              // vont rouvrir le questionnaire avec le brouillon.
+              window.location.hash = "#/projets";
+            }}
+            style={btnSecondary}
+          >
+            ⬅️ Retour au projet en cours
+          </button>
+        )}
       </div>
 
       {/* 🔧 Facturation (infos Gyrotech + taux horaire) */}
@@ -623,7 +788,9 @@ export default function PageReglages() {
             </div>
           ))}
           {employes.length === 0 && (
-            <div style={{ color: "#666" }}>Aucun travailleur pour l’instant.</div>
+            <div style={{ color: "#666" }}>
+              Aucun travailleur pour l’instant.
+            </div>
           )}
         </div>
       </section>
@@ -760,6 +927,22 @@ export default function PageReglages() {
           sont appliqués au projet et à l&apos;employé (Total jour sur la page
           d&apos;accueil).
         </div>
+
+        {massDepunchMsg && (
+          <div
+            style={{
+              marginBottom: 8,
+              padding: 6,
+              borderRadius: 8,
+              background: "#ecfdf3",
+              border: "1px solid #bbf7d0",
+              fontSize: 12,
+              color: "#166534",
+            }}
+          >
+            {massDepunchMsg}
+          </div>
+        )}
 
         {timeError && (
           <div
@@ -1075,4 +1258,14 @@ const thTime = {
 const tdTime = {
   padding: 6,
   borderBottom: "1px solid #f1f5f9",
+};
+
+const btnSecondary = {
+  border: "1px solid #cbd5e1",
+  background: "#f8fafc",
+  color: "#111827",
+  borderRadius: 10,
+  padding: "6px 12px",
+  cursor: "pointer",
+  fontWeight: 700,
 };

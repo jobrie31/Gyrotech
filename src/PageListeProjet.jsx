@@ -1,4 +1,4 @@
-// src/PageListeProjet.jsx — Liste + Détails jam-packed + Matériel (panel inline simplifié)
+// src/PageListeProjet.jsx — Liste + Détails jam-packed + Matériel (panel inline simplifié) 
 import React, { useEffect, useRef, useState } from "react";
 import { db, storage } from "./firebaseConfig";
 import {
@@ -10,6 +10,7 @@ import {
   updateDoc,
   getDocs,
   deleteDoc,
+  setDoc,
 } from "firebase/firestore";
 import {
   ref as storageRef,
@@ -28,7 +29,6 @@ import {
 } from "./refData";
 import { CloseProjectWizard } from "./PageProjetsFermes";
 import AutresProjetsSection from "./AutresProjetsSection";
-
 
 /* ---------------------- Utils ---------------------- */
 // Format « 10 oct 2025 » / « 30 sept 2025 »
@@ -88,6 +88,32 @@ function minusDays(d, n) {
   const x = new Date(d);
   x.setDate(x.getDate() - n);
   return x;
+}
+
+function pad2(n) {
+  return n.toString().padStart(2, "0");
+}
+
+function dayKeyFromMs(ms) {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
+  return `${y}-${m}-${day}`;
+}
+
+// Helpers Firestore pour timecards / segments
+function empDayRef(empId, key) {
+  return doc(db, "employes", empId, "timecards", key);
+}
+function empSegCol(empId, key) {
+  return collection(db, "employes", empId, "timecards", key, "segments");
+}
+function projDayRef(projId, key) {
+  return doc(db, "projets", projId, "timecards", key);
+}
+function projSegCol(projId, key) {
+  return collection(db, "projets", projId, "timecards", key, "segments");
 }
 
 /* ---------------------- Hooks ---------------------- */
@@ -606,7 +632,7 @@ function PopupCreateProjet({
   const marqueId = useMarqueIdFromName(marques, marque);
   const modeles = useModeles(marqueId);
 
-  // init des champs quand le popup s'ouvre
+  // init des champs quand le popup s'ouvre (création / édition)
   useEffect(() => {
     if (!open) return;
 
@@ -642,6 +668,32 @@ function PopupCreateProjet({
     setModele("");
   }, [marqueId]);
 
+  // 🔁 Quand on revient des réglages, recharger le brouillon sauvegardé
+  useEffect(() => {
+    if (!open || mode !== "create") return;
+    try {
+      const raw = window.sessionStorage?.getItem("draftProjetFromReglages");
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+
+      setNom(draft.nom ?? "");
+      setClientTelephone(draft.clientTelephone ?? "");
+      setNumeroUnite(draft.numeroUnite ?? "");
+      setAnnee(draft.annee ?? "");
+      setMarque(draft.marque ?? "");
+      setModele(draft.modele ?? "");
+      setPlaque(draft.plaque ?? "");
+      setOdometre(draft.odometre ?? "");
+      setVin(draft.vin ?? "");
+
+      // On nettoie après usage
+      window.sessionStorage?.removeItem("draftProjetFromReglages");
+      window.sessionStorage?.removeItem("draftProjetOpen");
+    } catch (e) {
+      console.error("Erreur lecture brouillon projet", e);
+    }
+  }, [open, mode]);
+
   const submit = async (e) => {
     e.preventDefault();
     try {
@@ -656,27 +708,45 @@ function PopupCreateProjet({
         : null;
       const cleanMarque = marque.trim() || null;
       const cleanModele = modele.trim() || null;
-      const cleanPlaque = plaque.trim();
+      const cleanPlaque = plaque.trim().toUpperCase();
       const cleanOdo = odometre.trim();
       const cleanVin = vin.trim().toUpperCase();
 
+      // 🔒 Tous les champs obligatoires
       if (!cleanNom)
         return setMsg("Indique un nom de projet (simple).");
-      if (cleanAnnee && !/^\d{4}$/.test(String(cleanAnnee)))
+      if (!cleanClientTel)
+        return setMsg("Indique le téléphone du client.");
+      if (!cleanUnite)
+        return setMsg("Indique le numéro d’unité.");
+      if (!annee)
+        return setMsg("Sélectionne une année.");
+      if (!cleanMarque)
+        return setMsg("Sélectionne une marque.");
+      if (!cleanModele)
+        return setMsg("Sélectionne un modèle.");
+      if (!cleanPlaque)
+        return setMsg("Indique une plaque.");
+      if (!cleanOdo)
+        return setMsg("Indique un odomètre.");
+      if (!cleanVin)
+        return setMsg("Indique un VIN.");
+
+      if (!cleanAnnee || !/^\d{4}$/.test(String(cleanAnnee)))
         return setMsg("Année invalide (format AAAA).");
-      if (cleanOdo && isNaN(Number(cleanOdo)))
+      if (isNaN(Number(cleanOdo)))
         return setMsg("Odomètre doit être un nombre.");
 
       const payload = {
         nom: cleanNom,
-        clientTelephone: cleanClientTel || null,
-        numeroUnite: cleanUnite || null,
-        annee: cleanAnnee ? Number(cleanAnnee) : null,
+        clientTelephone: cleanClientTel,
+        numeroUnite: cleanUnite,
+        annee: Number(cleanAnnee),
         marque: cleanMarque,
         modele: cleanModele,
-        plaque: cleanPlaque || null,
-        odometre: cleanOdo ? Number(cleanOdo) : null,
-        vin: cleanVin || null,
+        plaque: cleanPlaque,
+        odometre: Number(cleanOdo),
+        vin: cleanVin,
       };
 
       if (mode === "edit" && projet?.id) {
@@ -693,6 +763,8 @@ function PopupCreateProjet({
 
       onSaved?.();
       onClose?.();
+      // 🔙 Retour page d'accueil après enregistrement
+      window.location.hash = "#/";
     } catch (err) {
       console.error(err);
       onError?.(err?.message || String(err));
@@ -703,6 +775,30 @@ function PopupCreateProjet({
   if (!open) return null;
 
   const goReglages = () => {
+    // On ne gère le retour que pour la création (pas pour l’édition)
+    if (mode === "create") {
+      try {
+        const draft = {
+          nom,
+          clientTelephone,
+          numeroUnite,
+          annee,
+          marque,
+          modele,
+          plaque,
+          odometre,
+          vin,
+        };
+        window.sessionStorage?.setItem(
+          "draftProjetFromReglages",
+          JSON.stringify(draft)
+        );
+        window.sessionStorage?.setItem("draftProjetOpen", "1");
+      } catch (e) {
+        console.error("Erreur sauvegarde brouillon projet", e);
+      }
+    }
+
     window.location.hash = "#/reglages";
   };
 
@@ -894,7 +990,7 @@ function PopupCreateProjet({
           <FieldV label="Plaque">
             <input
               value={plaque}
-              onChange={(e) => setPlaque(e.target.value)}
+              onChange={(e) => setPlaque(e.target.value.toUpperCase())}
               placeholder="Ex.: ABC 123"
               style={input}
             />
@@ -911,7 +1007,7 @@ function PopupCreateProjet({
           <FieldV label="VIN">
             <input
               value={vin}
-              onChange={(e) => setVin(e.target.value)}
+              onChange={(e) => setVin(e.target.value.toUpperCase())}
               placeholder="17 caractères"
               style={input}
             />
@@ -1586,31 +1682,33 @@ export default function PageListeProjet() {
   // Popup projets fermés
   const [closedPopupOpen, setClosedPopupOpen] = useState(false);
 
-  // 👇 ID d'un projet créé via le punch (stocké dans sessionStorage)
-  const [pendingNewProjId, setPendingNewProjId] = useState(null);
-
-  // On lit une seule fois l'ID stocké par PageAccueil
+  // 👉 Flag : ouverture du popup "Créer un projet" depuis le punch
   useEffect(() => {
     try {
-      const id = window.sessionStorage?.getItem("newProjectFromPunch");
-      if (id) {
-        setPendingNewProjId(id);
-        window.sessionStorage?.removeItem("newProjectFromPunch");
+      const flag = window.sessionStorage?.getItem("openCreateProjet");
+      if (flag) {
+        window.sessionStorage?.removeItem("openCreateProjet");
+        setCreateProjet(null); // mode "create"
+        setCreateOpen(true);
       }
     } catch {
       // ignore
     }
   }, []);
 
-  // Quand les projets sont chargés, si on a un pendingNewProjId → on ouvre le questionnaire de création pour ce projet (mode édition)
+  // 👉 Si on revient des réglages avec un brouillon de projet en création
   useEffect(() => {
-    if (!pendingNewProjId || projets.length === 0) return;
-    const p = projets.find((x) => x.id === pendingNewProjId);
-    if (!p) return;
-    setCreateProjet(p);
-    setCreateOpen(true);
-    setPendingNewProjId(null);
-  }, [pendingNewProjId, projets]);
+    try {
+      const flag = window.sessionStorage?.getItem("draftProjetOpen");
+      if (flag === "1") {
+        // le brouillon sera rechargé par PopupCreateProjet
+        setCreateProjet(null); // mode "create"
+        setCreateOpen(true);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
 
   const openDetails = (p, tab = "historique") =>
     setDetails({ open: true, projet: p, tab });
@@ -1765,7 +1863,7 @@ export default function PageListeProjet() {
       </div>
 
       {/* --- Section "Autre projet" --- */}
-      <AutresProjetsSection />
+      <AutresProjetsSection allowEdit={true} />
 
       {/* Popups */}
       <PopupCreateProjet
