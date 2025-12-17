@@ -1,5 +1,7 @@
 // src/PageProjets.jsx — Tableau Projets (miroir, sans punch)
 // Historique ≡ même logique que PageListeProjet (agrégé tout le projet)
+// ✅ AJOUT: colonne "Temps estimé" entre Jour et Actions
+// ✅ UI: centres les noms de colonnes ET les valeurs (table principale)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -42,6 +44,7 @@ const MONTHS_FR_ABBR = [
   "nov",
   "déc",
 ];
+
 function toDateSafe(ts) {
   if (!ts) return null;
   try {
@@ -56,6 +59,7 @@ function toDateSafe(ts) {
     return null;
   }
 }
+
 function fmtDate(ts) {
   const d = toDateSafe(ts);
   if (!d || isNaN(d.getTime())) return "—";
@@ -70,6 +74,17 @@ function fmtHM(ms) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return `${h}:${m.toString().padStart(2, "0")}`;
+}
+
+function fmtHours(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  // si entier -> "20 h", sinon -> "12.5 h"
+  const nice =
+    Math.round(n * 100) / 100 === Math.round(n)
+      ? String(Math.round(n))
+      : String(Math.round(n * 100) / 100).replace(".", ",");
+  return `${nice} h`;
 }
 
 /* ---------------------- Firestore helpers (Projets / Temps) ---------------------- */
@@ -93,6 +108,7 @@ async function ensureDayP(projId, key = todayKey()) {
   }
   return ref;
 }
+void ensureDayP; // (évite warning si non utilisé)
 
 /* ---------------------- Hooks ---------------------- */
 function useProjets(setError) {
@@ -202,51 +218,67 @@ function usePresenceTodayP(projId, setError) {
   return { key, card, sessions, totalMs, hasOpen };
 }
 
-/* ✅ Agrégats sur TOUT l’historique du projet (identique à PageListeProjet) */
+/* ✅ Agrégats sur TOUT l’historique du projet (TOTAL LIVE même sans refresh) */
 function useProjectLifetimeStats(projId, setError) {
   const [firstEverStart, setFirstEverStart] = useState(null);
-  const [totalAllMs, setTotalAllMs] = useState(0);
+
+  // ✅ total seulement des segments FERMÉS
+  const [totalClosedMs, setTotalClosedMs] = useState(0);
+
+  // ✅ starts des segments OUVERTS (calcul live côté UI)
+  const [openStarts, setOpenStarts] = useState([]); // array<number> ms
 
   useEffect(() => {
     if (!projId) return;
+
     const col = collection(db, "projets", projId, "timecards");
     const unsub = onSnapshot(
       col,
       async (daysSnap) => {
         try {
           let first = null;
-          let total = 0;
+          let totalClosed = 0;
+          const open = [];
 
           const dayDocs = daysSnap.docs;
           for (const d of dayDocs) {
             const segSnap = await getDocs(
               query(collection(d.ref, "segments"), orderBy("start", "asc"))
             );
+
             segSnap.forEach((seg) => {
               const s = seg.data();
+
               const st = s.start?.toDate
                 ? s.start.toDate()
                 : s.start
                 ? new Date(s.start)
                 : null;
+
               const en = s.end?.toDate
                 ? s.end.toDate()
                 : s.end
                 ? new Date(s.end)
                 : null;
-              if (st) {
-                if (!first || st < first) first = st;
-                const dur = Math.max(
-                  0,
-                  (en ? en.getTime() : Date.now()) - st.getTime()
-                );
-                total += dur;
+
+              if (!st) return;
+
+              if (!first || st < first) first = st;
+
+              // segment ouvert => on garde start (on calcule live avec Date.now() côté UI)
+              if (!en) {
+                open.push(st.getTime());
+                return;
               }
+
+              // segment fermé => durée fixe
+              totalClosed += Math.max(0, en.getTime() - st.getTime());
             });
           }
 
           setFirstEverStart(first);
-          setTotalAllMs(total);
+          setTotalClosedMs(totalClosed);
+          setOpenStarts(open);
         } catch (err) {
           console.error(err);
           setError?.(err?.message || String(err));
@@ -258,7 +290,7 @@ function useProjectLifetimeStats(projId, setError) {
     return () => unsub();
   }, [projId, setError]);
 
-  return { firstEverStart, totalAllMs };
+  return { firstEverStart, totalClosedMs, openStarts };
 }
 
 /* ---------------------- UI de base ---------------------- */
@@ -281,7 +313,10 @@ function ErrorBanner({ error, onClose }) {
       <strong>Erreur :</strong>
       <span style={{ flex: 1 }}>{error}</span>
       <button
-        onClick={onClose}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose?.();
+        }}
         style={{
           border: "none",
           background: "#b71c1c",
@@ -329,28 +364,16 @@ function HistoriqueProjet({ proj, open, onClose }) {
               : s.start
               ? new Date(s.start)
               : null;
-            const en = s.end?.toDate
-              ? s.end.toDate()
-              : s.end
-              ? new Date(s.end)
-              : null;
+            const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
             if (!st) return;
-            const ms = Math.max(
-              0,
-              (en ? en.getTime() : Date.now()) - st.getTime()
-            );
+            const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
             sumAllMs += ms;
 
             const empName = s.empName || "—";
             const empKey = s.empId || empName;
             const k = `${key}__${empKey}`;
             const prev =
-              map.get(k) || {
-                date: key,
-                empName,
-                empId: s.empId || null,
-                totalMs: 0,
-              };
+              map.get(k) || { date: key, empName, empId: s.empId || null, totalMs: 0 };
             prev.totalMs += ms;
             map.set(k, prev);
           });
@@ -394,7 +417,7 @@ function HistoriqueProjet({ proj, open, onClose }) {
         justifyContent: "center",
         zIndex: 9999,
       }}
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
       role="dialog"
       aria-modal="true"
     >
@@ -421,7 +444,10 @@ function HistoriqueProjet({ proj, open, onClose }) {
         >
           <h3 style={{ margin: 0 }}>Historique — {proj?.nom}</h3>
           <button
-            onClick={onClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
             style={{
               border: "1px solid #ddd",
               background: "#fff",
@@ -446,44 +472,18 @@ function HistoriqueProjet({ proj, open, onClose }) {
             marginBottom: 12,
           }}
         >
-          <div
-            style={{
-              border: "1px solid #eee",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <div style={{ fontSize: 12, color: "#666" }}>
-              Total compilé (incl. ouverture)
-            </div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>
-              {fmtHM(totalMsWithOpen)}
-            </div>
+          <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontSize: 12, color: "#666" }}>Total compilé (incl. ouverture)</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtHM(totalMsWithOpen)}</div>
           </div>
-          <div
-            style={{
-              border: "1px solid #eee",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <div style={{ fontSize: 12, color: "#666" }}>
-              Date d’ouverture
-            </div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>
-              {fmtDate(proj?.createdAt)}
-            </div>
+          <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontSize: 12, color: "#666" }}>Date d’ouverture</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtDate(proj?.createdAt)}</div>
           </div>
         </div>
 
         {/* Table agrégée (jour × employé) */}
-        <div
-          style={{
-            fontWeight: 800,
-            margin: "4px 0 6px",
-            fontSize: 12,
-          }}
-        >
+        <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>
           Historique — tout
         </div>
         <table
@@ -533,9 +533,11 @@ function HistoriqueProjet({ proj, open, onClose }) {
 }
 
 /* ---------------------- Lignes / Tableau (clic = rien, seulement boutons) ---------------------- */
-function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
+function LigneProjet({ proj, tick, onOpenHistory, onOpenMaterial, setError }) {
   const { card, totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
-  const { firstEverStart, totalAllMs } = useProjectLifetimeStats(
+  void card;
+
+  const { firstEverStart, totalClosedMs, openStarts } = useProjectLifetimeStats(
     proj.id,
     setError
   );
@@ -557,15 +559,24 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
         padding: "6px 10px",
         cursor: "pointer",
         fontWeight: 700,
-        marginRight: 8,
       }}
     >
       {label}
     </button>
   );
 
+  // ✅ calcul live des segments ouverts (rafraîchi via tick global)
+  const openExtraMs = useMemo(() => {
+    const now = Date.now();
+    return (openStarts || []).reduce(
+      (sum, stMs) => sum + Math.max(0, now - stMs),
+      0
+    );
+  }, [openStarts, tick]);
+
   const tempsOuvertureMinutes = Number(proj.tempsOuvertureMinutes || 0) || 0;
-  const totalAllMsWithOpen = totalAllMs + tempsOuvertureMinutes * 60 * 1000;
+  const totalAllMsWithOpen =
+    totalClosedMs + openExtraMs + tempsOuvertureMinutes * 60 * 1000;
 
   return (
     <tr
@@ -573,11 +584,9 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
       onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-        {proj.nom || "—"}
-      </td>
+      <td style={tdCenter}>{proj.nom || "—"}</td>
 
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+      <td style={tdCenter}>
         <span
           style={{
             border: proj.ouvert ? "1px solid #16a34a" : "1px solid #ef4444",
@@ -587,35 +596,42 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
             padding: "4px 10px",
             fontWeight: 800,
             fontSize: 12,
+            display: "inline-block",
           }}
         >
           {proj.ouvert ? "Ouvert" : "Fermé"}
         </span>
       </td>
 
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+      <td style={tdCenter}>
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
       {/* Date d’ouverture */}
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-        {fmtDate(firstEverStart)}
-      </td>
+      <td style={tdCenter}>{fmtDate(firstEverStart)}</td>
 
       {/* Total compilé (tout le projet, incl. ouverture) */}
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-        {fmtHM(totalAllMsWithOpen)}
-      </td>
+      <td style={tdCenter}>{fmtHM(totalAllMsWithOpen)}</td>
 
       {/* Jour (total du jour) */}
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-        {fmtHM(totalMs)}
-      </td>
+      <td style={tdCenter}>{fmtHM(totalMs)}</td>
 
-      {/* Actions : seulement les boutons, la ligne ne clic plus */}
-      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-        {btn("Matériel", () => onOpenMaterial(proj.id), "#2563eb")}
-        {btn("Historique", () => onOpenHistory(proj), "#6b7280")}
+      {/* ✅ Temps estimé */}
+      <td style={tdCenter}>{fmtHours(proj?.tempsEstimeHeures)}</td>
+
+      {/* Actions centrées */}
+      <td style={tdCenter}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          {btn("Matériel", () => onOpenMaterial(proj.id), "#2563eb")}
+          {btn("Historique", () => onOpenHistory(proj), "#6b7280")}
+        </div>
       </td>
     </tr>
   );
@@ -625,6 +641,13 @@ function LigneProjet({ proj, onOpenHistory, onOpenMaterial, setError }) {
 export default function PageProjets({ onOpenMaterial }) {
   const [error, setError] = useState(null);
   const projets = useProjets(setError);
+
+  // ✅ tick global pour rafraîchir l’affichage des durées (segments ouverts)
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 15000); // 15s
+    return () => clearInterval(t);
+  }, []);
 
   const [openHist, setOpenHist] = useState(false);
   const [projSel, setProjSel] = useState(null);
@@ -656,69 +679,14 @@ export default function PageProjets({ onOpenMaterial }) {
         >
           <thead>
             <tr style={{ background: "#f6f7f8" }}>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 10,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Nom
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 10,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Situation
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 10,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Statut
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 10,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Date d’ouverture
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 10,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Total compilé
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 10,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Jour
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 10,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Actions
-              </th>
+              <th style={thCenter}>Nom</th>
+              <th style={thCenter}>Situation</th>
+              <th style={thCenter}>Statut</th>
+              <th style={thCenter}>Date d’ouverture</th>
+              <th style={thCenter}>Total compilé</th>
+              <th style={thCenter}>Jour</th>
+              <th style={thCenter}>Temps estimé</th>
+              <th style={thCenter}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -726,6 +694,7 @@ export default function PageProjets({ onOpenMaterial }) {
               <LigneProjet
                 key={p.id}
                 proj={p}
+                tick={tick}
                 onOpenHistory={openHistory}
                 onOpenMaterial={onOpenMaterial}
                 setError={setError}
@@ -733,7 +702,7 @@ export default function PageProjets({ onOpenMaterial }) {
             ))}
             {projets.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={8} style={{ padding: 12, color: "#666", textAlign: "center" }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>
@@ -746,3 +715,18 @@ export default function PageProjets({ onOpenMaterial }) {
     </div>
   );
 }
+
+/* ---------------------- Styles (centrés) ---------------------- */
+const thCenter = {
+  textAlign: "center",
+  padding: 10,
+  borderBottom: "1px solid #e0e0e0",
+  whiteSpace: "nowrap",
+};
+
+const tdCenter = {
+  textAlign: "center",
+  padding: 10,
+  borderBottom: "1px solid #eee",
+  verticalAlign: "middle",
+};

@@ -157,7 +157,10 @@ function ErrorBanner({ error, onClose }) {
       <strong>Erreur :</strong>
       <span style={{ flex: 1 }}>{error}</span>
       <button
-        onClick={onClose}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose?.();
+        }}
         style={{
           border: "none",
           background: "#b71c1c",
@@ -315,7 +318,7 @@ function PopupNomAutreProjet({
         justifyContent: "center",
         padding: 16,
       }}
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -342,7 +345,10 @@ function PopupNomAutreProjet({
               : "Créer un autre projet"}
           </div>
           <button
-            onClick={onClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
             title="Fermer"
             style={{
               border: "none",
@@ -565,7 +571,10 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
             Détails de l’autre projet
           </div>
           <button
-            onClick={onClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
             title="Fermer"
             style={{
               border: "none",

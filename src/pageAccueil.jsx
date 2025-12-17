@@ -20,9 +20,9 @@ import { db } from "./firebaseConfig";
 import PageProjets from "./PageProjets";
 import PageListeProjet from "./PageListeProjet";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
-import jsPDF from "jspdf";
 import { styles, Card, Pill, Button, PageContainer, TopBar } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
+import HistoriqueEmploye from "./HistoriqueEmploye";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -41,28 +41,6 @@ function fmtHM(ms) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return `${h}:${m.toString().padStart(2, "0")}`;
-}
-function getCurrentWeekDays() {
-  const now = new Date();
-  const day = now.getDay(); // 0=dim, 1=lun...
-  const sunday = new Date(now);
-  sunday.setHours(0, 0, 0, 0);
-  sunday.setDate(now.getDate() - day);
-  const days = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(sunday);
-    d.setDate(sunday.getDate() + i);
-    days.push({
-      date: d,
-      key: dayKey(d),
-      label: d.toLocaleDateString("fr-CA", {
-        weekday: "short",
-        month: "2-digit",
-        day: "2-digit",
-      }),
-    });
-  }
-  return days;
 }
 
 /* ---------------------- Firestore helpers (Employés) ---------------------- */
@@ -91,11 +69,7 @@ async function ensureDay(empId, key = todayKey()) {
   return ref;
 }
 async function getOpenEmpSegments(empId, key = todayKey()) {
-  const qOpen = query(
-    segCol(empId, key),
-    where("end", "==", null),
-    orderBy("start", "desc")
-  );
+  const qOpen = query(segCol(empId, key), where("end", "==", null), orderBy("start", "desc"));
   const snap = await getDocs(qOpen);
   return snap.docs;
 }
@@ -142,11 +116,7 @@ async function ensureProjDay(projId, key = todayKey()) {
   return ref;
 }
 async function getOpenProjSegsForEmp(projId, empId, key = todayKey()) {
-  const qOpen = query(
-    projSegCol(projId, key),
-    where("end", "==", null),
-    where("empId", "==", empId)
-  );
+  const qOpen = query(projSegCol(projId, key), where("end", "==", null), where("empId", "==", empId));
   const snap = await getDocs(qOpen);
   return snap.docs;
 }
@@ -300,7 +270,7 @@ function useAutresProjets(setError) {
   return rows;
 }
 
-/** ✅ NOUVEAU: Codes punch (ex: code requis pour Autres projets) */
+/** ✅ Codes punch (ex: code requis pour Autres projets) */
 function usePunchCodes(setError) {
   const [codes, setCodes] = useState({ autresProjetsCode: "" });
 
@@ -545,27 +515,14 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
     : "Vous n'avez pas choisi de projet.";
 
   const modal = (
-    <div role="dialog" aria-modal="true" onClick={() => onCancel && onCancel()} style={styles.modalBackdrop}>
+    <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
       <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 16,
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ fontWeight: 800, fontSize: 22 }}>Confirmation du punch</div>
           <button
             onClick={() => onCancel && onCancel()}
             title="Fermer"
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 28,
-              cursor: "pointer",
-              lineHeight: 1,
-            }}
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -603,27 +560,14 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
   const txtName = empName || "cet employé";
 
   const modal = (
-    <div role="dialog" aria-modal="true" onClick={onCancel} style={styles.modalBackdrop}>
+    <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
       <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 16,
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ fontWeight: 800, fontSize: 22 }}>Nouveau projet</div>
           <button
             onClick={onCancel}
             title="Fermer"
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 28,
-              cursor: "pointer",
-              lineHeight: 1,
-            }}
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -656,7 +600,7 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
     <div
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
       style={{
         position: "fixed",
         inset: 0,
@@ -681,24 +625,11 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
           fontSize: 14,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 12,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <h3 style={{ margin: 0 }}>Autres projets</h3>
           <button
             onClick={onClose}
-            style={{
-              border: "1px solid #ddd",
-              background: "#fff",
-              borderRadius: 8,
-              padding: "6px 10px",
-              cursor: "pointer",
-            }}
+            style={{ border: "1px solid #ddd", background: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}
           >
             Fermer
           </button>
@@ -730,7 +661,7 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ------- ✅ NOUVEAU: Modale Code pour Autres projets ------- */
+/* ------- ✅ Modale Code pour Autres projets ------- */
 function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCancel }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState("");
@@ -749,25 +680,12 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   const modal = (
     <div role="dialog" aria-modal="true" onClick={onCancel} style={styles.modalBackdrop}>
       <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 12,
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontWeight: 900, fontSize: 22 }}>Code requis</div>
           <button
             onClick={onCancel}
             title="Fermer"
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 28,
-              cursor: "pointer",
-              lineHeight: 1,
-            }}
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -882,14 +800,7 @@ function ClockBadge({ now }) {
 }
 
 /* ---------------------- Lignes / Tableau ---------------------- */
-function LigneEmploye({
-  emp,
-  onOpenHistory,
-  setError,
-  projets,
-  autresProjets,
-  autresProjetsCode,
-}) {
+function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, autresProjetsCode }) {
   const { sessions, totalMs, hasOpen } = usePresenceToday(emp.id, setError);
   const present = hasOpen;
 
@@ -902,13 +813,21 @@ function LigneEmploye({
   const [autresOpen, setAutresOpen] = useState(false);
   const [newProjModalOpen, setNewProjModalOpen] = useState(false);
 
-  // ✅ code modal
+  // code modal
   const [codeOpen, setCodeOpen] = useState(false);
   const [pendingOther, setPendingOther] = useState(null);
 
   const currentOpen = useMemo(() => sessions.find((s) => !s.end) || null, [sessions]);
   const currentJobName = currentOpen?.jobName || null;
-  const currentIsOther = currentOpen?.jobId && String(currentOpen.jobId).startsWith("other:");
+
+  const currentIsOther = !!(currentOpen?.jobId && String(currentOpen.jobId).startsWith("other:"));
+  const currentIsProj = !!(currentOpen?.jobId && String(currentOpen.jobId).startsWith("proj:"));
+
+  // ✅ NOUVEAU: projId actif (si punché sur un projet)
+  const currentProjId = useMemo(() => {
+    const jid = String(currentOpen?.jobId || "");
+    return jid.startsWith("proj:") ? jid.slice(5) : "";
+  }, [currentOpen?.jobId]);
 
   useEffect(() => {
     setProjSel(emp?.lastProjectId || "");
@@ -917,6 +836,13 @@ function LigneEmploye({
   useEffect(() => {
     if (projSel && !projets.some((p) => p.id === projSel)) setProjSel("");
   }, [projets, projSel]);
+
+  // ✅ IMPORTANT: si punché sur un projet normal, forcer le dropdown à afficher le projet actif
+  useEffect(() => {
+    if (present && currentIsProj && currentProjId) {
+      setProjSel(currentProjId);
+    }
+  }, [present, currentIsProj, currentProjId]);
 
   const statusCell = present ? <Pill variant="success">Actif</Pill> : <Pill variant="neutral">Inactif</Pill>;
 
@@ -963,18 +889,17 @@ function LigneEmploye({
     }
   };
 
+  // ✅ Couleur de ligne: jaune = "Autres projets", vert pâle = "Projet normal"
   const [isHovered, setIsHovered] = useState(false);
-  const baseBg = currentIsOther ? "#fef9c3" : styles.row?.background || "white";
-  const hoverBg = currentIsOther ? "#fef3c7" : styles.rowHover?.background || "#f9fafb";
+
+  const baseBg = currentIsOther ? "#fef9c3" : currentIsProj ? "#dcfce7" : styles.row?.background || "white";
+  const hoverBg = currentIsOther ? "#fef3c7" : currentIsProj ? "#bbf7d0" : styles.rowHover?.background || "#f9fafb";
   const rowBg = isHovered ? hoverBg : baseBg;
 
   const requireCode = String(autresProjetsCode || "").trim().length > 0;
 
   const proceedPunchOther = async (ap) => {
-    await doPunchWithOther(emp, {
-      id: ap.id,
-      nom: ap.nom || "(sans nom)",
-    });
+    await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
   };
 
   return (
@@ -993,45 +918,48 @@ function LigneEmploye({
         <td style={{ ...styles.td, width: "100%" }} onClick={(e) => e.stopPropagation()}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ display: "flex", flexDirection: "column", flex: "1 1 320px", minWidth: 260 }}>
-              <select
-                value={projSel}
-                onChange={(e) => setProjSel(e.target.value)}
-                aria-label="Projet pour ce punch"
-                style={{
-                  ...styles.input,
-                  height: 44,
-                  fontSize: 16,
-                  cursor: present ? "not-allowed" : "pointer",
-                  opacity: present ? 0.7 : 1,
-                }}
-                disabled={present}
-              >
-                <option value="">— Projet —</option>
-                {projets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nom || "(sans nom)"}
-                  </option>
-                ))}
-              </select>
-
-              {/* "Actuellement" seulement pour un job venant de Autres projets */}
-              {currentJobName && currentIsOther && (
+              {/* ✅ si ACTIF sur AUTRES PROJETS, on remplace le dropdown */}
+              {present && currentIsOther ? (
                 <div
                   aria-live="polite"
                   style={{
-                    marginTop: 6,
-                    fontWeight: 800,
+                    height: 44,
+                    display: "flex",
+                    alignItems: "center",
+                    fontWeight: 900,
                     fontSize: 16,
                     color: "#111827",
-                    padding: "6px 10px",
-                    borderRadius: 10,
+                    padding: "0 12px",
+                    borderRadius: 12,
                     background: "#eef2ff",
                     border: "1px solid #c7d2fe",
                   }}
                   title="Travail en cours (Autres projets)"
                 >
-                  Actuellement: {currentJobName}
+                  Actuellement: {currentJobName || "—"}
                 </div>
+              ) : (
+                <select
+                  value={projSel}
+                  onChange={(e) => setProjSel(e.target.value)}
+                  aria-label="Projet pour ce punch"
+                  style={{
+                    ...styles.input,
+                    height: 44,
+                    fontSize: present && currentIsProj ? 18 : 16,
+                    fontWeight: present && currentIsProj ? 900 : 700,
+                    cursor: present ? "not-allowed" : "pointer",
+                    opacity: present ? 0.85 : 1,
+                  }}
+                  disabled={present}
+                >
+                  <option value="">— Projet —</option>
+                  {projets.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nom || "(sans nom)"}
+                    </option>
+                  ))}
+                </select>
               )}
             </div>
 
@@ -1107,13 +1035,11 @@ function LigneEmploye({
         autresProjets={autresProjets}
         onChoose={async (ap) => {
           try {
-            // ✅ NOUVEAU: si code configuré, demander le code avant de puncher
             if (requireCode) {
               setPendingOther(ap);
               setCodeOpen(true);
               return;
             }
-
             await proceedPunchOther(ap);
           } catch (e) {
             alert(e?.message || String(e));
@@ -1164,7 +1090,6 @@ export default function PageAccueil() {
   const projetsOuverts = useOpenProjets(setError);
   const autresProjets = useAutresProjets(setError);
 
-  // ✅ NOUVEAU: charge le code depuis config/punchCodes
   const { autresProjetsCode } = usePunchCodes(setError);
 
   const [now, setNow] = useState(new Date());
@@ -1172,22 +1097,6 @@ export default function PageAccueil() {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
-
-  const [openHist, setOpenHist] = useState(false);
-  const [empSel, setEmpSel] = useState(null);
-  void openHist;
-  void empSel;
-
-  const openHistory = (emp) => {
-    setEmpSel(emp);
-    setOpenHist(true);
-  };
-  const closeHistory = () => {
-    setOpenHist(false);
-    setEmpSel(null);
-  };
-  void openHistory;
-  void closeHistory;
 
   const [route, setRoute] = useState(getRouteFromHash());
   useEffect(() => {
@@ -1199,82 +1108,14 @@ export default function PageAccueil() {
 
   const [materialProjId, setMaterialProjId] = useState(null);
 
-  const handleExportHoraire = async () => {
-    try {
-      const weekDays = getCurrentWeekDays();
-      if (!employes || employes.length === 0) {
-        alert("Aucun employé pour générer l’horaire.");
-        return;
-      }
-      const pdf = new jsPDF({ orientation: "landscape" });
-      const semaineTitre = `Semaine du ${weekDays[0].date.toLocaleDateString("fr-CA", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-      })} au ${weekDays[6].date.toLocaleDateString("fr-CA", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-      })}`;
-      pdf.setFontSize(16);
-      pdf.text("Horaire - Temps des travailleurs", 14, 16);
-      pdf.setFontSize(11);
-      pdf.text(semaineTitre, 14, 23);
-      pdf.setFontSize(9);
-
-      const startYBase = 30;
-      const colX = [14, 70, 100, 130, 160, 190, 220, 250, 280];
-      pdf.text("Employé", colX[0], startYBase);
-      weekDays.forEach((d, i) => pdf.text(d.label, colX[i + 1], startYBase));
-      pdf.text("Total semaine", colX[8], startYBase);
-      let y = startYBase + 6;
-
-      for (const emp of employes) {
-        if (!emp?.id) continue;
-        if (y > 190) {
-          pdf.addPage("landscape");
-          pdf.setFontSize(16);
-          pdf.text("Horaire - Temps des travailleurs (suite)", 14, 16);
-          pdf.setFontSize(11);
-          pdf.text(semaineTitre, 14, 23);
-          pdf.setFontSize(9);
-          pdf.text("Employé", colX[0], startYBase);
-          weekDays.forEach((d, i) => pdf.text(d.label, colX[i + 1], startYBase));
-          pdf.text("Total semaine", colX[8], startYBase);
-          y = startYBase + 6;
-        }
-
-        pdf.text(emp.nom || "—", colX[0], y);
-        let totalWeekMs = 0;
-
-        for (let i = 0; i < weekDays.length; i++) {
-          const key = weekDays[i].key;
-          const qSeg = query(segCol(emp.id, key), orderBy("start", "asc"));
-          const snap = await getDocs(qSeg);
-          const sessions = snap.docs.map((d) => d.data());
-          const totalMs = computeTotalMs(sessions);
-          totalWeekMs += totalMs;
-          pdf.text(fmtHM(totalMs), colX[i + 1], y);
-        }
-
-        pdf.text(fmtHM(totalWeekMs), colX[8], y);
-        y += 6;
-      }
-
-      pdf.save("horaire-semaine.pdf");
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    }
-  };
+  // ✅ Historique Employé (modal)
+  const [histOpen, setHistOpen] = useState(false);
+  const [histEmpId, setHistEmpId] = useState(""); // employé choisi à l’ouverture
 
   if (route === "projets") {
     return (
       <PageContainer>
-        <TopBar
-          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Projets</h1>}
-          right={<ClockBadge now={now} />}
-        />
+        <TopBar left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Projets</h1>} right={<ClockBadge now={now} />} />
         <Card>
           <PageListeProjet />
         </Card>
@@ -1285,28 +1126,26 @@ export default function PageAccueil() {
   return (
     <>
       <PageContainer>
-        <TopBar
-          left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Styro</h1>}
-          right={<ClockBadge now={now} />}
-        />
+        <TopBar left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Gyrotech</h1>} right={<ClockBadge now={now} />} />
 
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
         <Card
           title="👥 Travailleurs"
           right={
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-                flexWrap: "wrap",
-                justifyContent: "flex-end",
-              }}
-            >
-              <Button variant="neutral" onClick={handleExportHoraire} aria-label="Voir l’horaire de la semaine (PDF)">
-                Horaire (PDF)
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {/* ✅ Ouvre la feuille d'heures DANS la modale */}
+              <Button
+                variant="neutral"
+                onClick={() => {
+                  setHistEmpId(""); // pas imposé -> dropdown dans la modale
+                  setHistOpen(true);
+                }}
+                aria-label="Voir l’horaire (dans une modale)"
+              >
+                Horaire (Vue)
               </Button>
+
               <AddWorkerInline onError={setError} />
             </div>
           }
@@ -1327,8 +1166,9 @@ export default function PageAccueil() {
                   <LigneEmploye
                     key={e.id}
                     emp={e}
-                    onOpenHistory={() => {
-                      // historique si besoin
+                    onOpenHistory={(emp) => {
+                      setHistEmpId(emp?.id || "");
+                      setHistOpen(true);
                     }}
                     setError={setError}
                     projets={projetsOuverts}
@@ -1360,15 +1200,28 @@ export default function PageAccueil() {
           <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
         </Card>
 
-        {/* 📁 Autres projets — même UI, mais SANS renommer/supprimer ici */}
+        {/* Autres projets — UI, sans renommer/supprimer ici */}
         <Card title="📁 Autres projets">
           <AutresProjetsSection allowEdit={false} showHeader={false} />
         </Card>
       </PageContainer>
 
       {materialProjId && (
-        <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />
+        <ProjectMaterielPanel
+          projId={materialProjId}
+          onClose={() => setMaterialProjId(null)}
+          setParentError={setError}
+        />
       )}
+
+      {/* ✅ Modale Historique Employé (affichage style “feuille”) */}
+      <HistoriqueEmploye
+        open={histOpen}
+        onClose={() => setHistOpen(false)}
+        employes={employes}
+        initialEmpId={histEmpId}
+        onError={setError}
+      />
     </>
   );
 }

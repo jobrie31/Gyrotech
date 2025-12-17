@@ -26,6 +26,15 @@ function formatCAD(n) {
   return x.toLocaleString("fr-CA", { style: "currency", currency: "CAD" });
 }
 
+function parsePrix(input) {
+  const raw = String(input ?? "")
+    .replace(/\$/g, "")
+    .trim()
+    .replace(",", ".");
+  const n = Number(raw);
+  return isFinite(n) ? n : NaN;
+}
+
 /* ---------- Hooks Firestore ---------- */
 function useMateriels(setError) {
   const [rows, setRows] = useState([]);
@@ -48,7 +57,10 @@ function useMateriels(setError) {
 function useCategories(setError) {
   const [cats, setCats] = useState([]);
   useEffect(() => {
-    const q = query(collection(db, "categoriesMateriels"), orderBy("nom", "asc"));
+    const q = query(
+      collection(db, "categoriesMateriels"),
+      orderBy("nom", "asc")
+    );
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -83,7 +95,9 @@ function ErrorBanner({ error, onClose }) {
     >
       <strong>Erreur :</strong>
       <span style={{ flex: 1 }}>{error}</span>
-      <Button variant="danger" onClick={onClose}>OK</Button>
+      <Button variant="danger" onClick={onClose}>
+        OK
+      </Button>
     </div>
   );
 }
@@ -118,7 +132,13 @@ function Modal({ open, title, children, onClose }) {
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ padding: "12px 14px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>
+        <div
+          style={{
+            padding: "12px 14px",
+            borderBottom: "1px solid #e2e8f0",
+            fontWeight: 800,
+          }}
+        >
           {title}
         </div>
         <div style={{ padding: 14 }}>{children}</div>
@@ -127,9 +147,17 @@ function Modal({ open, title, children, onClose }) {
   );
 }
 
-/* ---------- Ligne matériel (compact + petite croix) ---------- */
+/* ---------- Ligne matériel (compact + édition nom/prix + petite croix) ---------- */
 function MaterielRow({ row, categories, onError }) {
   const [catId, setCatId] = useState("");
+
+  // ✅ édition article
+  const [editing, setEditing] = useState(false);
+  const [eNom, setENom] = useState(row.nom || "");
+  const [ePrix, setEPrix] = useState(
+    row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
+  );
+  const [saving, setSaving] = useState(false);
 
   const nameToId = useMemo(() => {
     const m = new Map();
@@ -143,18 +171,70 @@ function MaterielRow({ row, categories, onError }) {
   }, [categories]);
 
   useEffect(() => {
-    setCatId(row.categorie ? (nameToId.get(row.categorie) || "") : "");
+    setCatId(row.categorie ? nameToId.get(row.categorie) || "" : "");
   }, [row.categorie, nameToId]);
+
+  // resync si Firestore update pendant qu’on n’édite pas
+  useEffect(() => {
+    if (editing) return;
+    setENom(row.nom || "");
+    setEPrix(
+      row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
+    );
+  }, [row.nom, row.prix, editing]);
 
   const moveToCat = async (newId) => {
     try {
       await updateDoc(doc(db, "materiels", row.id), {
-        categorie: newId ? (idToName.get(newId) || null) : null,
+        categorie: newId ? idToName.get(newId) || null : null,
       });
       setCatId(newId);
     } catch (err) {
       onError?.(err?.message || String(err));
     }
+  };
+
+  const startEdit = () => {
+    setEditing(true);
+    setENom(row.nom || "");
+    setEPrix(
+      row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
+    );
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setENom(row.nom || "");
+    setEPrix(
+      row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
+    );
+  };
+
+  const saveEdit = async () => {
+    const cleanNom = String(eNom || "").trim();
+    const num = parsePrix(ePrix);
+
+    if (!cleanNom) return onError?.("Nom requis.");
+    if (!isFinite(num) || num < 0) return onError?.("Prix invalide.");
+
+    try {
+      setSaving(true);
+      await updateDoc(doc(db, "materiels", row.id), {
+        nom: cleanNom,
+        prix: Math.round(num * 100) / 100,
+      });
+      setEditing(false);
+    } catch (err) {
+      onError?.(err?.message || String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onKeyDownRow = (e) => {
+    if (!editing) return;
+    if (e.key === "Enter") saveEdit();
+    if (e.key === "Escape") cancelEdit();
   };
 
   const del = async () => {
@@ -175,95 +255,196 @@ function MaterielRow({ row, categories, onError }) {
       }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
+      onKeyDown={onKeyDownRow}
     >
+      {/* NOM */}
       <td style={{ ...styles.td, padding: "6px 8px", maxWidth: 480 }}>
-        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>
-          {row.nom || "—"}
-        </div>
+        {!editing ? (
+          <div
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+            title="Cliquer pour modifier"
+            onClick={startEdit}
+          >
+            {row.nom || "—"}
+          </div>
+        ) : (
+          <input
+            value={eNom}
+            onChange={(e) => setENom(e.target.value)}
+            autoFocus
+            style={{
+              ...styles.input,
+              height: 28,
+              padding: "2px 6px",
+              fontSize: 13,
+            }}
+            aria-label="Nom de l'article"
+          />
+        )}
       </td>
-      <td style={{ ...styles.td, padding: "6px 8px", width: 110, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-        {formatCAD(row.prix)}
+
+      {/* PRIX */}
+      <td
+        style={{
+          ...styles.td,
+          padding: "6px 8px",
+          width: 110,
+          textAlign: "right",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {!editing ? (
+          <div
+            style={{ cursor: "pointer" }}
+            title="Cliquer pour modifier"
+            onClick={startEdit}
+          >
+            {formatCAD(row.prix)}
+          </div>
+        ) : (
+          <input
+            value={ePrix}
+            onChange={(e) => setEPrix(e.target.value)}
+            inputMode="decimal"
+            placeholder="0.00"
+            style={{
+              ...styles.input,
+              height: 28,
+              padding: "2px 6px",
+              fontSize: 13,
+              textAlign: "right",
+            }}
+            aria-label="Prix de l'article"
+          />
+        )}
       </td>
+
+      {/* CATEGORIE */}
       <td style={{ ...styles.td, padding: "6px 8px", width: 200 }}>
         <select
           value={catId}
           onChange={(e) => moveToCat(e.target.value)}
-          style={{ ...styles.input, height: 28, minWidth: 160, padding: "2px 6px", fontSize: 13 }}
+          style={{
+            ...styles.input,
+            height: 28,
+            minWidth: 160,
+            padding: "2px 6px",
+            fontSize: 13,
+          }}
           aria-label="Changer la catégorie"
         >
           <option value="">— Aucune —</option>
           {categories.map((c) => (
-            <option key={c.id} value={c.id}>{c.nom}</option>
+            <option key={c.id} value={c.id}>
+              {c.nom}
+            </option>
           ))}
         </select>
       </td>
-      <td style={{ ...styles.td, padding: "6px 8px", width: 48, textAlign: "right" }}>
-        <Button
-          variant="danger"
-          onClick={del}
-          aria-label="Supprimer l'article"
-          title="Supprimer"
-          style={{
-            padding: "0 6px",
-            minWidth: 0,
-            width: 24,
-            height: 24,
-            lineHeight: "20px",
-            borderRadius: 6,
-            fontSize: 16,
-            fontWeight: 700,
-          }}
-        >
-          ×
-        </Button>
+
+      {/* ACTIONS */}
+      <td style={{ ...styles.td, padding: "6px 8px", width: 120, textAlign: "right" }}>
+        {!editing ? (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+            <Button
+              variant="neutral"
+              onClick={startEdit}
+              title="Renommer / modifier prix"
+              style={{ padding: "0 8px", height: 24, minWidth: 0, borderRadius: 6, fontSize: 12, fontWeight: 700 }}
+            >
+              Modifier
+            </Button>
+            <Button
+              variant="danger"
+              onClick={del}
+              aria-label="Supprimer l'article"
+              title="Supprimer"
+              style={{
+                padding: "0 6px",
+                minWidth: 0,
+                width: 24,
+                height: 24,
+                lineHeight: "20px",
+                borderRadius: 6,
+                fontSize: 16,
+                fontWeight: 700,
+              }}
+            >
+              ×
+            </Button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+            <Button
+              variant="success"
+              onClick={saveEdit}
+              disabled={saving}
+              title="Sauver (Enter)"
+              style={{ padding: "0 8px", height: 24, minWidth: 0, borderRadius: 6, fontSize: 12, fontWeight: 800 }}
+            >
+              OK
+            </Button>
+            <Button
+              variant="neutral"
+              onClick={cancelEdit}
+              disabled={saving}
+              title="Annuler (Esc)"
+              style={{ padding: "0 8px", height: 24, minWidth: 0, borderRadius: 6, fontSize: 12, fontWeight: 700 }}
+            >
+              Annuler
+            </Button>
+          </div>
+        )}
       </td>
     </tr>
   );
 }
 
-/* --- Renommage inline catégorie (compact) --- */
-function InlineRename({ cat, onRename }) {
-  const [edit, setEdit] = useState(false);
-  const [val, setVal] = useState(cat.nom || "");
-  const save = () => {
-    const clean = val.trim();
-    if (clean && clean !== cat.nom) onRename?.(cat, clean);
-    setEdit(false);
-  };
-  if (!edit) {
-    return (
-      <Button variant="neutral" onClick={() => setEdit(true)} style={{ padding: "4px 8px", fontSize: 12 }}>
-        Renommer
-      </Button>
-    );
-  }
-  return (
-    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-      <input
-        value={val}
-        onChange={(e) => setVal(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && save()}
-        autoFocus
-        style={{ ...styles.input, height: 28, padding: "2px 6px" }}
-      />
-      <Button variant="success" onClick={save} style={{ padding: "4px 8px", fontSize: 12 }}>
-        OK
-      </Button>
-    </div>
-  );
-}
-
 /* ---------- En-tête de catégorie (compact + petite croix + confirm) ---------- */
-function CategoryHeaderRow({ cat, count, total, collapsed, onToggle, onRename, onAskDelete }) {
+function CategoryHeaderRow({
+  cat,
+  count,
+  total,
+  collapsed,
+  onToggle,
+  onRename,
+  onAskDelete,
+}) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(cat?.nom || "");
   const isNone = !cat;
 
-  const save = () => {
-    const clean = name.trim();
-    if (!cat || !clean || clean === cat.nom) { setEditing(false); return; }
-    onRename?.(cat, clean);
+  // ✅ Quand Firestore renvoie le nouveau nom, on ferme l'édition automatiquement
+  useEffect(() => {
+    setName(cat?.nom || "");
     setEditing(false);
+  }, [cat?.id, cat?.nom]);
+
+  const save = async () => {
+    const clean = name.trim();
+    if (!cat || !clean) {
+      setEditing(false);
+      return;
+    }
+    if (clean === (cat.nom || "")) {
+      setEditing(false);
+      return;
+    }
+
+    try {
+      // ✅ on attend l'update (si erreur, on reste en édition)
+      await onRename?.(cat, clean);
+      setEditing(false);
+    } catch (e) {
+      // laisse l'édition ouverte si ça fail
+      console.error(e);
+    }
   };
 
   return (
@@ -279,7 +460,14 @@ function CategoryHeaderRow({ cat, count, total, collapsed, onToggle, onRename, o
           borderBottom: "1px solid #e2e8f0",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            justifyContent: "space-between",
+          }}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <button
               onClick={onToggle}
@@ -295,17 +483,18 @@ function CategoryHeaderRow({ cat, count, total, collapsed, onToggle, onRename, o
             >
               {collapsed ? "▶" : "▼"}
             </button>
+
             {editing ? (
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                onBlur={save}
+                onKeyDown={(e) => e.key === "Enter" && save()}
                 autoFocus
                 style={{ ...styles.input, height: 34, minWidth: 240 }}
               />
             ) : (
               <div style={{ fontWeight: 900, letterSpacing: 0.3 }}>
-                {isNone ? "— Aucune catégorie —" : (cat.nom || "—")}
+                {isNone ? "— Aucune catégorie —" : cat.nom || "—"}
               </div>
             )}
           </div>
@@ -313,16 +502,31 @@ function CategoryHeaderRow({ cat, count, total, collapsed, onToggle, onRename, o
           {!isNone && (
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               {editing ? (
-                <Button variant="success" onClick={save} style={{ padding: "4px 8px", fontSize: 12 }}>OK</Button>
+                <Button
+                  variant="success"
+                  onClick={save}
+                  style={{ padding: "4px 8px", fontSize: 12 }}
+                >
+                  OK
+                </Button>
               ) : (
-                <Button variant="neutral" onClick={() => setEditing(true)} style={{ padding: "4px 8px", fontSize: 12 }}>
+                <Button
+                  variant="neutral"
+                  onClick={() => setEditing(true)}
+                  style={{ padding: "4px 8px", fontSize: 12 }}
+                >
                   Renommer
                 </Button>
               )}
+
               <Button
                 variant="danger"
                 onClick={onAskDelete}
-                title={count > 0 ? "Impossible: la catégorie n'est pas vide" : "Supprimer la catégorie"}
+                title={
+                  count > 0
+                    ? "Impossible: la catégorie n'est pas vide"
+                    : "Supprimer la catégorie"
+                }
                 disabled={count > 0}
                 aria-label="Supprimer la catégorie"
                 style={{
@@ -368,11 +572,13 @@ export default function PageMateriels() {
   const rows = useMateriels(setError);
   const categories = useCategories(setError);
 
+  const term = q.trim().toLowerCase();
+
   const groups = useMemo(() => {
     const byName = new Map();
     categories.forEach((c) => byName.set(c.nom, []));
     const none = [];
-    const term = q.trim().toLowerCase();
+
     const pass = (r) =>
       !term ||
       r.nom?.toLowerCase().includes(term) ||
@@ -386,11 +592,24 @@ export default function PageMateriels() {
       else (byName.get(k) || (byName.set(k, []), byName.get(k))).push(r);
     });
 
-    const out = categories.map((c) => ({ cat: c, items: byName.get(c.nom) || [] }));
-    // ❗️N’ajoute le groupe “Aucune” que s’il contient des items
+    // Base: toutes les catégories
+    let out = categories.map((c) => ({
+      cat: c,
+      items: byName.get(c.nom) || [],
+    }));
+
+    // Groupe "Aucune" seulement si items
     if (none.length > 0) out.push({ cat: null, items: none });
+
+    // ✅ Quand on cherche: cacher les catégories vides
+    if (term) out = out.filter((g) => g.items.length > 0);
+
     return out;
-  }, [rows, categories, q]);
+  }, [rows, categories, term]);
+
+  const totalVisibleItems = useMemo(() => {
+    return groups.reduce((sum, g) => sum + (g.items?.length || 0), 0);
+  }, [groups]);
 
   const idToName = useMemo(() => {
     const m = new Map();
@@ -409,10 +628,13 @@ export default function PageMateriels() {
       await addDoc(collection(db, "materiels"), {
         nom: cleanNom,
         prix: Math.round(num * 100) / 100,
-        categorie: mCatId ? (idToName.get(mCatId) || null) : null,
+        categorie: mCatId ? idToName.get(mCatId) || null : null,
         createdAt: serverTimestamp(),
       });
-      setMNom(""); setMPrix(""); setMCatId(""); setOpenAddItem(false);
+      setMNom("");
+      setMPrix("");
+      setMCatId("");
+      setOpenAddItem(false);
     } catch (err) {
       setError(err?.message || String(err));
     } finally {
@@ -425,8 +647,12 @@ export default function PageMateriels() {
     if (!clean) return;
     try {
       setBusyCat(true);
-      await addDoc(collection(db, "categoriesMateriels"), { nom: clean, createdAt: serverTimestamp() });
-      setCNom(""); setOpenAddCat(false);
+      await addDoc(collection(db, "categoriesMateriels"), {
+        nom: clean,
+        createdAt: serverTimestamp(),
+      });
+      setCNom("");
+      setOpenAddCat(false);
     } catch (err) {
       setError(err?.message || String(err));
     } finally {
@@ -450,24 +676,40 @@ export default function PageMateriels() {
     }
   };
 
-  const totalFor = (items) => items.reduce((sum, r) => sum + (Number(r.prix) || 0), 0);
-  const toggle = (catIdKey) => setCollapsed((m) => ({ ...m, [catIdKey]: !m[catIdKey] }));
+  const totalFor = (items) =>
+    items.reduce((sum, r) => sum + (Number(r.prix) || 0), 0);
+
+  const toggle = (catIdKey) =>
+    setCollapsed((m) => ({ ...m, [catIdKey]: !m[catIdKey] }));
 
   /* --- rendering --- */
   return (
     <PageContainer>
       <TopBar
-        left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 900 }}>Inventaire — entrepôt</h1>}
+        left={
+          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 900 }}>
+            Inventaire — entrepôt
+          </h1>
+        }
         right={
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Recherche (nom, cat., prix)…"
-              style={{ ...styles.input, width: 260, height: 32, padding: "4px 8px" }}
+              style={{
+                ...styles.input,
+                width: 260,
+                height: 32,
+                padding: "4px 8px",
+              }}
             />
-            <Button variant="neutral" onClick={() => setOpenAddCat(true)}>Ajouter une catégorie</Button>
-            <Button variant="primary" onClick={() => setOpenAddItem(true)}>Ajouter un article</Button>
+            <Button variant="neutral" onClick={() => setOpenAddCat(true)}>
+              Ajouter une catégorie
+            </Button>
+            <Button variant="primary" onClick={() => setOpenAddItem(true)}>
+              Ajouter un article
+            </Button>
           </div>
         }
       />
@@ -499,7 +741,7 @@ export default function PageMateriels() {
                       padding: "6px 8px",
                       ...(i === 1 ? { textAlign: "right", width: 110 } : {}),
                       ...(i === 2 ? { width: 200 } : {}),
-                      ...(i === 3 ? { textAlign: "right", width: 48 } : {}),
+                      ...(i === 3 ? { textAlign: "right", width: 120 } : {}),
                     }}
                   >
                     {h}
@@ -507,10 +749,21 @@ export default function PageMateriels() {
                 ))}
               </tr>
             </thead>
+
             <tbody>
+              {/* ✅ Quand on cherche et qu’il n’y a aucun résultat */}
+              {term && totalVisibleItems === 0 && (
+                <tr>
+                  <td colSpan={4} style={{ padding: "8px 10px", color: "#64748b" }}>
+                    Aucun résultat pour “<strong>{q}</strong>”.
+                  </td>
+                </tr>
+              )}
+
               {groups.map(({ cat, items }) => {
                 const key = cat ? cat.id : "__NONE__";
                 const isCollapsed = !!collapsed[key];
+
                 return (
                   <React.Fragment key={key}>
                     <CategoryHeaderRow
@@ -520,19 +773,23 @@ export default function PageMateriels() {
                       collapsed={isCollapsed}
                       onToggle={() => toggle(key)}
                       onRename={renameCategory}
-                      onAskDelete={() => setConfirmDeleteCat({ cat, itemsCount: items.length })}
+                      onAskDelete={() =>
+                        cat && setConfirmDeleteCat({ cat, itemsCount: items.length })
+                      }
                     />
 
-                    {!isCollapsed && items.map((r) => (
-                      <MaterielRow
-                        key={r.id}
-                        row={r}
-                        categories={categories}
-                        onError={setError}
-                      />
-                    ))}
+                    {!isCollapsed &&
+                      items.map((r) => (
+                        <MaterielRow
+                          key={r.id}
+                          row={r}
+                          categories={categories}
+                          onError={setError}
+                        />
+                      ))}
 
-                    {(!isCollapsed && items.length === 0) && (
+                    {/* ✅ “Aucun item…” seulement si PAS en recherche */}
+                    {!term && !isCollapsed && items.length === 0 && (
                       <tr>
                         <td colSpan={4} style={{ padding: "8px 10px", color: "#94a3b8" }}>
                           Aucun item dans cette catégorie.
@@ -543,13 +800,16 @@ export default function PageMateriels() {
                 );
               })}
 
-              {groups.length === 1 && groups[0].items.length === 0 && categories.length === 0 && (
-                <tr>
-                  <td colSpan={4} style={{ padding: "8px 10px", color: "#64748b" }}>
-                    Aucune donnée pour l’instant — ajoute une catégorie ou un article.
-                  </td>
-                </tr>
-              )}
+              {!term &&
+                groups.length === 1 &&
+                groups[0].items.length === 0 &&
+                categories.length === 0 && (
+                  <tr>
+                    <td colSpan={4} style={{ padding: "8px 10px", color: "#64748b" }}>
+                      Aucune donnée pour l’instant — ajoute une catégorie ou un article.
+                    </td>
+                  </tr>
+                )}
             </tbody>
           </table>
         </div>
@@ -588,13 +848,21 @@ export default function PageMateriels() {
             >
               <option value="">— Aucune —</option>
               {categories.map((c) => (
-                <option key={c.id} value={c.id}>{c.nom}</option>
+                <option key={c.id} value={c.id}>
+                  {c.nom}
+                </option>
               ))}
             </select>
           </label>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-            <Button variant="neutral" onClick={() => setOpenAddItem(false)}>Annuler</Button>
-            <Button variant="primary" onClick={submitAddItem} disabled={busyAdd || !mNom.trim()}>
+            <Button variant="neutral" onClick={() => setOpenAddItem(false)}>
+              Annuler
+            </Button>
+            <Button
+              variant="primary"
+              onClick={submitAddItem}
+              disabled={busyAdd || !mNom.trim()}
+            >
               Ajouter
             </Button>
           </div>
@@ -614,8 +882,14 @@ export default function PageMateriels() {
             />
           </label>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-            <Button variant="neutral" onClick={() => setOpenAddCat(false)}>Annuler</Button>
-            <Button variant="primary" onClick={submitAddCat} disabled={busyCat || !cNom.trim()}>
+            <Button variant="neutral" onClick={() => setOpenAddCat(false)}>
+              Annuler
+            </Button>
+            <Button
+              variant="primary"
+              onClick={submitAddCat}
+              disabled={busyCat || !cNom.trim()}
+            >
               Ajouter
             </Button>
           </div>
@@ -640,7 +914,9 @@ export default function PageMateriels() {
               </p>
             )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <Button variant="neutral" onClick={() => setConfirmDeleteCat(null)}>Annuler</Button>
+              <Button variant="neutral" onClick={() => setConfirmDeleteCat(null)}>
+                Annuler
+              </Button>
               <Button
                 variant="danger"
                 onClick={async () => {

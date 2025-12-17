@@ -72,6 +72,26 @@ function minusDays(d, n) {
   return x;
 }
 
+/**
+ * ✅ NO (en haut de la facture) = numéro de dossier du projet.
+ * On essaie d'abord numeroDossier (ou variantes possibles),
+ * puis on fallback sur numeroUnite, puis numeroFacture, puis id.
+ */
+function getDossierNo(projet) {
+  const candidates = [
+    projet?.numeroDossier,
+    projet?.noDossier,
+    projet?.dossierNo,
+    projet?.numeroDossierClient,
+    projet?.numeroUnite,
+    projet?.numeroFacture,
+  ];
+  const found = candidates.find((v) => v != null && String(v).trim() !== "");
+  if (found != null) return String(found);
+  if (projet?.id) return String(projet.id).slice(0, 8);
+  return "—";
+}
+
 /* ---------------------- Hooks communs ---------------------- */
 
 // temps total de tout le projet (segments)
@@ -84,28 +104,14 @@ async function computeProjectTotalMs(projId) {
 
   for (const key of dayIds) {
     const segSnap = await getDocs(
-      query(
-        collection(db, "projets", projId, "timecards", key, "segments"),
-        orderBy("start", "asc")
-      )
+      query(collection(db, "projets", projId, "timecards", key, "segments"), orderBy("start", "asc"))
     );
     segSnap.forEach((sdoc) => {
       const s = sdoc.data();
-      const st = s.start?.toDate
-        ? s.start.toDate()
-        : s.start
-        ? new Date(s.start)
-        : null;
-      const en = s.end?.toDate
-        ? s.end.toDate()
-        : s.end
-        ? new Date(s.end)
-        : null;
+      const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
+      const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
       if (!st) return;
-      const dur = Math.max(
-        0,
-        (en ? en.getTime() : Date.now()) - st.getTime()
-      );
+      const dur = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
       total += dur;
     });
   }
@@ -292,10 +298,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
   // 🔄 Matériel utilisé : on écoute en live pendant l'étape "summary"
   useEffect(() => {
     if (!open || step !== "summary" || !projet?.id) return;
-    const qy = query(
-      collection(db, "projets", projet.id, "usagesMateriels"),
-      orderBy("nom", "asc")
-    );
+    const qy = query(collection(db, "projets", projet.id, "usagesMateriels"), orderBy("nom", "asc"));
     const unsub = onSnapshot(
       qy,
       (snap) => {
@@ -361,10 +364,12 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
       // 👉 Adresse de destination fixe pour toi
       const toEmail = "jlabrie@styro.ca";
 
+      const dossierNo = getDossierNo(projet);
+
       await sendInvoiceEmail({
         projetId: projet.id,
         toEmail,
-        subject: `Facture Gyrotech – ${projet.nom || projet.id || "Projet"}`,
+        subject: `Facture Gyrotech – Dossier ${dossierNo} – ${projet.nom || projet.id || "Projet"}`,
         text: "Bonjour, veuillez trouver ci-joint la facture de votre intervention.",
         pdfPath,
       });
@@ -388,10 +393,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
 
   if (!open || !projet) return null;
 
-  const totalMateriel = usages.reduce(
-    (s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0),
-    0
-  );
+  const totalMateriel = usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0);
   const tempsOuvertureMinutes = Number(projet.tempsOuvertureMinutes || 0) || 0;
   const totalMsInclOuverture = totalMs + tempsOuvertureMinutes * 60 * 1000;
 
@@ -404,8 +406,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
   const projetRate = Number(projet.tauxHoraire || 0);
   const tauxHoraire = configRate || projetRate || 0;
 
-  const coutMainOeuvre =
-    tauxHoraire > 0 ? totalHeuresArrondies * tauxHoraire : null;
+  const coutMainOeuvre = tauxHoraire > 0 ? totalHeuresArrondies * tauxHoraire : null;
 
   // 💰 Sous-total + taxes
   const sousTotal = totalMateriel + (coutMainOeuvre || 0);
@@ -421,6 +422,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
     padding: 10,
     marginBottom: 8,
   };
+
+  const dossierNo = getDossierNo(projet);
 
   return (
     <div
@@ -464,17 +467,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
           fontSize: 13,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 18 }}>
-            Fermeture du projet — {projet.nom || "Sans nom"}
-          </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>Fermeture du projet — {projet.nom || "Sans nom"}</div>
           <button
             onClick={onCancel}
             style={{
@@ -561,26 +555,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
               }}
             >
               {/* En-tête facture */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  marginBottom: 12,
-                }}
-              >
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
                 <div>
-                  <div
-                    style={{
-                      fontSize: 22,
-                      fontWeight: 900,
-                      letterSpacing: 1,
-                    }}
-                  >
+                  <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 1 }}>
                     {factureConfig.companyName || "Gyrotech"}
                   </div>
                   <div style={{ fontSize: 11, color: "#6b7280" }}>
-                    {factureConfig.companySubtitle ||
-                      "Service mobile – Diagnostic & réparation"}
+                    {factureConfig.companySubtitle || "Service mobile – Diagnostic & réparation"}
                     <br />
                     {factureConfig.companyPhone && (
                       <>
@@ -588,39 +569,21 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
                         <br />
                       </>
                     )}
-                    {factureConfig.companyEmail && (
-                      <>Courriel : {factureConfig.companyEmail}</>
-                    )}
+                    {factureConfig.companyEmail && <>Courriel : {factureConfig.companyEmail}</>}
                   </div>
                 </div>
-                <div
-                  style={{
-                    textAlign: "right",
-                    fontSize: 12,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 16,
-                      fontWeight: 800,
-                      marginBottom: 4,
-                    }}
-                  >
-                    FACTURE
-                  </div>
+
+                <div style={{ textAlign: "right", fontSize: 12 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>FACTURE</div>
+
+                  {/* ✅ ICI: No = Numéro de dossier */}
                   <div>
-                    <strong>No :</strong>{" "}
-                    {projet.numeroFacture ||
-                      (projet.id || "").slice(0, 8) ||
-                      "—"}
+                    <strong>No :</strong> {dossierNo}
                   </div>
+
                   <div>
                     <strong>Date :</strong>{" "}
-                    {fmtDate(
-                      projet.fermeCompletAt ||
-                        projet.createdAt ||
-                        new Date()
-                    )}
+                    {fmtDate(projet.fermeCompletAt || projet.createdAt || new Date())}
                   </div>
                   <div>
                     <strong>Projet :</strong> {projet.nom || "—"}
@@ -629,59 +592,21 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
               </div>
 
               {/* Infos client + véhicule/projet */}
-              <div
-                style={{
-                  display: "flex",
-                  gap: 16,
-                  marginBottom: 12,
-                  alignItems: "flex-start",
-                }}
-              >
+              <div style={{ display: "flex", gap: 16, marginBottom: 12, alignItems: "flex-start" }}>
                 <div style={{ flex: 1 }}>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 700,
-                      marginBottom: 4,
-                    }}
-                  >
-                    Facturé à
-                  </div>
-                  <div
-                    style={{
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 8,
-                      padding: 8,
-                      fontSize: 12,
-                    }}
-                  >
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Facturé à</div>
+                  <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 12 }}>
                     <div>
-                      <strong>
-                        {projet.clientNom || projet.nom || "—"}
-                      </strong>
+                      <strong>{projet.clientNom || projet.nom || "—"}</strong>
                     </div>
-                    {projet.clientAdresse && (
-                      <div>{projet.clientAdresse}</div>
-                    )}
-                    {projet.clientTelephone && (
-                      <div>Tél : {projet.clientTelephone}</div>
-                    )}
-                    {projet.clientCourriel && (
-                      <div>Courriel : {projet.clientCourriel}</div>
-                    )}
+                    {projet.clientAdresse && <div>{projet.clientAdresse}</div>}
+                    {projet.clientTelephone && <div>Tél : {projet.clientTelephone}</div>}
+                    {projet.clientCourriel && <div>Courriel : {projet.clientCourriel}</div>}
                   </div>
                 </div>
 
                 <div style={{ flex: 1 }}>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 700,
-                      marginBottom: 4,
-                    }}
-                  >
-                    Détails véhicule / projet
-                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Détails véhicule / projet</div>
                   <div
                     style={{
                       border: "1px solid #e5e7eb",
@@ -716,113 +641,41 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
 
               {/* Lignes de facture : main-d'œuvre */}
               <div style={{ marginBottom: 12 }}>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 700,
-                    marginBottom: 4,
-                  }}
-                >
-                  Détail de la facture
-                </div>
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
-                    marginBottom: 8,
-                  }}
-                >
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Détail de la facture</div>
+
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 8 }}>
                   <thead>
                     <tr style={{ background: "#f1f5f9" }}>
-                      <th
-                        style={{
-                          textAlign: "left",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
+                      <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid #e2e8f0" }}>
                         Description
                       </th>
-                      <th
-                        style={{
-                          textAlign: "center",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
-                        Qté
-                      </th>
-                      <th
-                        style={{
-                          textAlign: "right",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
+                      <th style={{ textAlign: "center", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Qté</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>
                         Prix unitaire
                       </th>
-                      <th
-                        style={{
-                          textAlign: "right",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
-                        Total
-                      </th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Total</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
-                      <td
-                        style={{
-                          padding: 6,
-                          borderBottom: "1px solid #f1f5f9",
-                        }}
-                      >
-                        Main-d&apos;œuvre –{" "}
-                        {projet.nom || "Travaux mécaniques"}
+                      <td style={{ padding: 6, borderBottom: "1px solid #f1f5f9" }}>
+                        Main-d&apos;œuvre – {projet.nom || "Travaux mécaniques"}
                       </td>
-                      <td
-                        style={{
-                          padding: 6,
-                          textAlign: "center",
-                          borderBottom: "1px solid #f1f5f9",
-                        }}
-                      >
+                      <td style={{ padding: 6, textAlign: "center", borderBottom: "1px solid #f1f5f9" }}>
                         {totalHeuresArrondies.toLocaleString("fr-CA", {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}{" "}
                         h
                       </td>
-                      <td
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                          borderBottom: "1px solid #f1f5f9",
-                        }}
-                      >
+                      <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
                         {tauxHoraire > 0
-                          ? tauxHoraire.toLocaleString("fr-CA", {
-                              style: "currency",
-                              currency: "CAD",
-                            })
+                          ? tauxHoraire.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })
                           : "—"}
                       </td>
-                      <td
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                          borderBottom: "1px solid #f1f5f9",
-                        }}
-                      >
+                      <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
                         {coutMainOeuvre != null
-                          ? coutMainOeuvre.toLocaleString("fr-CA", {
-                              style: "currency",
-                              currency: "CAD",
-                            })
+                          ? coutMainOeuvre.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })
                           : "—"}
                       </td>
                     </tr>
@@ -860,51 +713,15 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
                   </button>
                 </div>
 
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
-                  }}
-                >
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: "#f1f5f9" }}>
-                      <th
-                        style={{
-                          textAlign: "left",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
-                        Nom
-                      </th>
-                      <th
-                        style={{
-                          textAlign: "center",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
-                        Qté
-                      </th>
-                      <th
-                        style={{
-                          textAlign: "right",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
+                      <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Nom</th>
+                      <th style={{ textAlign: "center", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Qté</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>
                         Prix unitaire
                       </th>
-                      <th
-                        style={{
-                          textAlign: "right",
-                          padding: 6,
-                          borderBottom: "1px solid #e2e8f0",
-                        }}
-                      >
-                        Total
-                      </th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Total</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -914,59 +731,23 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
                       const tot = qty * prix;
                       return (
                         <tr key={u.id}>
-                          <td
-                            style={{
-                              padding: 6,
-                              borderBottom: "1px solid #f1f5f9",
-                            }}
-                          >
-                            {u.nom}
-                          </td>
-                          <td
-                            style={{
-                              padding: 6,
-                              textAlign: "center",
-                              borderBottom: "1px solid #f1f5f9",
-                            }}
-                          >
+                          <td style={{ padding: 6, borderBottom: "1px solid #f1f5f9" }}>{u.nom}</td>
+                          <td style={{ padding: 6, textAlign: "center", borderBottom: "1px solid #f1f5f9" }}>
                             {qty}
                           </td>
-                          <td
-                            style={{
-                              padding: 6,
-                              textAlign: "right",
-                              borderBottom: "1px solid #f1f5f9",
-                            }}
-                          >
-                            {prix.toLocaleString("fr-CA", {
-                              style: "currency",
-                              currency: "CAD",
-                            })}
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
+                            {prix.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                           </td>
-                          <td
-                            style={{
-                              padding: 6,
-                              textAlign: "right",
-                              borderBottom: "1px solid #f1f5f9",
-                            }}
-                          >
-                            {tot.toLocaleString("fr-CA", {
-                              style: "currency",
-                              currency: "CAD",
-                            })}
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
+                            {tot.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                           </td>
                         </tr>
                       );
                     })}
+
                     {usages.length === 0 && (
                       <tr>
-                        <td
-                          colSpan={4}
-                          style={{
-                            padding: 6,
-                            color: "#6b7280",
-                          }}
-                        >
+                        <td colSpan={4} style={{ padding: 6, color: "#6b7280" }}>
                           Aucun matériel enregistré.
                         </td>
                       </tr>
@@ -974,138 +755,52 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
 
                     {/* lignes de totaux à la FIN du tableau */}
                     <tr>
-                      <td
-                        colSpan={3}
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                          fontWeight: 600,
-                        }}
-                      >
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right", fontWeight: 600 }}>
                         Sous-total :
                       </td>
-                      <td
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {sousTotal.toLocaleString("fr-CA", {
-                          style: "currency",
-                          currency: "CAD",
-                        })}
+                      <td style={{ padding: 6, textAlign: "right", fontWeight: 600 }}>
+                        {sousTotal.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
                     </tr>
                     <tr>
-                      <td
-                        colSpan={3}
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                        }}
-                      >
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right" }}>
                         TPS (5,0 %) :
                       </td>
-                      <td
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                        }}
-                      >
-                        {tps.toLocaleString("fr-CA", {
-                          style: "currency",
-                          currency: "CAD",
-                        })}
+                      <td style={{ padding: 6, textAlign: "right" }}>
+                        {tps.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
                     </tr>
                     <tr>
-                      <td
-                        colSpan={3}
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                        }}
-                      >
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right" }}>
                         TVQ (9,975 %) :
                       </td>
-                      <td
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                        }}
-                      >
-                        {tvq.toLocaleString("fr-CA", {
-                          style: "currency",
-                          currency: "CAD",
-                        })}
+                      <td style={{ padding: 6, textAlign: "right" }}>
+                        {tvq.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
                     </tr>
                     <tr>
-                      <td
-                        colSpan={3}
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                          fontWeight: 700,
-                        }}
-                      >
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right", fontWeight: 700 }}>
                         Total :
                       </td>
-                      <td
-                        style={{
-                          padding: 6,
-                          textAlign: "right",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {totalFacture.toLocaleString("fr-CA", {
-                          style: "currency",
-                          currency: "CAD",
-                        })}
+                      <td style={{ padding: 6, textAlign: "right", fontWeight: 700 }}>
+                        {totalFacture.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
-              <div
-                style={{
-                  marginTop: 12,
-                  fontSize: 11,
-                  color: "#6b7280",
-                }}
-              >
-                Merci pour votre confiance!
-              </div>
+              <div style={{ marginTop: 12, fontSize: 11, color: "#6b7280" }}>Merci pour votre confiance!</div>
             </div>
 
             {/* Cases à cocher de confirmation */}
-            <div
-              style={{
-                ...box,
-                background: "#f9fafb",
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  marginBottom: 6,
-                }}
-              >
-                Confirmer avant de fermer
-              </div>
+            <div style={{ ...box, background: "#f9fafb" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Confirmer avant de fermer</div>
               <label style={{ display: "block", marginBottom: 4 }}>
                 <input
                   type="checkbox"
                   checked={checks.infos}
-                  onChange={(e) =>
-                    setChecks((s) => ({
-                      ...s,
-                      infos: e.target.checked,
-                    }))
-                  }
+                  onChange={(e) => setChecks((s) => ({ ...s, infos: e.target.checked }))}
                 />{" "}
                 J’ai vérifié les informations du projet.
               </label>
@@ -1113,12 +808,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
                 <input
                   type="checkbox"
                   checked={checks.materiel}
-                  onChange={(e) =>
-                    setChecks((s) => ({
-                      ...s,
-                      materiel: e.target.checked,
-                    }))
-                  }
+                  onChange={(e) => setChecks((s) => ({ ...s, materiel: e.target.checked }))}
                 />{" "}
                 J’ai vérifié le matériel utilisé.
               </label>
@@ -1126,25 +816,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
                 <input
                   type="checkbox"
                   checked={checks.temps}
-                  onChange={(e) =>
-                    setChecks((s) => ({
-                      ...s,
-                      temps: e.target.checked,
-                    }))
-                  }
+                  onChange={(e) => setChecks((s) => ({ ...s, temps: e.target.checked }))}
                 />{" "}
                 J’ai vérifié le temps total.
               </label>
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                marginTop: 4,
-              }}
-            >
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
               <button
                 type="button"
                 onClick={onCancel}
@@ -1182,11 +860,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed }) {
 
         {/* Popup matériel (plein écran, même que sur la liste) */}
         {materielOpen && (
-          <ProjectMaterielPanel
-            projId={projet.id}
-            onClose={() => setMaterielOpen(false)}
-            setParentError={setError}
-          />
+          <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />
         )}
       </div>
     </div>
@@ -1233,9 +907,8 @@ function useClosedProjects(setError) {
           if (isOpen) return;
 
           const closedAt = toDateSafe(data.fermeCompletAt);
-          if (closedAt && closedAt < cutoff) {
-            return;
-          }
+          if (closedAt && closedAt < cutoff) return;
+
           list.push({ id: d.id, ...data });
         });
         list.sort((a, b) => {
@@ -1273,12 +946,7 @@ export default function PageProjetsFermes() {
   };
 
   return (
-    <div
-      style={{
-        padding: 20,
-        fontFamily: "Arial, system-ui, -apple-system",
-      }}
-    >
+    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       {error && (
         <div
           style={{
@@ -1294,25 +962,9 @@ export default function PageProjetsFermes() {
         </div>
       )}
 
-      <h1
-        style={{
-          margin: 0,
-          marginBottom: 10,
-          fontSize: 26,
-          fontWeight: 900,
-        }}
-      >
-        📁 Projets fermés
-      </h1>
-      <div
-        style={{
-          fontSize: 12,
-          color: "#6b7280",
-          marginBottom: 10,
-        }}
-      >
-        Affiche les projets fermés complètement depuis moins de 2 mois. Tu peux
-        les réouvrir au besoin.
+      <h1 style={{ margin: 0, marginBottom: 10, fontSize: 26, fontWeight: 900 }}>📁 Projets fermés</h1>
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+        Affiche les projets fermés complètement depuis moins de 2 mois. Tu peux les réouvrir au besoin.
       </div>
 
       <div style={{ overflowX: "auto" }}>
@@ -1328,112 +980,29 @@ export default function PageProjetsFermes() {
         >
           <thead>
             <tr style={{ background: "#f6f7f8" }}>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 8,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Nom
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 8,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Unité
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 8,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Date fermeture
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 8,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
+              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Nom</th>
+              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Unité</th>
+              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Date fermeture</th>
+              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>
                 Temps ouverture (min)
               </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 8,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Remarque
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: 8,
-                  borderBottom: "1px solid #e0e0e0",
-                }}
-              >
-                Actions
-              </th>
+              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Remarque</th>
+              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {projets.map((p) => (
               <tr key={p.id}>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                  }}
-                >
-                  {p.nom || "—"}
-                </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                  }}
-                >
-                  {p.numeroUnite || "—"}
-                </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                  }}
-                >
-                  {fmtDate(p.fermeCompletAt)}
-                </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                  }}
-                >
+                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{p.nom || "—"}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{p.numeroUnite || "—"}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{fmtDate(p.fermeCompletAt)}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
                   {Number(p.tempsOuvertureMinutes || 0) || 0}
                 </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                    color: "#6b7280",
-                  }}
-                >
+                <td style={{ padding: 8, borderBottom: "1px solid #eee", color: "#6b7280" }}>
                   Projet archivé (sera supprimé après 2 mois).
                 </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                  }}
-                >
+                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
                   <button
                     type="button"
                     onClick={() => handleReopen(p)}

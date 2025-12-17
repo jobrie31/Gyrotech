@@ -1,6 +1,14 @@
-// src/PageListeProjet.jsx — Liste + Détails jam-packed + Matériel (panel inline simplifié) 
+// src/PageListeProjet.jsx — Liste + Détails jam-packed + Matériel (panel inline simplifié)
+// ✅ FIX: Total d'heures compilées en temps réel (segments open => tick + listeners)
+// ✅ AJOUT: No de dossier auto (5000, 5001, ...) + Temps estimé (heures) dans le formulaire création
+// ✅ AJOUT: Nom du client / Entreprise (clientNom)
+// ✅ AJOUT: clientNom dans le tableau (avant Unité)
+// ✅ MODIF: Résumé du projet sur 1 ligne (3 cartes)
+// ✅ AJOUT: Créateur auto + punch auto du temps "questionnaire" (employé + projet) quand on crée un projet
+// ✅ UI: Colonnes + valeurs centrées
+
 import React, { useEffect, useRef, useState } from "react";
-import { db, storage } from "./firebaseConfig";
+import { db, storage, auth } from "./firebaseConfig";
 import {
   collection,
   addDoc,
@@ -10,6 +18,11 @@ import {
   updateDoc,
   getDocs,
   deleteDoc,
+  query,
+  orderBy,
+  limit,
+  where,
+  getDoc,
   setDoc,
 } from "firebase/firestore";
 import {
@@ -31,7 +44,6 @@ import { CloseProjectWizard } from "./PageProjetsFermes";
 import AutresProjetsSection from "./AutresProjetsSection";
 
 /* ---------------------- Utils ---------------------- */
-// Format « 10 oct 2025 » / « 30 sept 2025 »
 const MONTHS_FR_ABBR = [
   "janv",
   "févr",
@@ -47,12 +59,22 @@ const MONTHS_FR_ABBR = [
   "déc",
 ];
 
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function dayKey(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+}
+function todayKey() {
+  return dayKey(new Date());
+}
+
 function toDateSafe(ts) {
   if (!ts) return null;
   try {
-    if (ts.toDate) return ts.toDate(); // Firestore Timestamp
+    if (ts.toDate) return ts.toDate();
     if (typeof ts === "string") {
-      // Supporte "YYYY-MM-DD" pour éviter les décalages de fuseau (UTC)
       const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (m) {
         const y = Number(m[1]);
@@ -90,34 +112,166 @@ function minusDays(d, n) {
   return x;
 }
 
-function pad2(n) {
-  return n.toString().padStart(2, "0");
+function toNum(v) {
+  const n = parseFloat(String(v ?? "").replace(",", "."));
+  return Number.isFinite(n) ? n : null;
 }
 
-function dayKeyFromMs(ms) {
-  const d = new Date(ms);
-  const y = d.getFullYear();
-  const m = pad2(d.getMonth() + 1);
-  const day = pad2(d.getDate());
-  return `${y}-${m}-${day}`;
+function fmtHours(v) {
+  const n = typeof v === "number" ? v : toNum(v);
+  if (n == null) return "—";
+  return `${Math.round(n * 100) / 100} h`;
 }
 
-// Helpers Firestore pour timecards / segments
+/* ---------------------- ✅ Dossier auto (5000, 5001, ...) ---------------------- */
+async function getNextDossierNo() {
+  const qMax = query(
+    collection(db, "projets"),
+    orderBy("dossierNo", "desc"),
+    limit(1)
+  );
+  const snap = await getDocs(qMax);
+  if (snap.empty) return 5000;
+
+  const last = snap.docs[0].data();
+  const lastNo = Number(last?.dossierNo);
+  if (!Number.isFinite(lastNo) || lastNo < 5000) return 5000;
+  return lastNo + 1;
+}
+
+/* ---------------------- ✅ Mapping Auth -> Employé ---------------------- */
+// Cherche /employes où uid == auth.uid OU email == auth.email
+async function getEmpFromAuth() {
+  const u = auth.currentUser;
+  if (!u) return null;
+
+  const uid = u.uid || null;
+  const email = (u.email || "").trim().toLowerCase() || null;
+
+  try {
+    if (uid) {
+      const q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
+      const s1 = await getDocs(q1);
+      if (!s1.empty) {
+        const d = s1.docs[0];
+        const data = d.data() || {};
+        return { empId: d.id, empName: data.nom || null };
+      }
+    }
+  } catch {}
+
+  try {
+    if (email) {
+      const q2 = query(collection(db, "employes"), where("email", "==", email), limit(1));
+      const s2 = await getDocs(q2);
+      if (!s2.empty) {
+        const d = s2.docs[0];
+        const data = d.data() || {};
+        return { empId: d.id, empName: data.nom || null };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+/* ---------------------- ✅ Timecards helpers (Employés) ---------------------- */
 function empDayRef(empId, key) {
   return doc(db, "employes", empId, "timecards", key);
 }
 function empSegCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
+async function ensureEmpDay(empId, key) {
+  const ref = empDayRef(empId, key);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    const now = new Date();
+    await setDoc(ref, {
+      start: null,
+      end: null,
+      onBreak: false,
+      breakStartMs: null,
+      breakTotalMs: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return ref;
+}
+async function hasOpenEmpSeg(empId, key) {
+  const qOpen = query(empSegCol(empId, key), where("end", "==", null), limit(1));
+  const snap = await getDocs(qOpen);
+  return !snap.empty;
+}
+async function openEmpSeg(empId, key, jobId, jobName, startDate) {
+  const now = new Date();
+  await addDoc(empSegCol(empId, key), {
+    jobId: jobId || null,
+    jobName: jobName || null,
+    start: startDate || now,
+    end: null,
+    createdAt: now,
+    updatedAt: now,
+    source: "create_projet_questionnaire",
+  });
+
+  const dref = empDayRef(empId, key);
+  const ds = await getDoc(dref);
+  const d = ds.data() || {};
+  if (!d.start) await updateDoc(dref, { start: startDate || now, updatedAt: now });
+}
+
+/* ---------------------- ✅ Timecards helpers (Projets) ---------------------- */
 function projDayRef(projId, key) {
   return doc(db, "projets", projId, "timecards", key);
 }
 function projSegCol(projId, key) {
   return collection(db, "projets", projId, "timecards", key, "segments");
 }
+async function ensureProjDay(projId, key) {
+  const ref = projDayRef(projId, key);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    const now = new Date();
+    await setDoc(ref, {
+      start: null,
+      end: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return ref;
+}
+async function hasOpenProjSegForEmp(projId, empId, key) {
+  const qOpen = query(
+    projSegCol(projId, key),
+    where("end", "==", null),
+    where("empId", "==", empId),
+    limit(1)
+  );
+  const snap = await getDocs(qOpen);
+  return !snap.empty;
+}
+async function openProjSeg(projId, empId, empName, key, startDate) {
+  const now = new Date();
+  await addDoc(projSegCol(projId, key), {
+    empId,
+    empName: empName ?? null,
+    start: startDate || now,
+    end: null,
+    createdAt: now,
+    updatedAt: now,
+    source: "create_projet_questionnaire",
+  });
+
+  const dref = projDayRef(projId, key);
+  const ds = await getDoc(dref);
+  const d = ds.data() || {};
+  if (!d.start) await updateDoc(dref, { start: startDate || now, updatedAt: now });
+}
 
 /* ---------------------- Hooks ---------------------- */
-// ➜ Ne retourne que les projets OUVERTS
 function useProjets(setError) {
   const [rows, setRows] = useState([]);
 
@@ -130,12 +284,10 @@ function useProjets(setError) {
         snap.forEach((d) => {
           const data = d.data();
           const isOpen = data?.ouvert !== false;
-          if (!isOpen) return; // on ignore les fermés ici
+          if (!isOpen) return;
           list.push({ id: d.id, ouvert: isOpen, ...data });
         });
-        list.sort((a, b) =>
-          (a.nom || "").localeCompare(b.nom || "", "fr-CA")
-        );
+        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
         setRows(list);
       },
       (err) => setError?.(err?.message || String(err))
@@ -167,7 +319,10 @@ function ErrorBanner({ error, onClose }) {
       <strong>Erreur :</strong>
       <span style={{ flex: 1 }}>{error}</span>
       <button
-        onClick={onClose}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose?.();
+        }}
         style={{
           border: "none",
           background: "#b71c1c",
@@ -203,13 +358,11 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen }) {
           if (!data.fermeComplet) return;
 
           const isOpen = data?.ouvert !== false;
-          if (isOpen) return; // réouvert → ne pas afficher
+          if (isOpen) return;
 
           const closedAt = toDateSafe(data.fermeCompletAt);
-          if (closedAt && closedAt < cutoff) {
-            // plus vieux que 2 mois → on ne l’affiche pas
-            return;
-          }
+          if (closedAt && closedAt < cutoff) return;
+
           list.push({ id: d.id, ...data });
         });
         list.sort((a, b) => {
@@ -271,7 +424,10 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen }) {
             📁 Projets fermés (≤ 2 mois)
           </div>
           <button
-            onClick={onClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
             title="Fermer"
             style={{
               border: "none",
@@ -285,15 +441,9 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen }) {
           </button>
         </div>
 
-        <div
-          style={{
-            fontSize: 12,
-            color: "#6b7280",
-            marginBottom: 10,
-          }}
-        >
-          Projets fermés complètement depuis moins de 2 mois. Tu peux les
-          réouvrir au besoin.
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+          Projets fermés complètement depuis moins de 2 mois. Tu peux les réouvrir
+          au besoin.
         </div>
 
         <div style={{ overflowX: "auto" }}>
@@ -381,9 +531,7 @@ function PopupPDFManager({ open, onClose, projet }) {
             return { name, url };
           })
         );
-        if (!cancelled) {
-          setFiles(entries.sort((a, b) => a.name.localeCompare(b.name)));
-        }
+        if (!cancelled) setFiles(entries.sort((a, b) => a.name.localeCompare(b.name)));
       } catch (e) {
         if (!cancelled) {
           console.error(e);
@@ -403,8 +551,7 @@ function PopupPDFManager({ open, onClose, projet }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    if (file.type !== "application/pdf")
-      return setError("Sélectionne un PDF (.pdf).");
+    if (file.type !== "application/pdf") return setError("Sélectionne un PDF (.pdf).");
     if (!projet?.id) return setError("Projet invalide.");
 
     setBusy(true);
@@ -435,10 +582,7 @@ function PopupPDFManager({ open, onClose, projet }) {
     setBusy(true);
     setError(null);
     try {
-      const fileRef = storageRef(
-        storage,
-        `projets/${projet.id}/pdfs/${name}`
-      );
+      const fileRef = storageRef(storage, `projets/${projet.id}/pdfs/${name}`);
       await deleteObject(fileRef);
       setFiles((prev) => prev.filter((f) => f.name !== name));
     } catch (e) {
@@ -492,7 +636,10 @@ function PopupPDFManager({ open, onClose, projet }) {
             PDF – {projet.nom || "(projet)"}
           </div>
           <button
-            onClick={onClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
             title="Fermer"
             style={{
               border: "none",
@@ -506,18 +653,9 @@ function PopupPDFManager({ open, onClose, projet }) {
           </button>
         </div>
 
-        {error && (
-          <ErrorBanner error={error} onClose={() => setError(null)} />
-        )}
+        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            marginBottom: 10,
-          }}
-        >
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <button onClick={pickFile} style={btnPrimary} disabled={busy}>
             {busy ? "Téléversement..." : "Ajouter un PDF"}
           </button>
@@ -530,9 +668,7 @@ function PopupPDFManager({ open, onClose, projet }) {
           />
         </div>
 
-        <div style={{ fontWeight: 800, margin: "6px 0 8px" }}>
-          Fichiers du projet
-        </div>
+        <div style={{ fontWeight: 800, margin: "6px 0 8px" }}>Fichiers du projet</div>
         <table
           style={{
             width: "100%",
@@ -550,39 +686,20 @@ function PopupPDFManager({ open, onClose, projet }) {
           <tbody>
             {files.map((f, i) => (
               <tr key={i}>
-                <td style={{ ...td, wordBreak: "break-word" }}>
-                  {f.name}
-                </td>
+                <td style={{ ...td, wordBreak: "break-word" }}>{f.name}</td>
                 <td style={td}>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <a
-                      href={f.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={btnBlue}
-                    >
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
                       Ouvrir
                     </a>
                     <button
-                      onClick={() =>
-                        navigator.clipboard?.writeText(f.url)
-                      }
+                      onClick={() => navigator.clipboard?.writeText(f.url)}
                       style={btnSecondary}
                       title="Copier l’URL"
                     >
                       Copier l’URL
                     </button>
-                    <button
-                      onClick={() => onDelete(f.name)}
-                      style={btnDanger}
-                      disabled={busy}
-                    >
+                    <button onClick={() => onDelete(f.name)} style={btnDanger} disabled={busy}>
                       Supprimer
                     </button>
                   </div>
@@ -591,7 +708,7 @@ function PopupPDFManager({ open, onClose, projet }) {
             ))}
             {files.length === 0 && (
               <tr>
-                <td colSpan={2} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={2} style={{ padding: 12, color: "#666", textAlign: "center" }}>
                   Aucun PDF.
                 </td>
               </tr>
@@ -604,18 +721,12 @@ function PopupPDFManager({ open, onClose, projet }) {
 }
 
 /* ---------------------- Popup création / édition (questionnaire projet) ---------------------- */
-function PopupCreateProjet({
-  open,
-  onClose,
-  onError,
-  mode = "create",
-  projet = null,
-  onSaved,
-}) {
+function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = null, onSaved }) {
   const annees = useAnnees();
   const marques = useMarques();
 
   const [nom, setNom] = useState("");
+  const [clientNom, setClientNom] = useState("");
   const [clientTelephone, setClientTelephone] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
@@ -626,13 +737,16 @@ function PopupCreateProjet({
   const [odometre, setOdometre] = useState("");
   const [vin, setVin] = useState("");
 
+  const [tempsEstimeHeures, setTempsEstimeHeures] = useState("");
+  const [nextDossierNo, setNextDossierNo] = useState(null);
   const [msg, setMsg] = useState("");
 
-  // marque → modeles
   const marqueId = useMarqueIdFromName(marques, marque);
   const modeles = useModeles(marqueId);
 
-  // init des champs quand le popup s'ouvre (création / édition)
+  // ✅ timer “questionnaire”
+  const createStartMsRef = useRef(null);
+
   useEffect(() => {
     if (!open) return;
 
@@ -640,18 +754,21 @@ function PopupCreateProjet({
 
     if (mode === "edit" && projet) {
       setNom(projet.nom ?? "");
+      setClientNom(projet.clientNom ?? "");
       setClientTelephone(projet.clientTelephone ?? "");
       setNumeroUnite(projet.numeroUnite ?? "");
       setAnnee(projet.annee != null ? String(projet.annee) : "");
       setMarque(projet.marque ?? "");
       setModele(projet.modele ?? "");
       setPlaque(projet.plaque ?? "");
-      setOdometre(
-        projet.odometre != null ? String(projet.odometre) : ""
-      );
+      setOdometre(projet.odometre != null ? String(projet.odometre) : "");
       setVin(projet.vin ?? "");
+      setTempsEstimeHeures(projet.tempsEstimeHeures != null ? String(projet.tempsEstimeHeures) : "");
+      setNextDossierNo(null);
+      createStartMsRef.current = null;
     } else {
       setNom("");
+      setClientNom("");
       setClientTelephone("");
       setNumeroUnite("");
       setAnnee("");
@@ -660,15 +777,41 @@ function PopupCreateProjet({
       setPlaque("");
       setOdometre("");
       setVin("");
+      setTempsEstimeHeures("");
+      setNextDossierNo(null);
+
+      // ✅ Start timer dès l'ouverture (ou depuis PageAccueil si pending)
+      let startMs = Date.now();
+      try {
+        const pending = Number(window.sessionStorage?.getItem("pendingNewProjStartMs") || "");
+        if (Number.isFinite(pending) && pending > 0) startMs = pending;
+      } catch {}
+      createStartMsRef.current = startMs;
     }
   }, [open, mode, projet]);
 
-  // si on change la marque -> reset modèle
   useEffect(() => {
     setModele("");
   }, [marqueId]);
 
-  // 🔁 Quand on revient des réglages, recharger le brouillon sauvegardé
+  useEffect(() => {
+    if (!open || mode !== "create") return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const n = await getNextDossierNo();
+        if (!cancelled) setNextDossierNo(n);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode]);
+
   useEffect(() => {
     if (!open || mode !== "create") return;
     try {
@@ -677,6 +820,7 @@ function PopupCreateProjet({
       const draft = JSON.parse(raw);
 
       setNom(draft.nom ?? "");
+      setClientNom(draft.clientNom ?? "");
       setClientTelephone(draft.clientTelephone ?? "");
       setNumeroUnite(draft.numeroUnite ?? "");
       setAnnee(draft.annee ?? "");
@@ -685,8 +829,8 @@ function PopupCreateProjet({
       setPlaque(draft.plaque ?? "");
       setOdometre(draft.odometre ?? "");
       setVin(draft.vin ?? "");
+      setTempsEstimeHeures(draft.tempsEstimeHeures ?? "");
 
-      // On nettoie après usage
       window.sessionStorage?.removeItem("draftProjetFromReglages");
       window.sessionStorage?.removeItem("draftProjetOpen");
     } catch (e) {
@@ -698,47 +842,45 @@ function PopupCreateProjet({
     e.preventDefault();
     try {
       const cleanNom = nom.trim();
+      const cleanClientNom = clientNom.trim();
       const cleanClientTel = clientTelephone.trim();
       const cleanUnite = numeroUnite.trim();
-      const selectedYear = annees.find(
-        (a) => String(a.id) === String(annee)
-      );
-      const cleanAnnee = annee
-        ? Number(selectedYear?.value ?? annee)
-        : null;
+      const selectedYear = annees.find((a) => String(a.id) === String(annee));
+      const cleanAnnee = annee ? Number(selectedYear?.value ?? annee) : null;
       const cleanMarque = marque.trim() || null;
       const cleanModele = modele.trim() || null;
       const cleanPlaque = plaque.trim().toUpperCase();
       const cleanOdo = odometre.trim();
       const cleanVin = vin.trim().toUpperCase();
 
-      // 🔒 Tous les champs obligatoires
-      if (!cleanNom)
-        return setMsg("Indique un nom de projet (simple).");
-      if (!cleanClientTel)
-        return setMsg("Indique le téléphone du client.");
-      if (!cleanUnite)
-        return setMsg("Indique le numéro d’unité.");
-      if (!annee)
-        return setMsg("Sélectionne une année.");
-      if (!cleanMarque)
-        return setMsg("Sélectionne une marque.");
-      if (!cleanModele)
-        return setMsg("Sélectionne un modèle.");
-      if (!cleanPlaque)
-        return setMsg("Indique une plaque.");
-      if (!cleanOdo)
-        return setMsg("Indique un odomètre.");
-      if (!cleanVin)
-        return setMsg("Indique un VIN.");
+      const teRaw = tempsEstimeHeures.trim();
+      const teVal = teRaw === "" ? null : toNum(teRaw);
+      if (teRaw !== "" && (teVal == null || teVal < 0)) {
+        return setMsg("Temps estimé invalide (heures).");
+      }
+
+      if (!cleanNom) return setMsg("Indique un nom de projet (simple).");
+      if (!cleanClientNom) return setMsg("Indique le nom du client/entreprise.");
+      if (!cleanClientTel) return setMsg("Indique le téléphone du client.");
+      if (!cleanUnite) return setMsg("Indique le numéro d’unité.");
+      if (!annee) return setMsg("Sélectionne une année.");
+      if (!cleanMarque) return setMsg("Sélectionne une marque.");
+      if (!cleanModele) return setMsg("Sélectionne un modèle.");
+      if (!cleanPlaque) return setMsg("Indique une plaque.");
+      if (!cleanOdo) return setMsg("Indique un odomètre.");
+      if (!cleanVin) return setMsg("Indique un VIN.");
 
       if (!cleanAnnee || !/^\d{4}$/.test(String(cleanAnnee)))
         return setMsg("Année invalide (format AAAA).");
-      if (isNaN(Number(cleanOdo)))
-        return setMsg("Odomètre doit être un nombre.");
+      if (isNaN(Number(cleanOdo))) return setMsg("Odomètre doit être un nombre.");
+
+      const u = auth.currentUser;
+      const createdByUid = u?.uid || null;
+      const createdByEmail = u?.email || null;
 
       const payload = {
         nom: cleanNom,
+        clientNom: cleanClientNom,
         clientTelephone: cleanClientTel,
         numeroUnite: cleanUnite,
         annee: Number(cleanAnnee),
@@ -747,23 +889,83 @@ function PopupCreateProjet({
         plaque: cleanPlaque,
         odometre: Number(cleanOdo),
         vin: cleanVin,
+        tempsEstimeHeures: teVal,
       };
 
       if (mode === "edit" && projet?.id) {
-        // 🔁 édition d'un projet existant
         await updateDoc(doc(db, "projets", projet.id), payload);
       } else {
-        // ➕ création d'un nouveau projet
-        await addDoc(collection(db, "projets"), {
+        // ✅ Résoudre l'employé créateur (pending -> sinon mapping auth)
+        let creator = null;
+        let pendingEmpId = null;
+        let pendingEmpName = null;
+
+        try {
+          pendingEmpId = window.sessionStorage?.getItem("pendingNewProjEmpId") || null;
+          pendingEmpName = window.sessionStorage?.getItem("pendingNewProjEmpName") || null;
+        } catch {}
+
+        if (pendingEmpId) {
+          creator = { empId: pendingEmpId, empName: pendingEmpName || null };
+        } else {
+          creator = await getEmpFromAuth();
+        }
+
+        const dossierNo = await getNextDossierNo();
+        const createdAtNow = serverTimestamp();
+
+        const docRef = await addDoc(collection(db, "projets"), {
           ...payload,
+          dossierNo,
           ouvert: true,
-          createdAt: serverTimestamp(),
+          createdAt: createdAtNow,
+
+          // ✅ infos créateur
+          createdByUid,
+          createdByEmail,
+          createdByEmpId: creator?.empId || null,
+          createdByEmpName: creator?.empName || null,
         });
+
+        // ✅ Punch auto du temps questionnaire si on a un employé
+        if (creator?.empId) {
+          const startMs = Number(createStartMsRef.current || Date.now());
+          const startDate = new Date(Number.isFinite(startMs) ? startMs : Date.now());
+          const key = dayKey(startDate);
+
+          // On punch seulement si l'employé N'est PAS déjà punché aujourd'hui (évite doublons)
+          await ensureEmpDay(creator.empId, key);
+          const alreadyOpen = await hasOpenEmpSeg(creator.empId, key);
+
+          if (!alreadyOpen) {
+            await ensureProjDay(docRef.id, key);
+
+            // ouvre segment employé + projet, start = ouverture modal (ou startMs pending), end = null
+            await openEmpSeg(creator.empId, key, `proj:${docRef.id}`, cleanNom, startDate);
+            await openProjSeg(docRef.id, creator.empId, creator.empName || null, key, startDate);
+
+            // garde “dernier projet” sur l’employé
+            try {
+              await updateDoc(doc(db, "employes", creator.empId), {
+                lastProjectId: docRef.id,
+                lastProjectName: cleanNom,
+                lastProjectUpdatedAt: new Date(),
+              });
+            } catch {}
+          }
+        }
+
+        // ✅ Nettoie le pending (important)
+        try {
+          window.sessionStorage?.removeItem("pendingNewProjEmpId");
+          window.sessionStorage?.removeItem("pendingNewProjEmpName");
+          window.sessionStorage?.removeItem("pendingNewProjStartMs");
+          window.sessionStorage?.removeItem("openCreateProjet");
+        } catch {}
       }
 
       onSaved?.();
       onClose?.();
-      // 🔙 Retour page d'accueil après enregistrement
       window.location.hash = "#/";
     } catch (err) {
       console.error(err);
@@ -772,14 +974,12 @@ function PopupCreateProjet({
     }
   };
 
-  if (!open) return null;
-
   const goReglages = () => {
-    // On ne gère le retour que pour la création (pas pour l’édition)
     if (mode === "create") {
       try {
         const draft = {
           nom,
+          clientNom,
           clientTelephone,
           numeroUnite,
           annee,
@@ -788,19 +988,18 @@ function PopupCreateProjet({
           plaque,
           odometre,
           vin,
+          tempsEstimeHeures,
         };
-        window.sessionStorage?.setItem(
-          "draftProjetFromReglages",
-          JSON.stringify(draft)
-        );
+        window.sessionStorage?.setItem("draftProjetFromReglages", JSON.stringify(draft));
         window.sessionStorage?.setItem("draftProjetOpen", "1");
       } catch (e) {
         console.error("Erreur sauvegarde brouillon projet", e);
       }
     }
-
     window.location.hash = "#/reglages";
   };
+
+  if (!open) return null;
 
   return (
     <div
@@ -829,29 +1028,17 @@ function PopupCreateProjet({
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 800, fontSize: 18 }}>
-            {mode === "edit"
-              ? "Modifier le projet"
-              : "Créer un nouveau projet"}
+            {mode === "edit" ? "Modifier le projet" : "Créer un nouveau projet"}
           </div>
           <button
-            onClick={onClose}
-            title="Fermer"
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 26,
-              cursor: "pointer",
-              lineHeight: 1,
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
             }}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 26, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -872,51 +1059,53 @@ function PopupCreateProjet({
           </div>
         )}
 
-        <form
-          onSubmit={submit}
-          style={{ display: "flex", flexDirection: "column", gap: 8 }}
-        >
+        {mode === "create" && (
+          <div
+            style={{
+              marginBottom: 10,
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid #e5e7eb",
+              background: "#f8fafc",
+              fontSize: 12,
+              color: "#111827",
+            }}
+          >
+            <strong>No de dossier :</strong> {nextDossierNo != null ? nextDossierNo : "…"}
+          </div>
+        )}
+
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <FieldV label="Nom du projet (simple)">
-            <input
-              value={nom}
-              onChange={(e) => setNom(e.target.value)}
-              placeholder="Ex.: Entretien camion 12"
-              style={input}
-            />
+            <input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex.: Entretien camion 12" style={input} />
+          </FieldV>
+
+          <FieldV label="Nom du client / Entreprise">
+            <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} placeholder="Ex.: Transport ABC inc." style={input} />
           </FieldV>
 
           <FieldV label="Téléphone du client">
-            <input
-              value={clientTelephone}
-              onChange={(e) => setClientTelephone(e.target.value)}
-              placeholder="Ex.: 418 555-1234"
-              style={input}
-            />
+            <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} placeholder="Ex.: 418 555-1234" style={input} />
           </FieldV>
 
           <FieldV label="Numéro d’unité">
+            <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} placeholder="Ex.: 1234" style={input} />
+          </FieldV>
+
+          <FieldV label="Temps estimé (heures)">
             <input
-              value={numeroUnite}
-              onChange={(e) => setNumeroUnite(e.target.value)}
-              placeholder="Ex.: 1234"
+              value={tempsEstimeHeures}
+              onChange={(e) => setTempsEstimeHeures(e.target.value)}
+              placeholder="Ex.: 12.5"
+              inputMode="decimal"
               style={input}
             />
           </FieldV>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 8,
-            }}
-          >
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <FieldV label="Année">
               <div style={{ display: "flex", gap: 6 }}>
-                <select
-                  value={annee}
-                  onChange={(e) => setAnnee(e.target.value)}
-                  style={select}
-                >
+                <select value={annee} onChange={(e) => setAnnee(e.target.value)} style={select}>
                   <option value="">—</option>
                   {annees.map((a) => (
                     <option key={a.id} value={a.id}>
@@ -924,12 +1113,7 @@ function PopupCreateProjet({
                     </option>
                   ))}
                 </select>
-                <button
-                  type="button"
-                  onClick={goReglages}
-                  style={btnSecondarySmall}
-                  title="Gérer les années"
-                >
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les années">
                   Réglages
                 </button>
               </div>
@@ -937,11 +1121,7 @@ function PopupCreateProjet({
 
             <FieldV label="Marque">
               <div style={{ display: "flex", gap: 6 }}>
-                <select
-                  value={marque}
-                  onChange={(e) => setMarque(e.target.value)}
-                  style={select}
-                >
+                <select value={marque} onChange={(e) => setMarque(e.target.value)} style={select}>
                   <option value="">—</option>
                   {marques.map((m) => (
                     <option key={m.id} value={m.name}>
@@ -949,12 +1129,7 @@ function PopupCreateProjet({
                     </option>
                   ))}
                 </select>
-                <button
-                  type="button"
-                  onClick={goReglages}
-                  style={btnSecondarySmall}
-                  title="Ajouter/supprimer des marques"
-                >
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Ajouter/supprimer des marques">
                   Réglages
                 </button>
               </div>
@@ -963,12 +1138,7 @@ function PopupCreateProjet({
 
           <FieldV label="Modèle (lié à la marque)">
             <div style={{ display: "flex", gap: 6 }}>
-              <select
-                value={modele}
-                onChange={(e) => setModele(e.target.value)}
-                style={select}
-                disabled={!marqueId}
-              >
+              <select value={modele} onChange={(e) => setModele(e.target.value)} style={select} disabled={!marqueId}>
                 <option value="">—</option>
                 {modeles.map((mo) => (
                   <option key={mo.id} value={mo.name}>
@@ -976,41 +1146,22 @@ function PopupCreateProjet({
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                onClick={goReglages}
-                style={btnSecondarySmall}
-                title="Gérer les modèles"
-              >
+              <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les modèles">
                 Réglages
               </button>
             </div>
           </FieldV>
 
           <FieldV label="Plaque">
-            <input
-              value={plaque}
-              onChange={(e) => setPlaque(e.target.value.toUpperCase())}
-              placeholder="Ex.: ABC 123"
-              style={input}
-            />
+            <input value={plaque} onChange={(e) => setPlaque(e.target.value.toUpperCase())} placeholder="Ex.: ABC 123" style={input} />
           </FieldV>
+
           <FieldV label="Odomètre">
-            <input
-              value={odometre}
-              onChange={(e) => setOdometre(e.target.value)}
-              placeholder="Ex.: 152340"
-              inputMode="numeric"
-              style={input}
-            />
+            <input value={odometre} onChange={(e) => setOdometre(e.target.value)} placeholder="Ex.: 152340" inputMode="numeric" style={input} />
           </FieldV>
+
           <FieldV label="VIN">
-            <input
-              value={vin}
-              onChange={(e) => setVin(e.target.value.toUpperCase())}
-              placeholder="17 caractères"
-              style={input}
-            />
+            <input value={vin} onChange={(e) => setVin(e.target.value.toUpperCase())} placeholder="17 caractères" style={input} />
           </FieldV>
 
           <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
@@ -1028,20 +1179,13 @@ function PopupCreateProjet({
 }
 
 /* ---------------------- Détails + Onglets (jam-packed) ---------------------- */
-function PopupDetailsProjet({
-  open,
-  onClose,
-  projet,
-  onSaved,
-  onToggleSituation,
-  initialTab = "historique",
-}) {
+function PopupDetailsProjet({ open, onClose, projet, onSaved, onToggleSituation, initialTab = "historique" }) {
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
   const [tab, setTab] = useState(initialTab);
 
-  // drafts (inclut NOM)
   const [nom, setNom] = useState("");
+  const [clientNom, setClientNom] = useState("");
   const [clientTelephone, setClientTelephone] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
@@ -1051,89 +1195,109 @@ function PopupDetailsProjet({
   const [odometre, setOdometre] = useState("");
   const [vin, setVin] = useState("");
 
-  // Historique agrégé
   const [histRows, setHistRows] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
   const [totalMsAll, setTotalMsAll] = useState(0);
-  const [histReload, setHistReload] = useState(0);
+
+  const [daysAll, setDaysAll] = useState([]);
+  const [recentSegsByDay, setRecentSegsByDay] = useState({});
+  const [olderAgg, setOlderAgg] = useState({ rows: [], totalMs: 0 });
+
+  const [tick, setTick] = useState(0);
+  const RECENT_DAYS_WINDOW = 90;
 
   useEffect(() => {
-    if (open) setTab(initialTab);
+    if (!open) return;
+    setTab(initialTab);
   }, [open, initialTab]);
 
   useEffect(() => {
     if (open && projet) {
       setEditing(false);
       setNom(projet.nom ?? "");
+      setClientNom(projet.clientNom ?? "");
       setClientTelephone(projet.clientTelephone ?? "");
       setNumeroUnite(projet.numeroUnite ?? "");
       setAnnee(projet.annee != null ? String(projet.annee) : "");
       setMarque(projet.marque ?? "");
       setModele(projet.modele ?? "");
       setPlaque(projet.plaque ?? "");
-      setOdometre(
-        projet.odometre != null ? String(projet.odometre) : ""
-      );
+      setOdometre(projet.odometre != null ? String(projet.odometre) : "");
       setVin(projet.vin ?? "");
     }
   }, [open, projet?.id, projet]);
 
   useEffect(() => {
+    if (!open) return;
+    const t = setInterval(() => setTick((x) => x + 1), 10000);
+    return () => clearInterval(t);
+  }, [open]);
+
+  const isRecentDay = (dayKeyStr) => {
+    const d = toDateSafe(dayKeyStr);
+    if (!d) return true;
+    const cutoff = minusDays(new Date(), RECENT_DAYS_WINDOW);
+    return d >= cutoff;
+  };
+
+  useEffect(() => {
     if (!open || !projet?.id) return;
 
+    let cancelled = false;
+    setHistLoading(true);
+    setError(null);
+
     (async () => {
-      setHistLoading(true);
       try {
-        const daysSnap = await getDocs(
-          collection(db, "projets", projet.id, "timecards")
-        );
+        const daysSnap = await getDocs(collection(db, "projets", projet.id, "timecards"));
         const days = [];
         daysSnap.forEach((d) => days.push(d.id));
-        days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD desc
+        days.sort((a, b) => b.localeCompare(a));
+        if (!cancelled) setDaysAll(days);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setError(e?.message || String(e));
+      } finally {
+        if (!cancelled) setHistLoading(false);
+      }
+    })();
 
-        const map = new Map();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projet?.id]);
+
+  useEffect(() => {
+    if (!open || !projet?.id) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const oldDays = (daysAll || []).filter((k) => !isRecentDay(k));
+        if (oldDays.length === 0) {
+          if (!cancelled) setOlderAgg({ rows: [], totalMs: 0 });
+          return;
+        }
+
         let sumAllMs = 0;
+        const map = new Map();
 
-        for (const key of days) {
-          const segSnap = await getDocs(
-            collection(
-              db,
-              "projets",
-              projet.id,
-              "timecards",
-              key,
-              "segments"
-            )
-          );
+        for (const key of oldDays) {
+          const segSnap = await getDocs(collection(db, "projets", projet.id, "timecards", key, "segments"));
           segSnap.forEach((sdoc) => {
             const s = sdoc.data();
-            const st = s.start?.toDate
-              ? s.start.toDate()
-              : s.start
-              ? new Date(s.start)
-              : null;
-            const en = s.end?.toDate
-              ? s.end.toDate()
-              : s.end
-              ? new Date(s.end)
-              : null;
+            const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
+            const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
             if (!st) return;
-            const ms = Math.max(
-              0,
-              (en ? en.getTime() : Date.now()) - st.getTime()
-            );
+
+            const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
             sumAllMs += ms;
 
             const empName = s.empName || "—";
             const empKey = s.empId || empName;
             const k = `${key}__${empKey}`;
-            const prev =
-              map.get(k) || {
-                date: key,
-                empName,
-                empId: s.empId || null,
-                totalMs: 0,
-              };
+            const prev = map.get(k) || { date: key, empName, empId: s.empId || null, totalMs: 0 };
             prev.totalMs += ms;
             map.set(k, prev);
           });
@@ -1144,62 +1308,111 @@ function PopupDetailsProjet({
           return (a.empName || "").localeCompare(b.empName || "");
         });
 
-        setHistRows(rows);
-        setTotalMsAll(sumAllMs);
+        if (!cancelled) setOlderAgg({ rows, totalMs: sumAllMs });
       } catch (e) {
         console.error(e);
-        setError(e?.message || String(e));
-      } finally {
-        setHistLoading(false);
+        if (!cancelled) setError(e?.message || String(e));
       }
     })();
-  }, [open, projet?.id, histReload]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projet?.id, daysAll]);
+
+  useEffect(() => {
+    if (!open || !projet?.id) return;
+
+    const recentDays = (daysAll || []).filter((k) => isRecentDay(k));
+
+    setRecentSegsByDay({});
+
+    const unsubs = recentDays.map((key) =>
+      onSnapshot(
+        collection(db, "projets", projet.id, "timecards", key, "segments"),
+        (snap) => {
+          const segs = [];
+          snap.forEach((d) => segs.push({ id: d.id, ...d.data() }));
+          setRecentSegsByDay((prev) => ({ ...prev, [key]: segs }));
+        },
+        (err) => setError(err?.message || String(err))
+      )
+    );
+
+    return () => {
+      unsubs.forEach((u) => u && u());
+    };
+  }, [open, projet?.id, daysAll]);
+
+  useEffect(() => {
+    if (!open || !projet?.id) return;
+
+    const nowMs = Date.now();
+
+    const map = new Map();
+    let sumMs = 0;
+
+    for (const r of olderAgg.rows || []) {
+      const k = `${r.date}__${r.empId || r.empName || "—"}`;
+      map.set(k, { ...r });
+    }
+    sumMs += Number(olderAgg.totalMs || 0);
+
+    const recentDays = Object.keys(recentSegsByDay || {});
+    for (const dayK of recentDays) {
+      const segs = recentSegsByDay?.[dayK] || [];
+      for (const s of segs) {
+        const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
+        const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
+        if (!st) continue;
+
+        const ms = Math.max(0, (en ? en.getTime() : nowMs) - st.getTime());
+        sumMs += ms;
+
+        const empName = s.empName || "—";
+        const empKey = s.empId || empName;
+        const k = `${dayK}__${empKey}`;
+
+        const prev = map.get(k) || { date: dayK, empName, empId: s.empId || null, totalMs: 0 };
+        prev.totalMs += ms;
+        map.set(k, prev);
+      }
+    }
+
+    const rows = Array.from(map.values()).sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+      return (a.empName || "").localeCompare(b.empName || "");
+    });
+
+    setHistRows(rows);
+    setTotalMsAll(sumMs);
+  }, [open, projet?.id, olderAgg, recentSegsByDay, tick]);
 
   const onDeleteHistRow = async (row) => {
     if (!projet?.id) return;
     const labelEmp = row.empName || "cet employé";
-    const ok = window.confirm(
-      `Supprimer toutes les entrées du ${row.date} pour ${labelEmp} ?`
-    );
+    const ok = window.confirm(`Supprimer toutes les entrées du ${row.date} pour ${labelEmp} ?`);
     if (!ok) return;
 
     setHistLoading(true);
     setError(null);
     try {
-      const segSnap = await getDocs(
-        collection(
-          db,
-          "projets",
-          projet.id,
-          "timecards",
-          row.date,
-          "segments"
-        )
-      );
+      const segSnap = await getDocs(collection(db, "projets", projet.id, "timecards", row.date, "segments"));
       const deletions = [];
       segSnap.forEach((sdoc) => {
         const s = sdoc.data();
-        const match = row.empId
-          ? s.empId === row.empId
-          : (s.empName || "—") === (row.empName || "—");
+        const match = row.empId ? s.empId === row.empId : (s.empName || "—") === (row.empName || "—");
         if (match) {
-          deletions.push(
-            deleteDoc(
-              doc(
-                db,
-                "projets",
-                projet.id,
-                "timecards",
-                row.date,
-                "segments",
-                sdoc.id
-              )
-            )
-          );
+          deletions.push(deleteDoc(doc(db, "projets", projet.id, "timecards", row.date, "segments", sdoc.id)));
         }
       });
       await Promise.all(deletions);
-      setHistReload((x) => x + 1);
+
+      const ds = await getDocs(collection(db, "projets", projet.id, "timecards"));
+      const days = [];
+      ds.forEach((d) => days.push(d.id));
+      days.sort((a, b) => b.localeCompare(a));
+      setDaysAll(days);
     } catch (e) {
       console.error(e);
       setError(e?.message || String(e));
@@ -1211,13 +1424,12 @@ function PopupDetailsProjet({
   const save = async () => {
     try {
       if (!nom.trim()) return setError("Nom requis.");
-      if (annee && !/^\d{4}$/.test(annee.trim()))
-        return setError("Année invalide (AAAA).");
-      if (odometre && isNaN(Number(odometre.trim())))
-        return setError("Odomètre doit être un nombre.");
+      if (annee && !/^\d{4}$/.test(annee.trim())) return setError("Année invalide (AAAA).");
+      if (odometre && isNaN(Number(odometre.trim()))) return setError("Odomètre doit être un nombre.");
 
       const payload = {
         nom: nom.trim(),
+        clientNom: clientNom.trim() || null,
         clientTelephone: clientTelephone.trim() || null,
         numeroUnite: numeroUnite.trim() || null,
         annee: annee ? Number(annee.trim()) : null,
@@ -1238,9 +1450,7 @@ function PopupDetailsProjet({
 
   const handleDeleteProjet = async () => {
     if (!projet?.id) return;
-    const ok = window.confirm(
-      "Êtes-vous sûr de vouloir supprimer ce projet ?"
-    );
+    const ok = window.confirm("Êtes-vous sûr de vouloir supprimer ce projet ?");
     if (!ok) return;
     try {
       await deleteDoc(doc(db, "projets", projet.id));
@@ -1253,9 +1463,6 @@ function PopupDetailsProjet({
   };
 
   if (!open || !projet) return null;
-
-  // Total = uniquement les segments (plus de temps d’ouverture manuel)
-  const totalMsWithOpen = totalMsAll;
 
   return (
     <div
@@ -1286,31 +1493,13 @@ function PopupDetailsProjet({
           fontSize: 13,
         }}
       >
-        {/* Header + actions */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 6,
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 17 }}>
-            Détails du projet
-          </div>
-          <div
-            style={{ display: "flex", gap: 6, alignItems: "center" }}
-          >
-            <button
-              onClick={() => setTab("historique")}
-              style={tab === "historique" ? btnTabActive : btnTab}
-            >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontWeight: 900, fontSize: 17 }}>Détails du projet</div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button onClick={() => setTab("historique")} style={tab === "historique" ? btnTabActive : btnTab}>
               Historique
             </button>
-            <button
-              onClick={() => setTab("materiel")}
-              style={tab === "materiel" ? btnTabActive : btnTab}
-            >
+            <button onClick={() => setTab("materiel")} style={tab === "materiel" ? btnTabActive : btnTab}>
               Matériel
             </button>
             <button
@@ -1320,26 +1509,17 @@ function PopupDetailsProjet({
             >
               {projet.ouvert ? "Ouvert" : "Fermé"}
             </button>
+
             {!editing ? (
-              <button
-                onClick={() => setEditing(true)}
-                style={btnSecondary}
-              >
+              <button onClick={() => setEditing(true)} style={btnSecondary}>
                 Modifier
               </button>
             ) : (
               <>
-                <button
-                  onClick={handleDeleteProjet}
-                  style={btnTinyDanger}
-                  title="Supprimer ce projet"
-                >
+                <button onClick={handleDeleteProjet} style={btnTinyDanger} title="Supprimer ce projet">
                   Supprimer
                 </button>
-                <button
-                  onClick={() => setEditing(false)}
-                  style={btnGhost}
-                >
+                <button onClick={() => setEditing(false)} style={btnGhost}>
                   Annuler
                 </button>
                 <button onClick={save} style={btnPrimary}>
@@ -1347,46 +1527,28 @@ function PopupDetailsProjet({
                 </button>
               </>
             )}
+
             <button
-              onClick={onClose}
-              title="Fermer"
-              style={{
-                border: "none",
-                background: "transparent",
-                fontSize: 22,
-                cursor: "pointer",
-                lineHeight: 1,
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose?.();
               }}
+              title="Fermer"
+              style={{ border: "none", background: "transparent", fontSize: 22, cursor: "pointer", lineHeight: 1 }}
             >
               ×
             </button>
           </div>
         </div>
 
-        {error && (
-          <ErrorBanner error={error} onClose={() => setError(null)} />
-        )}
+        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        {/* INFOS PROJET */}
         {!editing ? (
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 6,
-              rowGap: 6,
-              alignItems: "center",
-              marginBottom: 8,
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, rowGap: 6, alignItems: "center", marginBottom: 8 }}>
             <KVInline k="Nom" v={projet.nom || "—"} />
+            <KVInline k="Client" v={projet.clientNom || "—"} />
             <KVInline k="Téléphone client" v={projet.clientTelephone || "—"} />
-            <KVInline
-              k="Situation"
-              v={projet.ouvert ? "Ouvert" : "Fermé"}
-              success={!!projet.ouvert}
-              danger={!projet.ouvert}
-            />
+            <KVInline k="Situation" v={projet.ouvert ? "Ouvert" : "Fermé"} success={!!projet.ouvert} danger={!projet.ouvert} />
             <KVInline k="Unité" v={projet.numeroUnite || "—"} />
             <KVInline k="Année" v={projet.annee ?? "—"} />
             <KVInline k="Marque" v={projet.marque || "—"} />
@@ -1394,138 +1556,56 @@ function PopupDetailsProjet({
             <KVInline k="Plaque" v={projet.plaque || "—"} />
             <KVInline
               k="Odomètre"
-              v={
-                typeof projet.odometre === "number"
-                  ? projet.odometre.toLocaleString("fr-CA")
-                  : projet.odometre || "—"
-              }
+              v={typeof projet.odometre === "number" ? projet.odometre.toLocaleString("fr-CA") : projet.odometre || "—"}
             />
             <KVInline k="VIN" v={projet.vin || "—"} />
           </div>
         ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2,1fr)",
-              gap: 8,
-              marginBottom: 8,
-            }}
-          >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8, marginBottom: 8 }}>
             <FieldV label="Nom du projet">
-              <input
-                value={nom}
-                onChange={(e) => setNom(e.target.value)}
-                style={input}
-              />
+              <input value={nom} onChange={(e) => setNom(e.target.value)} style={input} />
+            </FieldV>
+            <FieldV label="Nom du client / Entreprise">
+              <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={input} />
             </FieldV>
             <FieldV label="Téléphone du client">
-              <input
-                value={clientTelephone}
-                onChange={(e) => setClientTelephone(e.target.value)}
-                style={input}
-              />
+              <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={input} />
             </FieldV>
             <FieldV label="Numéro d’unité">
-              <input
-                value={numeroUnite}
-                onChange={(e) => setNumeroUnite(e.target.value)}
-                style={input}
-              />
+              <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={input} />
             </FieldV>
             <FieldV label="Année">
-              <input
-                value={annee}
-                onChange={(e) => setAnnee(e.target.value)}
-                placeholder="AAAA"
-                inputMode="numeric"
-                style={input}
-              />
+              <input value={annee} onChange={(e) => setAnnee(e.target.value)} placeholder="AAAA" inputMode="numeric" style={input} />
             </FieldV>
             <FieldV label="Marque">
-              <input
-                value={marque}
-                onChange={(e) => setMarque(e.target.value)}
-                style={input}
-              />
+              <input value={marque} onChange={(e) => setMarque(e.target.value)} style={input} />
             </FieldV>
             <FieldV label="Modèle">
-              <input
-                value={modele}
-                onChange={(e) => setModele(e.target.value)}
-                style={input}
-              />
+              <input value={modele} onChange={(e) => setModele(e.target.value)} style={input} />
             </FieldV>
             <FieldV label="Plaque">
-              <input
-                value={plaque}
-                onChange={(e) => setPlaque(e.target.value)}
-                style={input}
-              />
+              <input value={plaque} onChange={(e) => setPlaque(e.target.value)} style={input} />
             </FieldV>
             <FieldV label="Odomètre">
-              <input
-                value={odometre}
-                onChange={(e) => setOdometre(e.target.value)}
-                inputMode="numeric"
-                style={input}
-              />
+              <input value={odometre} onChange={(e) => setOdometre(e.target.value)} inputMode="numeric" style={input} />
             </FieldV>
             <FieldV label="VIN">
-              <input
-                value={vin}
-                onChange={(e) => setVin(e.target.value)}
-                style={input}
-              />
+              <input value={vin} onChange={(e) => setVin(e.target.value)} style={input} />
             </FieldV>
           </div>
         )}
 
-        {/* Résumé */}
-        <div
-          style={{
-            fontWeight: 800,
-            margin: "2px 0 6px",
-            fontSize: 11,
-          }}
-        >
-          Résumé du projet
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2,1fr)",
-            gap: 8,
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ fontWeight: 800, margin: "2px 0 6px", fontSize: 11 }}>Résumé du projet</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 8 }}>
           <CardKV k="Date d’ouverture" v={fmtDate(projet?.createdAt)} />
-          <CardKV
-            k="Total d'heures compilées"
-            v={fmtHM(totalMsWithOpen)}
-          />
+          <CardKV k="Temps compilé" v={fmtHM(totalMsAll)} />
+          <CardKV k="Temps estimé" v={fmtHours(projet?.tempsEstimeHeures)} />
         </div>
 
-        {/* Contenu onglets */}
         {tab === "historique" ? (
           <>
-            <div
-              style={{
-                fontWeight: 800,
-                margin: "4px 0 6px",
-                fontSize: 12,
-              }}
-            >
-              Historique — tout
-            </div>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                border: "1px solid #eee",
-                borderRadius: 12,
-                fontSize: 12,
-              }}
-            >
+            <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>Historique — tout</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 12, fontSize: 12 }}>
               <thead>
                 <tr style={{ background: "#f6f7f8" }}>
                   <th style={th}>Jour</th>
@@ -1537,28 +1617,19 @@ function PopupDetailsProjet({
               <tbody>
                 {histLoading && (
                   <tr>
-                    <td
-                      colSpan={4}
-                      style={{ padding: 12, color: "#666" }}
-                    >
+                    <td colSpan={4} style={{ padding: 12, color: "#666", textAlign: "center" }}>
                       Chargement…
                     </td>
                   </tr>
                 )}
                 {!histLoading &&
                   histRows.map((r, i) => (
-                    <tr
-                      key={`${r.date}-${r.empId || r.empName}-${i}`}
-                    >
+                    <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
                       <td style={td}>{fmtDate(r.date)}</td>
                       <td style={td}>{fmtHM(r.totalMs)}</td>
                       <td style={td}>{r.empName || "—"}</td>
                       <td style={td}>
-                        <button
-                          onClick={() => onDeleteHistRow(r)}
-                          style={btnTinyDanger}
-                          title="Supprimer cette journée pour cet employé"
-                        >
+                        <button onClick={() => onDeleteHistRow(r)} style={btnTinyDanger} title="Supprimer cette journée pour cet employé">
                           🗑
                         </button>
                       </td>
@@ -1566,10 +1637,7 @@ function PopupDetailsProjet({
                   ))}
                 {!histLoading && histRows.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={4}
-                      style={{ padding: 12, color: "#666" }}
-                    >
+                    <td colSpan={4} style={{ padding: 12, color: "#666", textAlign: "center" }}>
                       Aucun historique.
                     </td>
                   </tr>
@@ -1578,12 +1646,7 @@ function PopupDetailsProjet({
             </table>
           </>
         ) : (
-          <ProjectMaterielPanel
-            projId={projet.id}
-            inline
-            onClose={() => setTab("historique")}
-            setParentError={setError}
-          />
+          <ProjectMaterielPanel projId={projet.id} inline onClose={() => setTab("historique")} setParentError={setError} />
         )}
       </div>
     </div>
@@ -1591,13 +1654,7 @@ function PopupDetailsProjet({
 }
 
 /* ---------------------- Ligne ---------------------- */
-function RowProjet({
-  p,
-  onClickRow,
-  onOpenDetailsMaterial,
-  onToggleSituation,
-  onOpenPDF,
-}) {
+function RowProjet({ p, onClickRow, onOpenDetailsMaterial, onToggleSituation, onOpenPDF }) {
   const cell = (content) => <td style={td}>{content}</td>;
 
   const handleToggle = (e) => {
@@ -1610,46 +1667,28 @@ function RowProjet({
       {cell(p.nom || "—")}
       {cell(p.clientTelephone || "—")}
       <td style={td} onClick={(e) => e.stopPropagation()}>
-        <button
-          onClick={handleToggle}
-          style={p.ouvert ? btnSituationOpen : btnSituationClosed}
-          title="Basculer la situation"
-        >
+        <button onClick={handleToggle} style={p.ouvert ? btnSituationOpen : btnSituationClosed} title="Basculer la situation">
           {p.ouvert ? "Ouvert" : "Fermé"}
         </button>
       </td>
+
+      {cell(p.clientNom || "—")}
       {cell(p.numeroUnite || "—")}
       {cell(typeof p.annee === "number" ? p.annee : p.annee || "—")}
       {cell(p.marque || "—")}
       {cell(p.modele || "—")}
       {cell(p.plaque || "—")}
-      {cell(
-        typeof p.odometre === "number"
-          ? p.odometre.toLocaleString("fr-CA")
-          : p.odometre || "—"
-      )}
+      {cell(typeof p.odometre === "number" ? p.odometre.toLocaleString("fr-CA") : p.odometre || "—")}
       {cell(p.vin || "—")}
-      <td style={{ ...td }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
-            onClick={() => onClickRow?.(p)}
-            style={btnSecondary}
-            title="Ouvrir les détails"
-          >
+      <td style={td} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+          <button onClick={() => onClickRow?.(p)} style={btnSecondary} title="Ouvrir les détails">
             Détails
           </button>
-          <button
-            onClick={() => onOpenDetailsMaterial?.(p)}
-            style={btnBlue}
-            title="Voir le matériel (inline)"
-          >
+          <button onClick={() => onOpenDetailsMaterial?.(p)} style={btnBlue} title="Voir le matériel (inline)">
             Matériel
           </button>
-          <button
-            onClick={() => onOpenPDF?.(p)}
-            style={btnPDF}
-            title="PDF du projet"
-          >
+          <button onClick={() => onOpenPDF?.(p)} style={btnPDF} title="PDF du projet">
             PDF
           </button>
         </div>
@@ -1666,43 +1705,28 @@ export default function PageListeProjet() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createProjet, setCreateProjet] = useState(null);
 
-  const [details, setDetails] = useState({
-    open: false,
-    projet: null,
-    tab: "historique",
-  });
+  const [details, setDetails] = useState({ open: false, projet: null, tab: "historique" });
   const [pdfMgr, setPdfMgr] = useState({ open: false, projet: null });
 
-  // Wizard de fermeture complète
-  const [closeWizard, setCloseWizard] = useState({
-    open: false,
-    projet: null,
-  });
-
-  // Popup projets fermés
+  const [closeWizard, setCloseWizard] = useState({ open: false, projet: null });
   const [closedPopupOpen, setClosedPopupOpen] = useState(false);
 
-  // 👉 Flag : ouverture du popup "Créer un projet" depuis le punch
   useEffect(() => {
     try {
       const flag = window.sessionStorage?.getItem("openCreateProjet");
       if (flag) {
         window.sessionStorage?.removeItem("openCreateProjet");
-        setCreateProjet(null); // mode "create"
+        setCreateProjet(null);
         setCreateOpen(true);
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, []);
 
-  // 👉 Si on revient des réglages avec un brouillon de projet en création
   useEffect(() => {
     try {
       const flag = window.sessionStorage?.getItem("draftProjetOpen");
       if (flag === "1") {
-        // le brouillon sera rechargé par PopupCreateProjet
-        setCreateProjet(null); // mode "create"
+        setCreateProjet(null);
         setCreateOpen(true);
       }
     } catch (e) {
@@ -1710,23 +1734,17 @@ export default function PageListeProjet() {
     }
   }, []);
 
-  const openDetails = (p, tab = "historique") =>
-    setDetails({ open: true, projet: p, tab });
-  const closeDetails = () =>
-    setDetails({ open: false, projet: null, tab: "historique" });
+  const openDetails = (p, tab = "historique") => setDetails({ open: true, projet: p, tab });
+  const closeDetails = () => setDetails({ open: false, projet: null, tab: "historique" });
 
   const toggleSituation = async (proj) => {
     try {
       if (proj.ouvert) {
-        // projet ouvert → wizard de fermeture complète
         setCloseWizard({ open: true, projet: proj });
       } else {
-        // projet fermé → simple réouverture
         const ok = window.confirm("Voulez-vous ouvrir ce projet ?");
         if (!ok) return;
-        await updateDoc(doc(db, "projets", proj.id), {
-          ouvert: true,
-        });
+        await updateDoc(doc(db, "projets", proj.id), { ouvert: true });
       }
     } catch (e) {
       console.error(e);
@@ -1737,21 +1755,15 @@ export default function PageListeProjet() {
   const openPDF = (p) => setPdfMgr({ open: true, projet: p });
   const closePDF = () => setPdfMgr({ open: false, projet: null });
 
-  const handleWizardCancel = () => {
-    setCloseWizard({ open: false, projet: null });
-  };
-  const handleWizardClosed = () => {
-    setCloseWizard({ open: false, projet: null });
-  };
+  const handleWizardCancel = () => setCloseWizard({ open: false, projet: null });
+  const handleWizardClosed = () => setCloseWizard({ open: false, projet: null });
 
   const handleReopenClosed = async (proj) => {
     if (!proj?.id) return;
     const ok = window.confirm("Voulez-vous réouvrir ce projet ?");
     if (!ok) return;
     try {
-      await updateDoc(doc(db, "projets", proj.id), {
-        ouvert: true,
-      });
+      await updateDoc(doc(db, "projets", proj.id), { ouvert: true });
     } catch (e) {
       console.error(e);
       setError(e?.message || String(e));
@@ -1759,75 +1771,30 @@ export default function PageListeProjet() {
   };
 
   return (
-    <div
-      style={{
-        padding: 20,
-        fontFamily: "Arial, system-ui, -apple-system",
-      }}
-    >
+    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      {/* Barre top */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr auto 1fr",
-          alignItems: "center",
-          marginBottom: 10,
-          gap: 8,
-        }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", marginBottom: 10, gap: 8 }}>
         <div />
-
-        <h1
-          style={{
-            margin: 0,
-            textAlign: "center",
-            fontSize: 32,
-            fontWeight: 900,
-            lineHeight: 1.2,
-          }}
-        >
-          📁 Projets
-        </h1>
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 8,
-          }}
-        >
+        <h1 style={{ margin: 0, textAlign: "center", fontSize: 32, fontWeight: 900, lineHeight: 1.2 }}>📁 Projets</h1>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <a href="#/reglages" style={btnSecondary}>
             Réglages
           </a>
-          <button
-            type="button"
-            onClick={() => setClosedPopupOpen(true)}
-            style={btnSecondary}
-          >
+          <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
             Projets fermés
           </button>
-          {/* Plus de bouton "Créer un nouveau projet" ici */}
         </div>
       </div>
 
-      {/* Tableau */}
       <div style={{ overflowX: "auto" }}>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            background: "#fff",
-            border: "1px solid #eee",
-            borderRadius: 12,
-          }}
-        >
+        <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #eee", borderRadius: 12 }}>
           <thead>
             <tr style={{ background: "#f6f7f8" }}>
               <th style={th}>Nom</th>
               <th style={th}>Téléphone</th>
               <th style={th}>Situation</th>
+              <th style={th}>Client</th>
               <th style={th}>Unité</th>
               <th style={th}>Année</th>
               <th style={th}>Marque</th>
@@ -1844,16 +1811,14 @@ export default function PageListeProjet() {
                 key={p.id}
                 p={p}
                 onClickRow={(proj) => openDetails(proj, "historique")}
-                onOpenDetailsMaterial={(proj) =>
-                  openDetails(proj, "materiel")
-                }
+                onOpenDetailsMaterial={(proj) => openDetails(proj, "materiel")}
                 onOpenPDF={openPDF}
                 onToggleSituation={toggleSituation}
               />
             ))}
             {projets.length === 0 && (
               <tr>
-                <td colSpan={11} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={12} style={{ padding: 12, color: "#666", textAlign: "center" }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>
@@ -1862,10 +1827,8 @@ export default function PageListeProjet() {
         </table>
       </div>
 
-      {/* --- Section "Autre projet" --- */}
       <AutresProjetsSection allowEdit={true} />
 
-      {/* Popups */}
       <PopupCreateProjet
         open={createOpen}
         onClose={() => {
@@ -1877,6 +1840,7 @@ export default function PageListeProjet() {
         projet={createProjet}
         onSaved={() => {}}
       />
+
       <PopupDetailsProjet
         open={details.open}
         onClose={closeDetails}
@@ -1885,27 +1849,12 @@ export default function PageListeProjet() {
         onSaved={() => {}}
         onToggleSituation={toggleSituation}
       />
-      <PopupPDFManager
-        open={pdfMgr.open}
-        onClose={closePDF}
-        projet={pdfMgr.projet}
-      />
 
-      {/* Wizard de fermeture complète (PDF) */}
-      <CloseProjectWizard
-        projet={closeWizard.projet}
-        open={closeWizard.open}
-        onCancel={handleWizardCancel}
-        onClosed={handleWizardClosed}
-      />
+      <PopupPDFManager open={pdfMgr.open} onClose={closePDF} projet={pdfMgr.projet} />
 
-      {/* Popup projets fermés */}
-      <ClosedProjectsPopup
-        open={closedPopupOpen}
-        onClose={() => setClosedPopupOpen(false)}
-        setParentError={setError}
-        onReopen={handleReopenClosed}
-      />
+      <CloseProjectWizard projet={closeWizard.projet} open={closeWizard.open} onCancel={handleWizardCancel} onClosed={handleWizardClosed} />
+
+      <ClosedProjectsPopup open={closedPopupOpen} onClose={() => setClosedPopupOpen(false)} setParentError={setError} onReopen={handleReopenClosed} />
     </div>
   );
 }
@@ -1913,9 +1862,7 @@ export default function PageListeProjet() {
 /* ---------------------- Petits composants UI ---------------------- */
 function FieldV({ label, children }) {
   return (
-    <div
-      style={{ display: "flex", flexDirection: "column", gap: 4 }}
-    >
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <label style={{ fontSize: 11, color: "#444" }}>{label}</label>
       {children}
     </div>
@@ -1924,20 +1871,13 @@ function FieldV({ label, children }) {
 
 function CardKV({ k, v }) {
   return (
-    <div
-      style={{
-        border: "1px solid #eee",
-        borderRadius: 10,
-        padding: "6px 8px",
-      }}
-    >
+    <div style={{ border: "1px solid #eee", borderRadius: 10, padding: "6px 8px" }}>
       <div style={{ fontSize: 10, color: "#666" }}>{k}</div>
       <div style={{ fontSize: 13, fontWeight: 700 }}>{v}</div>
     </div>
   );
 }
 
-/* Jam-packed chip (clé:valeur) */
 function KVInline({ k, v, danger, success }) {
   return (
     <div
@@ -1955,31 +1895,20 @@ function KVInline({ k, v, danger, success }) {
       }}
     >
       <span style={{ color: "#6b7280" }}>{k}:</span>
-      <strong
-        style={{
-          color: danger
-            ? "#b91c1c"
-            : success
-            ? "#166534"
-            : "#111827",
-          fontWeight: 700,
-        }}
-      >
-        {v}
-      </strong>
+      <strong style={{ color: danger ? "#b91c1c" : success ? "#166534" : "#111827", fontWeight: 700 }}>{v}</strong>
     </div>
   );
 }
 
 /* ---------------------- Styles ---------------------- */
 const th = {
-  textAlign: "left",
+  textAlign: "center",
   padding: 8,
   borderBottom: "1px solid #e0e0e0",
   whiteSpace: "nowrap",
 };
 
-const td = { padding: 8, borderBottom: "1px solid #eee" };
+const td = { padding: 8, borderBottom: "1px solid #eee", textAlign: "center" };
 
 const input = {
   width: "100%",
@@ -1999,7 +1928,7 @@ const btnPrimary = {
   padding: "8px 14px",
   cursor: "pointer",
   fontWeight: 800,
-  boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
+  boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
 };
 
 const btnSecondary = {
@@ -2013,11 +1942,7 @@ const btnSecondary = {
   color: "#111",
 };
 
-const btnSecondarySmall = {
-  ...btnSecondary,
-  padding: "4px 8px",
-  fontSize: 12,
-};
+const btnSecondarySmall = { ...btnSecondary, padding: "4px 8px", fontSize: 12 };
 
 const btnGhost = {
   border: "1px solid #e5e7eb",
@@ -2058,10 +1983,7 @@ const btnBlue = {
   fontWeight: 800,
 };
 
-const btnPDF = {
-  ...btnBlue,
-  background: "#2563eb",
-};
+const btnPDF = { ...btnBlue, background: "#2563eb" };
 
 const btnDanger = {
   border: "1px solid #ef4444",
@@ -2095,8 +2017,4 @@ const btnTab = {
   fontSize: 12,
 };
 
-const btnTabActive = {
-  ...btnTab,
-  borderColor: "#2563eb",
-  background: "#eff6ff",
-};
+const btnTabActive = { ...btnTab, borderColor: "#2563eb", background: "#eff6ff" };
