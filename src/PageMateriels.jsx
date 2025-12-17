@@ -105,7 +105,7 @@ function Modal({ open, title, children, onClose }) {
         zIndex: 1000,
         padding: 16,
       }}
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         style={{

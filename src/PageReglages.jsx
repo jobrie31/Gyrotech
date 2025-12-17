@@ -62,6 +62,12 @@ export default function PageReglages() {
   const [factureError, setFactureError] = useState(null);
   const [factureSaved, setFactureSaved] = useState(false);
 
+  // ✅ NOUVEAU: Code requis pour "Autres projets"
+  const [autresCode, setAutresCode] = useState("");
+  const [autresCodeLoading, setAutresCodeLoading] = useState(true);
+  const [autresCodeError, setAutresCodeError] = useState(null);
+  const [autresCodeSaved, setAutresCodeSaved] = useState(false);
+
   // 👉 Savoir si on a un brouillon de projet en cours (pour afficher le bouton Retour)
   const [hasDraftProjet, setHasDraftProjet] = useState(false);
 
@@ -87,6 +93,29 @@ export default function PageReglages() {
         setFactureError(e?.message || String(e));
       } finally {
         setFactureLoading(false);
+      }
+    })();
+  }, []);
+
+  // 🔁 Charger config "code Autres projets"
+  useEffect(() => {
+    (async () => {
+      try {
+        setAutresCodeLoading(true);
+        setAutresCodeError(null);
+        const ref = doc(db, "config", "punchCodes");
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const data = snap.data() || {};
+          if (data.autresProjetsCode != null) {
+            setAutresCode(String(data.autresProjetsCode || ""));
+          }
+        }
+      } catch (e) {
+        console.error(e);
+        setAutresCodeError(e?.message || String(e));
+      } finally {
+        setAutresCodeLoading(false);
       }
     })();
   }, []);
@@ -122,6 +151,27 @@ export default function PageReglages() {
     } catch (e) {
       console.error(e);
       setFactureError(e?.message || String(e));
+    }
+  };
+
+  // ✅ NOUVEAU: sauver code "Autres projets"
+  const saveAutresCode = async () => {
+    try {
+      setAutresCodeError(null);
+      setAutresCodeSaved(false);
+      const ref = doc(db, "config", "punchCodes");
+      await setDoc(
+        ref,
+        {
+          // string (ex: "1234"). Si tu veux forcer numérique, dis-moi.
+          autresProjetsCode: (autresCode || "").trim(),
+        },
+        { merge: true }
+      );
+      setAutresCodeSaved(true);
+    } catch (e) {
+      console.error(e);
+      setAutresCodeError(e?.message || String(e));
     }
   };
 
@@ -261,9 +311,7 @@ export default function PageReglages() {
         snap.forEach((d) =>
           rows.push({ id: d.id, nom: d.data().nom || "(sans nom)" })
         );
-        rows.sort((a, b) =>
-          (a.nom || "").localeCompare(b.nom || "", "fr-CA")
-        );
+        rows.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
         setTimeProjets(rows);
       } catch (e) {
         console.error(e);
@@ -281,9 +329,7 @@ export default function PageReglages() {
         snap.forEach((d) =>
           rows.push({ id: d.id, nom: d.data().nom || "(sans nom)" })
         );
-        rows.sort((a, b) =>
-          (a.nom || "").localeCompare(b.nom || "", "fr-CA")
-        );
+        rows.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
         setTimeEmployes(rows);
       } catch (e) {
         console.error(e);
@@ -344,10 +390,7 @@ export default function PageReglages() {
   }, [timeSegments]);
 
   const displayedSegments = useMemo(
-    () =>
-      timeEmpId
-        ? timeSegments.filter((s) => s.empId === timeEmpId)
-        : timeSegments,
+    () => (timeEmpId ? timeSegments.filter((s) => s.empId === timeEmpId) : timeSegments),
     [timeSegments, timeEmpId]
   );
 
@@ -433,11 +476,7 @@ export default function PageReglages() {
       const promises = [updateDoc(projSegRef, updates)];
 
       // ✅ employé : on trouve le segment correspondant (jobId == projId + start le plus proche)
-      const empRef = await findEmployeeSegmentForProject(
-        seg,
-        timeDate,
-        timeProjId
-      );
+      const empRef = await findEmployeeSegmentForProject(seg, timeDate, timeProjId);
       if (empRef) {
         promises.push(updateDoc(empRef, updates));
       }
@@ -467,11 +506,7 @@ export default function PageReglages() {
       );
       const ops = [deleteDoc(projSegRef)];
 
-      const empRef = await findEmployeeSegmentForProject(
-        seg,
-        timeDate,
-        timeProjId
-      );
+      const empRef = await findEmployeeSegmentForProject(seg, timeDate, timeProjId);
       if (empRef) {
         ops.push(deleteDoc(empRef));
       }
@@ -498,6 +533,7 @@ export default function PageReglages() {
         const now = new Date();
         const hours = now.getHours();
         const minutes = now.getMinutes();
+        void minutes;
 
         // Date du jour "YYYY-MM-DD"
         const y = now.getFullYear();
@@ -506,8 +542,7 @@ export default function PageReglages() {
         const dateKey = `${y}-${m}-${d}`;
 
         // On se rappelle si on a déjà fait le dé-punch auto aujourd'hui
-        const lastDone =
-          window.localStorage?.getItem("massDepunchLastDate") || null;
+        const lastDone = window.localStorage?.getItem("massDepunchLastDate") || null;
 
         // On déclenche si : il est 17h ou plus, et pas encore fait aujourd'hui
         if (hours >= 17 && lastDone !== dateKey) {
@@ -517,15 +552,7 @@ export default function PageReglages() {
           setTimeError(null);
 
           // Fin fixée à 17:00 précise aujourd'hui
-          const endTime = new Date(
-            y,
-            now.getMonth(),
-            now.getDate(),
-            17,
-            0,
-            0,
-            0
-          );
+          const endTime = new Date(y, now.getMonth(), now.getDate(), 17, 0, 0, 0);
 
           let countSegs = 0;
 
@@ -536,14 +563,7 @@ export default function PageReglages() {
             const empId = empDoc.id;
 
             // Segments du jour pour cet employé
-            const segCol = collection(
-              db,
-              "employes",
-              empId,
-              "timecards",
-              dateKey,
-              "segments"
-            );
+            const segCol = collection(db, "employes", empId, "timecards", dateKey, "segments");
             const segSnap = await getDocs(segCol);
 
             for (const segDoc of segSnap.docs) {
@@ -564,14 +584,7 @@ export default function PageReglages() {
 
               // ✅ Côté projet : on cherche le segment correspondant (même jobId, même start, même empId)
               if (jobId && startTs) {
-                const projSegCol = collection(
-                  db,
-                  "projets",
-                  jobId,
-                  "timecards",
-                  dateKey,
-                  "segments"
-                );
+                const projSegCol = collection(db, "projets", jobId, "timecards", dateKey, "segments");
                 const qProj = query(
                   projSegCol,
                   where("empId", "==", empId),
@@ -604,8 +617,6 @@ export default function PageReglages() {
       }
     };
 
-    // On check immédiatement au montage,
-    // puis toutes les 60 secondes.
     checkAndDepunch();
     timerId = window.setInterval(checkAndDepunch, 60 * 1000);
 
@@ -642,8 +653,6 @@ export default function PageReglages() {
           <button
             type="button"
             onClick={() => {
-              // Retour à la liste de projets : PageListeProjet + PopupCreateProjet
-              // vont rouvrir le questionnaire avec le brouillon.
               window.location.hash = "#/projets";
             }}
             style={btnSecondary}
@@ -652,6 +661,69 @@ export default function PageReglages() {
           </button>
         )}
       </div>
+
+      {/* 🔐 Code "Autres projets" */}
+      <section style={section}>
+        <h3 style={h3}>Code — Autres projets</h3>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres projets” avant de puncher.
+          <br />
+          Laisse vide pour ne pas demander de code.
+        </div>
+
+        {autresCodeError && (
+          <div
+            style={{
+              background: "#fee2e2",
+              color: "#b91c1c",
+              border: "1px solid #fecaca",
+              padding: "6px 8px",
+              borderRadius: 8,
+              fontSize: 12,
+              marginBottom: 8,
+            }}
+          >
+            {autresCodeError}
+          </div>
+        )}
+        {autresCodeSaved && !autresCodeError && (
+          <div
+            style={{
+              background: "#dcfce7",
+              color: "#166534",
+              border: "1px solid #bbf7d0",
+              padding: "6px 8px",
+              borderRadius: 8,
+              fontSize: 12,
+              marginBottom: 8,
+            }}
+          >
+            Code “Autres projets” enregistré.
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <label style={label}>Code</label>
+            <input
+              value={autresCode}
+              onChange={(e) => setAutresCode(e.target.value)}
+              placeholder="Ex.: 1234"
+              type="password"
+              style={{ ...input, width: "100%" }}
+              disabled={autresCodeLoading}
+            />
+          </div>
+
+          <button
+            onClick={saveAutresCode}
+            disabled={autresCodeLoading}
+            style={btnPrimary}
+          >
+            {autresCodeLoading ? "Chargement..." : "Enregistrer le code"}
+          </button>
+        </div>
+      </section>
 
       {/* 🔧 Facturation (infos Gyrotech + taux horaire) */}
       <section style={section}>
@@ -1053,11 +1125,7 @@ export default function PageReglages() {
                             type="time"
                             value={edit.startTime || ""}
                             onChange={(e) =>
-                              updateRowEdit(
-                                seg.id,
-                                "startTime",
-                                e.target.value
-                              )
+                              updateRowEdit(seg.id, "startTime", e.target.value)
                             }
                             style={{
                               ...input,
@@ -1082,13 +1150,7 @@ export default function PageReglages() {
                         </td>
                         <td style={tdTime}>{empName}</td>
                         <td style={tdTime}>
-                          <div
-                            style={{
-                              display: "flex",
-                              gap: 6,
-                              flexWrap: "wrap",
-                            }}
-                          >
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                             <button
                               type="button"
                               onClick={() => saveSegment(seg)}
@@ -1127,6 +1189,12 @@ export default function PageReglages() {
                 </tbody>
               </table>
             </div>
+
+            {massDepunchLoading && (
+              <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+                Dé-punch auto en cours…
+              </div>
+            )}
           </div>
         )}
       </section>
