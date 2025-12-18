@@ -62,7 +62,7 @@ export default function PageReglages() {
   const [factureError, setFactureError] = useState(null);
   const [factureSaved, setFactureSaved] = useState(false);
 
-  // ✅ NOUVEAU: Code requis pour "Autres projets"
+  // ✅ Code requis pour "Autres projets"
   const [autresCode, setAutresCode] = useState("");
   const [autresCodeLoading, setAutresCodeLoading] = useState(true);
   const [autresCodeError, setAutresCodeError] = useState(null);
@@ -154,7 +154,7 @@ export default function PageReglages() {
     }
   };
 
-  // ✅ NOUVEAU: sauver code "Autres projets"
+  // ✅ sauver code "Autres projets"
   const saveAutresCode = async () => {
     try {
       setAutresCodeError(null);
@@ -163,7 +163,6 @@ export default function PageReglages() {
       await setDoc(
         ref,
         {
-          // string (ex: "1234"). Si tu veux forcer numérique, dis-moi.
           autresProjetsCode: (autresCode || "").trim(),
         },
         { merge: true }
@@ -235,7 +234,9 @@ export default function PageReglages() {
   /* ================== TRAVAILLEURS ================== */
 
   const [employes, setEmployes] = useState([]);
-  const [employeInput, setEmployeInput] = useState("");
+  const [employeNomInput, setEmployeNomInput] = useState("");
+  const [employeEmailInput, setEmployeEmailInput] = useState("");
+  const [employeCodeInput, setEmployeCodeInput] = useState("");
 
   useEffect(() => {
     const c = collection(db, "employes");
@@ -255,15 +256,51 @@ export default function PageReglages() {
     return () => unsub();
   }, []);
 
+  function isValidEmail(v) {
+    const s = String(v || "").trim().toLowerCase();
+    return s.includes("@") && s.includes(".");
+  }
+
+  function genCode4() {
+    return String(Math.floor(1000 + Math.random() * 9000));
+  }
+
   const onAddEmploye = async () => {
-    const clean = employeInput.trim();
-    if (!clean) return;
+    const nom = (employeNomInput || "").trim();
+    const email = (employeEmailInput || "").trim();
+    const emailLower = email.toLowerCase();
+    const code = (employeCodeInput || "").trim() || genCode4();
+
+    if (!nom) return alert("Nom requis.");
+    if (!isValidEmail(emailLower)) return alert("Email invalide.");
+
+    // évite doublon d'email (selon la liste déjà chargée)
+    if (employes.some((e) => (e.emailLower || "").toLowerCase() === emailLower)) {
+      return alert("Cet email existe déjà dans la liste des travailleurs.");
+    }
+
+    // Si tu veux forcer numérique: ici on garde string (ex: "1234")
+    if (code.length < 4) {
+      return alert("Code d’activation trop court (min 4 caractères).");
+    }
+
     try {
       await addDoc(collection(db, "employes"), {
-        nom: clean,
+        nom,
+        email,
+        emailLower,
+
+        // ✅ Activation (pour ta Cloud Function activateAccount)
+        activationCode: code,
+        activatedAt: null,
+        uid: null,
+
         createdAt: serverTimestamp(),
       });
-      setEmployeInput("");
+
+      setEmployeNomInput("");
+      setEmployeEmailInput("");
+      setEmployeCodeInput("");
     } catch (e) {
       console.error(e);
       alert(e?.message || String(e));
@@ -280,6 +317,24 @@ export default function PageReglages() {
       return;
     try {
       await deleteDoc(doc(db, "employes", id));
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || String(e));
+    }
+  };
+
+  // ✅ Optionnel: reset code d’activation (si quelqu’un l’a perdu)
+  const onResetActivationCode = async (id) => {
+    const newCode = genCode4();
+    if (!window.confirm(`Générer un nouveau code (${newCode}) ?`)) return;
+    try {
+      await updateDoc(doc(db, "employes", id), {
+        activationCode: newCode,
+        activatedAt: null,
+        uid: null,
+        updatedAt: serverTimestamp(),
+      });
+      alert(`Nouveau code: ${newCode}`);
     } catch (e) {
       console.error(e);
       alert(e?.message || String(e));
@@ -542,7 +597,8 @@ export default function PageReglages() {
         const dateKey = `${y}-${m}-${d}`;
 
         // On se rappelle si on a déjà fait le dé-punch auto aujourd'hui
-        const lastDone = window.localStorage?.getItem("massDepunchLastDate") || null;
+        const lastDone =
+          window.localStorage?.getItem("massDepunchLastDate") || null;
 
         // On déclenche si : il est 17h ou plus, et pas encore fait aujourd'hui
         if (hours >= 17 && lastDone !== dateKey) {
@@ -552,7 +608,15 @@ export default function PageReglages() {
           setTimeError(null);
 
           // Fin fixée à 17:00 précise aujourd'hui
-          const endTime = new Date(y, now.getMonth(), now.getDate(), 17, 0, 0, 0);
+          const endTime = new Date(
+            y,
+            now.getMonth(),
+            now.getDate(),
+            17,
+            0,
+            0,
+            0
+          );
 
           let countSegs = 0;
 
@@ -563,7 +627,14 @@ export default function PageReglages() {
             const empId = empDoc.id;
 
             // Segments du jour pour cet employé
-            const segCol = collection(db, "employes", empId, "timecards", dateKey, "segments");
+            const segCol = collection(
+              db,
+              "employes",
+              empId,
+              "timecards",
+              dateKey,
+              "segments"
+            );
             const segSnap = await getDocs(segCol);
 
             for (const segDoc of segSnap.docs) {
@@ -584,7 +655,14 @@ export default function PageReglages() {
 
               // ✅ Côté projet : on cherche le segment correspondant (même jobId, même start, même empId)
               if (jobId && startTs) {
-                const projSegCol = collection(db, "projets", jobId, "timecards", dateKey, "segments");
+                const projSegCol = collection(
+                  db,
+                  "projets",
+                  jobId,
+                  "timecards",
+                  dateKey,
+                  "segments"
+                );
                 const qProj = query(
                   projSegCol,
                   where("empId", "==", empId),
@@ -666,7 +744,8 @@ export default function PageReglages() {
       <section style={section}>
         <h3 style={h3}>Code — Autres projets</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres projets” avant de puncher.
+          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres
+          projets” avant de puncher.
           <br />
           Laisse vide pour ne pas demander de code.
         </div>
@@ -702,7 +781,14 @@ export default function PageReglages() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "end",
+          }}
+        >
           <div style={{ flex: 1, minWidth: 220 }}>
             <label style={label}>Code</label>
             <input
@@ -830,16 +916,35 @@ export default function PageReglages() {
       <section style={section}>
         <h3 style={h3}>Travailleurs</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Gestion de la liste des travailleurs (même collection que sur la page
-          d&apos;accueil).
+          Ajoute un travailleur avec son email + un code d’activation (utilisé
+          dans “Activer mon compte”).
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginBottom: 8,
+            flexWrap: "wrap",
+          }}
+        >
           <input
-            value={employeInput}
-            onChange={(e) => setEmployeInput(e.target.value)}
+            value={employeNomInput}
+            onChange={(e) => setEmployeNomInput(e.target.value)}
             placeholder="Nom du travailleur"
             style={{ ...input, flex: 1, minWidth: 200 }}
+          />
+          <input
+            value={employeEmailInput}
+            onChange={(e) => setEmployeEmailInput(e.target.value)}
+            placeholder="Email (ex: phil@domaine.com)"
+            style={{ ...input, flex: 1, minWidth: 260 }}
+          />
+          <input
+            value={employeCodeInput}
+            onChange={(e) => setEmployeCodeInput(e.target.value)}
+            placeholder="Code activation (ex: 1234) — vide = auto"
+            style={{ ...input, flex: 1, minWidth: 240 }}
           />
           <button onClick={onAddEmploye} style={btnPrimary}>
             Ajouter
@@ -847,22 +952,65 @@ export default function PageReglages() {
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {employes.map((emp) => (
-            <div key={emp.id} style={chip}>
-              <span>{emp.nom || "—"}</span>
-              <button
-                onClick={() => onDelEmploye(emp.id, emp.nom)}
-                style={btnChipDanger}
-                title="Supprimer ce travailleur"
-              >
-                ×
-              </button>
-            </div>
-          ))}
+          {employes.map((emp) => {
+            const activated = !!emp.activatedAt || !!emp.uid;
+            return (
+              <div key={emp.id} style={chip}>
+                <span>
+                  <strong>{emp.nom || "—"}</strong>
+                  {" — "}
+                  <span style={{ color: "#6b7280" }}>{emp.email || "—"}</span>
+                  {" — "}
+                  <span
+                    style={{
+                      fontWeight: 800,
+                      color: activated ? "#166534" : "#b45309",
+                    }}
+                  >
+                    {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
+                  </span>
+                  {!activated && (
+                    <>
+                      {" — "}
+                      <span style={{ color: "#6b7280" }}>
+                        Code: {emp.activationCode || "—"}
+                      </span>
+                    </>
+                  )}
+                </span>
+
+                {!activated && (
+                  <button
+                    onClick={() => onResetActivationCode(emp.id)}
+                    style={{
+                      border: "1px solid #cbd5e1",
+                      background: "#f8fafc",
+                      color: "#111827",
+                      borderRadius: 999,
+                      padding: "4px 10px",
+                      cursor: "pointer",
+                      fontWeight: 800,
+                      fontSize: 12,
+                    }}
+                    title="Générer un nouveau code"
+                  >
+                    Nouveau code
+                  </button>
+                )}
+
+                <button
+                  onClick={() => onDelEmploye(emp.id, emp.nom)}
+                  style={btnChipDanger}
+                  title="Supprimer ce travailleur"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+
           {employes.length === 0 && (
-            <div style={{ color: "#666" }}>
-              Aucun travailleur pour l’instant.
-            </div>
+            <div style={{ color: "#666" }}>Aucun travailleur pour l’instant.</div>
           )}
         </div>
       </section>
@@ -895,9 +1043,7 @@ export default function PageReglages() {
               </button>
             </div>
           ))}
-          {anneesAsc.length === 0 && (
-            <div style={{ color: "#666" }}>Aucune année.</div>
-          )}
+          {anneesAsc.length === 0 && <div style={{ color: "#666" }}>Aucune année.</div>}
         </div>
       </section>
 
@@ -941,9 +1087,7 @@ export default function PageReglages() {
               </button>
             </div>
           ))}
-          {marques.length === 0 && (
-            <div style={{ color: "#666" }}>Aucune marque.</div>
-          )}
+          {marques.length === 0 && <div style={{ color: "#666" }}>Aucune marque.</div>}
         </div>
       </section>
 
@@ -982,9 +1126,7 @@ export default function PageReglages() {
                   </button>
                 </div>
               ))}
-              {modeles.length === 0 && (
-                <div style={{ color: "#666" }}>Aucun modèle.</div>
-              )}
+              {modeles.length === 0 && <div style={{ color: "#666" }}>Aucun modèle.</div>}
             </div>
           </>
         )}
@@ -996,8 +1138,7 @@ export default function PageReglages() {
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
           Choisis une date, un projet et (optionnel) un employé pour voir les
           blocs de temps, puis les modifier ou les supprimer. Les changements
-          sont appliqués au projet et à l&apos;employé (Total jour sur la page
-          d&apos;accueil).
+          sont appliqués au projet et à l&apos;employé.
         </div>
 
         {massDepunchMsg && (
@@ -1232,7 +1373,6 @@ function tsToTimeStr(v) {
   }
 }
 
-// dateStr = "YYYY-MM-DD", timeStr = "HH:MM"
 function buildDateTime(dateStr, timeStr) {
   try {
     if (!dateStr || !timeStr) return null;
@@ -1297,7 +1437,7 @@ const btnDangerSmall = {
 const chip = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 6,
+  gap: 8,
   border: "1px solid #e5e7eb",
   padding: "6px 10px",
   borderRadius: 999,

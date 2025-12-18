@@ -1,5 +1,11 @@
 // PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
 // Nécessite: UIPro.jsx dans le même dossier src/
+//
+// ✅ 1) Ligne punchée: vert plus “normal” (mais visible), moins flash
+// ✅ 2) Bouton: "Punch" (bleu) / "Dépunch" (jaune plus clair)
+// ✅ 3) Texte du bouton: BLANC + très gros (≈80% du bouton)
+// ✅ 4) Enlève la colonne Statut du tableau travailleurs
+// ✅ 5) Long nom: le NOM ne wrap plus; la dropdown rapetisse (priorité au nom)
 
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -20,7 +26,7 @@ import { db } from "./firebaseConfig";
 import PageProjets from "./PageProjets";
 import PageListeProjet from "./PageListeProjet";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
-import { styles, Card, Pill, Button, PageContainer, TopBar } from "./UIPro";
+import { styles, Card, Button, PageContainer, TopBar } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
 import HistoriqueEmploye from "./HistoriqueEmploye";
 
@@ -35,7 +41,6 @@ function dayKey(d) {
 function todayKey() {
   return dayKey(new Date());
 }
-
 function fmtHM(ms) {
   const s = Math.max(0, Math.floor((ms || 0) / 1000));
   const h = Math.floor(s / 3600);
@@ -50,7 +55,6 @@ function dayRef(empId, key) {
 function segCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
-
 async function ensureDay(empId, key = todayKey()) {
   const ref = dayRef(empId, key);
   const snap = await getDoc(ref);
@@ -100,18 +104,12 @@ function projDayRef(projId, key) {
 function projSegCol(projId, key) {
   return collection(db, "projets", projId, "timecards", key, "segments");
 }
-
 async function ensureProjDay(projId, key = todayKey()) {
   const ref = projDayRef(projId, key);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     const now = new Date();
-    await setDoc(ref, {
-      start: null,
-      end: null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await setDoc(ref, { start: null, end: null, createdAt: now, updatedAt: now });
   }
   return ref;
 }
@@ -141,25 +139,18 @@ async function closeProjSessionsForEmp(projId, empId, key = todayKey()) {
 }
 
 /* ---------------------- Firestore helpers (AUTRES PROJETS) ---------------------- */
-// Punch DIRECT dans /autresProjets/... (aucun lien avec /projets)
 function otherDayRef(otherId, key) {
   return doc(db, "autresProjets", otherId, "timecards", key);
 }
 function otherSegCol(otherId, key) {
   return collection(db, "autresProjets", otherId, "timecards", key, "segments");
 }
-
 async function ensureOtherDay(otherId, key = todayKey()) {
   const ref = otherDayRef(otherId, key);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     const now = new Date();
-    await setDoc(ref, {
-      start: null,
-      end: null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await setDoc(ref, { start: null, end: null, createdAt: now, updatedAt: now });
   }
   return ref;
 }
@@ -208,7 +199,6 @@ function useEmployes(setError) {
   return rows;
 }
 
-/** Projets OUVERTS uniquement pour le punch (sélect principal) */
 function useOpenProjets(setError) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
@@ -233,7 +223,6 @@ function useOpenProjets(setError) {
   return rows;
 }
 
-/** Autres projets (table auxiliaire) pour le bouton dédié */
 function useAutresProjets(setError) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
@@ -254,9 +243,7 @@ function useAutresProjets(setError) {
           });
         });
         items.sort((a, b) => {
-          if (a.ordre == null && b.ordre == null) {
-            return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
-          }
+          if (a.ordre == null && b.ordre == null) return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
           if (a.ordre == null) return 1;
           if (b.ordre == null) return -1;
           return a.ordre - b.ordre;
@@ -270,25 +257,20 @@ function useAutresProjets(setError) {
   return rows;
 }
 
-/** ✅ Codes punch (ex: code requis pour Autres projets) */
 function usePunchCodes(setError) {
   const [codes, setCodes] = useState({ autresProjetsCode: "" });
-
   useEffect(() => {
     const ref = doc(db, "config", "punchCodes");
     const unsub = onSnapshot(
       ref,
       (snap) => {
         const data = snap.exists() ? snap.data() : {};
-        setCodes({
-          autresProjetsCode: String(data?.autresProjetsCode || ""),
-        });
+        setCodes({ autresProjetsCode: String(data?.autresProjetsCode || "") });
       },
       (err) => setError?.(err?.message || String(err))
     );
     return () => unsub();
   }, [setError]);
-
   return codes;
 }
 
@@ -352,9 +334,7 @@ function usePresenceToday(empId, setError) {
 /* ---------------------- Punch / Dépunch ---------------------- */
 async function doPunchWithProject(emp, proj) {
   const key = todayKey();
-  if (proj && proj.ouvert === false) {
-    throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
-  }
+  if (proj && proj.ouvert === false) throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
 
   await ensureDay(emp.id, key);
   const empSegRef = await openEmpSession(emp.id, key);
@@ -365,12 +345,9 @@ async function doPunchWithProject(emp, proj) {
 
     if (empSegRef) {
       const now = new Date();
-      await updateDoc(empSegRef, {
-        jobId: `proj:${proj.id}`,
-        jobName: proj.nom || null,
-        updatedAt: now,
-      });
+      await updateDoc(empSegRef, { jobId: `proj:${proj.id}`, jobName: proj.nom || null, updatedAt: now });
     }
+
     const pdRef = projDayRef(proj.id, key);
     const pdSnap = await getDoc(pdRef);
     const pd = pdSnap.data() || {};
@@ -378,6 +355,7 @@ async function doPunchWithProject(emp, proj) {
       const now = new Date();
       await updateDoc(pdRef, { start: now, updatedAt: now });
     }
+
     await updateDoc(doc(db, "employes", emp.id), {
       lastProjectId: proj.id,
       lastProjectName: proj.nom || null,
@@ -394,7 +372,7 @@ async function doPunchWithProject(emp, proj) {
   }
 }
 
-async function doPunchWithOther(emp, other /* {id, nom} */) {
+async function doPunchWithOther(emp, other) {
   const key = todayKey();
 
   await ensureDay(emp.id, key);
@@ -405,11 +383,7 @@ async function doPunchWithOther(emp, other /* {id, nom} */) {
 
   if (empSegRef) {
     const now = new Date();
-    await updateDoc(empSegRef, {
-      jobId: `other:${other.id}`,
-      jobName: other.nom || null,
-      updatedAt: now,
-    });
+    await updateDoc(empSegRef, { jobId: `other:${other.id}`, jobName: other.nom || null, updatedAt: now });
   }
 
   const odRef = otherDayRef(other.id, key);
@@ -432,28 +406,19 @@ async function doDepunchWithProject(emp) {
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
 
   const jobTokens = Array.from(
-    new Set(
-      openEmpSegs
-        .map((d) => d.data()?.jobId)
-        .filter((v) => typeof v === "string" && v.length > 0)
-    )
+    new Set(openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0))
   );
 
   await Promise.all(
     jobTokens
       .filter((t) => t.startsWith("proj:"))
-      .map(async (t) => {
-        const jid = t.slice(5);
-        await closeProjSessionsForEmp(jid, emp.id, key);
-      })
+      .map(async (t) => closeProjSessionsForEmp(t.slice(5), emp.id, key))
   );
+
   await Promise.all(
     jobTokens
       .filter((t) => t.startsWith("other:"))
-      .map(async (t) => {
-        const oid = t.slice(6);
-        await closeOtherSessionsForEmp(oid, emp.id, key);
-      })
+      .map(async (t) => closeOtherSessionsForEmp(t.slice(6), emp.id, key))
   );
 
   await closeAllOpenSessions(emp.id, key);
@@ -463,7 +428,6 @@ async function doDepunchWithProject(emp) {
 
 async function createAndPunchNewProject(emp) {
   const startMs = Date.now();
-
   try {
     window.sessionStorage?.setItem("pendingNewProjEmpId", emp.id);
     window.sessionStorage?.setItem("pendingNewProjEmpName", emp.nom || "");
@@ -472,7 +436,6 @@ async function createAndPunchNewProject(emp) {
   } catch (e) {
     console.error("Erreur sessionStorage", e);
   }
-
   window.location.hash = "#/projets";
 }
 
@@ -503,11 +466,10 @@ function ErrorBanner({ error, onClose }) {
   );
 }
 
-/* ------- Modale via Portal : MiniConfirm ------- */
+/* ------- Modales (inchangées) ------- */
 function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
   void projets;
   const hasInitialProj = !!initialProj;
-
   if (!open) return null;
 
   const confirmText = hasInitialProj
@@ -549,14 +511,11 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
       </div>
     </div>
   );
-
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ------- Modale via Portal : NewProjectConfirmModal ------- */
 function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
   if (!open) return null;
-
   const txtName = empName || "cet employé";
 
   const modal = (
@@ -588,14 +547,11 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
       </div>
     </div>
   );
-
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ------- Modale via Portal : AutresProjetsModal ------- */
 function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
   if (!open) return null;
-
   const modal = (
     <div
       role="dialog"
@@ -629,7 +585,13 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
           <h3 style={{ margin: 0 }}>Autres projets</h3>
           <button
             onClick={onClose}
-            style={{ border: "1px solid #ddd", background: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}
+            style={{
+              border: "1px solid #ddd",
+              background: "#fff",
+              borderRadius: 8,
+              padding: "6px 10px",
+              cursor: "pointer",
+            }}
           >
             Fermer
           </button>
@@ -657,11 +619,9 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
       </div>
     </div>
   );
-
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ------- ✅ Modale Code pour Autres projets ------- */
 function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCancel }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState("");
@@ -674,7 +634,6 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   }, [open]);
 
   if (!open) return null;
-
   const cleanRequired = String(requiredCode || "").trim();
 
   const modal = (
@@ -731,15 +690,9 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
             variant="primary"
             onClick={() => {
               const clean = String(value || "").trim();
-              if (!cleanRequired) {
-                onConfirm?.(true);
-                return;
-              }
-              if (clean === cleanRequired) {
-                onConfirm?.(true);
-              } else {
-                setErr("Code invalide.");
-              }
+              if (!cleanRequired) return onConfirm?.(true);
+              if (clean === cleanRequired) onConfirm?.(true);
+              else setErr("Code invalide.");
             }}
           >
             Continuer
@@ -748,11 +701,10 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
       </div>
     </div>
   );
-
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ---------- Composant interne : Horloge ---------- */
+/* ---------- Horloge ---------- */
 function ClockBadge({ now }) {
   const heure = now.toLocaleTimeString("fr-CA", {
     hour: "2-digit",
@@ -783,15 +735,7 @@ function ClockBadge({ now }) {
         lineHeight: 1.15,
       }}
     >
-      <div
-        style={{
-          fontSize: 14,
-          fontWeight: 700,
-          letterSpacing: 0.3,
-          textTransform: "capitalize",
-          marginBottom: 2,
-        }}
-      >
+      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 0.3, textTransform: "capitalize", marginBottom: 2 }}>
         {dateStr}
       </div>
       <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 1 }}>{heure}</div>
@@ -813,7 +757,6 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
   const [autresOpen, setAutresOpen] = useState(false);
   const [newProjModalOpen, setNewProjModalOpen] = useState(false);
 
-  // code modal
   const [codeOpen, setCodeOpen] = useState(false);
   const [pendingOther, setPendingOther] = useState(null);
 
@@ -823,7 +766,6 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
   const currentIsOther = !!(currentOpen?.jobId && String(currentOpen.jobId).startsWith("other:"));
   const currentIsProj = !!(currentOpen?.jobId && String(currentOpen.jobId).startsWith("proj:"));
 
-  // ✅ NOUVEAU: projId actif (si punché sur un projet)
   const currentProjId = useMemo(() => {
     const jid = String(currentOpen?.jobId || "");
     return jid.startsWith("proj:") ? jid.slice(5) : "";
@@ -837,14 +779,9 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
     if (projSel && !projets.some((p) => p.id === projSel)) setProjSel("");
   }, [projets, projSel]);
 
-  // ✅ IMPORTANT: si punché sur un projet normal, forcer le dropdown à afficher le projet actif
   useEffect(() => {
-    if (present && currentIsProj && currentProjId) {
-      setProjSel(currentProjId);
-    }
+    if (present && currentIsProj && currentProjId) setProjSel(currentProjId);
   }, [present, currentIsProj, currentProjId]);
-
-  const statusCell = present ? <Pill variant="success">Actif</Pill> : <Pill variant="neutral">Inactif</Pill>;
 
   const handlePunchClick = async (e) => {
     e.stopPropagation();
@@ -852,7 +789,6 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
       togglePunch();
       return;
     }
-
     const chosen = projSel ? projets.find((x) => x.id === projSel) : null;
     setConfirmProj(chosen || null);
     setConfirmOpen(true);
@@ -875,9 +811,8 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
   const togglePunch = async () => {
     try {
       setPending(true);
-      if (present) {
-        await doDepunchWithProject(emp);
-      } else {
+      if (present) await doDepunchWithProject(emp);
+      else {
         const chosenProj = projSel ? projets.find((x) => x.id === projSel) : null;
         await doPunchWithProject(emp, chosenProj || null);
       }
@@ -889,11 +824,13 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
     }
   };
 
-  // ✅ Couleur de ligne: jaune = "Autres projets", vert pâle = "Projet normal"
   const [isHovered, setIsHovered] = useState(false);
 
-  const baseBg = currentIsOther ? "#fef9c3" : currentIsProj ? "#dcfce7" : styles.row?.background || "white";
-  const hoverBg = currentIsOther ? "#fef3c7" : currentIsProj ? "#bbf7d0" : styles.rowHover?.background || "#f9fafb";
+  const GREEN_BASE = "#3bf544e1";
+  const GREEN_HOVER = "#04bb41ff";
+
+  const baseBg = currentIsOther ? "#ec3c3cff" : currentIsProj ? GREEN_BASE : styles.row?.background || "white";
+  const hoverBg = currentIsOther ? "#ff0000ff" : currentIsProj ? GREEN_HOVER : styles.rowHover?.background || "#f9fafb";
   const rowBg = isHovered ? hoverBg : baseBg;
 
   const requireCode = String(autresProjetsCode || "").trim().length > 0;
@@ -901,6 +838,9 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
   const proceedPunchOther = async (ap) => {
     await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
   };
+
+  const punchBtnBg = present ? "#fbbf24" : "#2563eb"; // dépunch = jaune clair, punch = bleu
+  const punchBtnHover = present ? "#f59e0b" : "#1d4ed8";
 
   return (
     <>
@@ -910,15 +850,17 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        <td style={styles.td}>{emp.nom || "—"}</td>
-        <td style={styles.td}>{statusCell}</td>
-        <td style={styles.td}>{fmtHM(totalMs)}</td>
+        {/* ✅ NOM: ne wrap plus -> priorité au nom */}
+        <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{emp.nom || "—"}</td>
+
+        <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
 
         {/* Colonne Projet */}
-        <td style={{ ...styles.td, width: "100%" }} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ display: "flex", flexDirection: "column", flex: "1 1 320px", minWidth: 260 }}>
-              {/* ✅ si ACTIF sur AUTRES PROJETS, on remplace le dropdown */}
+        <td style={{ ...styles.td }} onClick={(e) => e.stopPropagation()}>
+          {/* ✅ Important: minWidth:0 permet aux enfants de shrink */}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", minWidth: 0 }}>
+            {/* ✅ Dropdown shrink */}
+            <div style={{ flex: "1 1 200px", minWidth: 120, maxWidth: "100%" }}>
               {present && currentIsOther ? (
                 <div
                   aria-live="polite"
@@ -933,6 +875,10 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
                     borderRadius: 12,
                     background: "#eef2ff",
                     border: "1px solid #c7d2fe",
+                    minWidth: 0,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
                   }}
                   title="Travail en cours (Autres projets)"
                 >
@@ -950,6 +896,8 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
                     fontWeight: present && currentIsProj ? 900 : 700,
                     cursor: present ? "not-allowed" : "pointer",
                     opacity: present ? 0.85 : 1,
+                    width: "100%",
+                    minWidth: 0, // ✅ permet de shrink
                   }}
                   disabled={present}
                 >
@@ -970,7 +918,7 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
               disabled={present}
               title="Choisir un projet depuis la liste « Autres projets »"
               aria-label="Autres projets"
-              style={{ height: 44, padding: "0 12px", fontWeight: 800 }}
+              style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
             >
               Autres projets
             </Button>
@@ -982,7 +930,7 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
               disabled={present}
               title="Créer un nouveau projet à partir de ce punch"
               aria-label="Nouveau projet"
-              style={{ height: 44, padding: "0 12px", fontWeight: 800 }}
+              style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
             >
               Nouveau projet
             </Button>
@@ -992,8 +940,28 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
               onClick={handlePunchClick}
               disabled={pending}
               aria-label={present ? "Dépuncher" : "Puncher"}
-              variant={present ? "danger" : "success"}
-              style={{ width: 220, height: 52, fontSize: 18, fontWeight: 800 }}
+              variant="neutral"
+              style={{
+                width: 220,
+                height: 52,
+                background: punchBtnBg,
+                color: "#fff",
+                fontSize: 24,
+                fontWeight: 900,
+                lineHeight: 1.05,
+                letterSpacing: 0.3,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                textShadow: "0 1px 0 rgba(0,0,0,0.15)",
+                flex: "0 0 auto",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = punchBtnHover;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = punchBtnBg;
+              }}
             >
               {present ? "Dépunch" : "Punch"}
             </Button>
@@ -1108,9 +1076,8 @@ export default function PageAccueil() {
 
   const [materialProjId, setMaterialProjId] = useState(null);
 
-  // ✅ Historique Employé (modal)
   const [histOpen, setHistOpen] = useState(false);
-  const [histEmpId, setHistEmpId] = useState(""); // employé choisi à l’ouverture
+  const [histEmpId, setHistEmpId] = useState("");
 
   if (route === "projets") {
     return (
@@ -1126,7 +1093,7 @@ export default function PageAccueil() {
   return (
     <>
       <PageContainer>
-        <TopBar left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Gyrotech</h1>} right={<ClockBadge now={now} />} />
+        <TopBar left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Styro</h1>} right={<ClockBadge now={now} />} />
 
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
@@ -1134,11 +1101,10 @@ export default function PageAccueil() {
           title="👥 Travailleurs"
           right={
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-              {/* ✅ Ouvre la feuille d'heures DANS la modale */}
               <Button
                 variant="neutral"
                 onClick={() => {
-                  setHistEmpId(""); // pas imposé -> dropdown dans la modale
+                  setHistEmpId("");
                   setHistOpen(true);
                 }}
                 aria-label="Voir l’horaire (dans une modale)"
@@ -1154,13 +1120,21 @@ export default function PageAccueil() {
             <table style={styles.table}>
               <thead>
                 <tr>
-                  {["Nom", "Statut", "Total (jour)", "Projet"].map((h, i) => (
-                    <th key={i} style={styles.th}>
+                  {["Nom", "Total (jour)", "Projet"].map((h, i) => (
+                    <th
+                      key={i}
+                      style={{
+                        ...styles.th,
+                        background: "#f6f7f8",
+                        color: "#111827",
+                      }}
+                    >
                       {h}
                     </th>
                   ))}
                 </tr>
               </thead>
+
               <tbody>
                 {employes.map((e) => (
                   <LigneEmploye
@@ -1179,7 +1153,7 @@ export default function PageAccueil() {
 
                 {employes.length === 0 && (
                   <tr>
-                    <td colSpan={4} style={{ ...styles.td, color: "#64748b" }}>
+                    <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
                       Aucun employé pour l’instant.
                     </td>
                   </tr>
@@ -1200,21 +1174,15 @@ export default function PageAccueil() {
           <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
         </Card>
 
-        {/* Autres projets — UI, sans renommer/supprimer ici */}
         <Card title="📁 Autres projets">
           <AutresProjetsSection allowEdit={false} showHeader={false} />
         </Card>
       </PageContainer>
 
       {materialProjId && (
-        <ProjectMaterielPanel
-          projId={materialProjId}
-          onClose={() => setMaterialProjId(null)}
-          setParentError={setError}
-        />
+        <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />
       )}
 
-      {/* ✅ Modale Historique Employé (affichage style “feuille”) */}
       <HistoriqueEmploye
         open={histOpen}
         onClose={() => setHistOpen(false)}
@@ -1238,10 +1206,7 @@ function AddWorkerInline({ onAdded, onError }) {
     if (!clean) return;
     try {
       setBusy(true);
-      await addDoc(collection(db, "employes"), {
-        nom: clean,
-        createdAt: new Date(),
-      });
+      await addDoc(collection(db, "employes"), { nom: clean, createdAt: new Date() });
       setNom("");
       setOpen(false);
       onAdded?.();

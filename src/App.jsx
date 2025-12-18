@@ -1,7 +1,9 @@
 // App.jsx
 import React, { useEffect, useState } from "react";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./firebaseConfig";
+
+import Login from "./Login"; // ✅ ton Login.jsx
 
 import BurgerMenu from "./BurgerMenu";
 import PageAccueil from "./pageAccueil";
@@ -21,9 +23,6 @@ export default function App() {
 
   // 🔐 état d’auth
   const [user, setUser] = useState(undefined); // undefined = on ne sait pas encore
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [authError, setAuthError] = useState("");
 
   // écoute des changements d’URL (router)
   useEffect(() => {
@@ -41,20 +40,10 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setAuthError("");
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      // si OK, onAuthStateChanged va mettre user ≠ null
-    } catch (err) {
-      console.error(err);
-      setAuthError("Connexion impossible (vérifie email/mot de passe).");
-    }
-  };
-
   const handleLogout = async () => {
     await signOut(auth);
+    // optionnel: ramener au login/accueil
+    window.location.hash = "#/accueil";
   };
 
   // ⏳ Pendant qu’on ne sait pas encore si quelqu’un est loggé
@@ -62,49 +51,17 @@ export default function App() {
     return <div style={{ padding: 24 }}>Chargement...</div>;
   }
 
-  // 🔐 Pas connecté → on montre juste une petite page de login
+  // 🔐 Pas connecté → on affiche TON Login.jsx
   if (!user) {
-    return (
-      <div style={{ padding: 24, maxWidth: 400 }}>
-        <h2>Connexion</h2>
-        <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <label>
-            Email
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              style={{ width: "100%" }}
-            />
-          </label>
-          <label>
-            Mot de passe
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              style={{ width: "100%" }}
-            />
-          </label>
-          {authError && (
-            <div style={{ color: "red", fontSize: 14 }}>{authError}</div>
-          )}
-          <button type="submit" className="btn-primary">
-            Se connecter
-          </button>
-        </form>
-      </div>
-    );
+    return <Login />;
   }
 
   // ✅ Ici l’utilisateur est connecté → request.auth ≠ null dans Firestore
   const pages = [
-    { key: "accueil",   label: "PageAccueil" },
-    { key: "projets",   label: "Projets" },
+    { key: "accueil", label: "PageAccueil" },
+    { key: "projets", label: "Projets" },
     { key: "materiels", label: "Matériels" },
-    { key: "reglages",  label: "Réglages" },
+    { key: "reglages", label: "Réglages" },
   ];
 
   return (
@@ -117,10 +74,10 @@ export default function App() {
 
       <BurgerMenu pages={pages} />
 
-      {route === "accueil"   && <PageAccueil />}
-      {route === "projets"   && <PageListeProjet />}
+      {route === "accueil" && <PageAccueil />}
+      {route === "projets" && <PageListeProjet />}
       {route === "materiels" && <PageMateriels />}
-      {route === "reglages"  && <PageReglages />}
+      {route === "reglages" && <PageReglages />}
 
       {!["accueil", "projets", "materiels", "reglages"].includes(route) && (
         <PageAccueil />
