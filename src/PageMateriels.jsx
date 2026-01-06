@@ -1,4 +1,4 @@
-// PageMateriels.jsx — entrepôt compact + modales + petite croix rouge
+// PageMateriels.jsx — entrepôt compact + modale d’édition sur clic (plus clair)
 // Dépendances: UIPro.jsx (styles, Card, Button, PageContainer, TopBar)
 // Firestore collections:
 //   - materiels: { nom:str, prix:number, categorie:str|null, createdAt:ts }
@@ -126,7 +126,7 @@ function Modal({ open, title, children, onClose }) {
           background: "white",
           borderRadius: 12,
           minWidth: 360,
-          maxWidth: 520,
+          maxWidth: 560,
           width: "100%",
           boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
         }}
@@ -137,9 +137,26 @@ function Modal({ open, title, children, onClose }) {
             padding: "12px 14px",
             borderBottom: "1px solid #e2e8f0",
             fontWeight: 800,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
           }}
         >
-          {title}
+          <div>{title}</div>
+          <button
+            onClick={onClose}
+            title="Fermer"
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 22,
+              cursor: "pointer",
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
         </div>
         <div style={{ padding: 14 }}>{children}</div>
       </div>
@@ -147,406 +164,82 @@ function Modal({ open, title, children, onClose }) {
   );
 }
 
-/* ---------- Ligne matériel (compact + édition nom/prix + petite croix) ---------- */
-function MaterielRow({ row, categories, onError }) {
-  const [catId, setCatId] = useState("");
-
-  // ✅ édition article
-  const [editing, setEditing] = useState(false);
-  const [eNom, setENom] = useState(row.nom || "");
-  const [ePrix, setEPrix] = useState(
-    row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
-  );
-  const [saving, setSaving] = useState(false);
-
-  const nameToId = useMemo(() => {
-    const m = new Map();
-    categories.forEach((c) => m.set(c.nom, c.id));
-    return m;
-  }, [categories]);
-  const idToName = useMemo(() => {
-    const m = new Map();
-    categories.forEach((c) => m.set(c.id, c.nom));
-    return m;
-  }, [categories]);
-
-  useEffect(() => {
-    setCatId(row.categorie ? nameToId.get(row.categorie) || "" : "");
-  }, [row.categorie, nameToId]);
-
-  // resync si Firestore update pendant qu’on n’édite pas
-  useEffect(() => {
-    if (editing) return;
-    setENom(row.nom || "");
-    setEPrix(
-      row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
-    );
-  }, [row.nom, row.prix, editing]);
-
-  const moveToCat = async (newId) => {
-    try {
-      await updateDoc(doc(db, "materiels", row.id), {
-        categorie: newId ? idToName.get(newId) || null : null,
-      });
-      setCatId(newId);
-    } catch (err) {
-      onError?.(err?.message || String(err));
-    }
-  };
-
-  const startEdit = () => {
-    setEditing(true);
-    setENom(row.nom || "");
-    setEPrix(
-      row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
-    );
-  };
-
-  const cancelEdit = () => {
-    setEditing(false);
-    setENom(row.nom || "");
-    setEPrix(
-      row.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
-    );
-  };
-
-  const saveEdit = async () => {
-    const cleanNom = String(eNom || "").trim();
-    const num = parsePrix(ePrix);
-
-    if (!cleanNom) return onError?.("Nom requis.");
-    if (!isFinite(num) || num < 0) return onError?.("Prix invalide.");
-
-    try {
-      setSaving(true);
-      await updateDoc(doc(db, "materiels", row.id), {
-        nom: cleanNom,
-        prix: Math.round(num * 100) / 100,
-      });
-      setEditing(false);
-    } catch (err) {
-      onError?.(err?.message || String(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const onKeyDownRow = (e) => {
-    if (!editing) return;
-    if (e.key === "Enter") saveEdit();
-    if (e.key === "Escape") cancelEdit();
-  };
-
-  const del = async () => {
-    if (!window.confirm(`Supprimer "${row.nom}" ?`)) return;
-    try {
-      await deleteDoc(doc(db, "materiels", row.id));
-    } catch (err) {
-      onError?.(err?.message || String(err));
-    }
-  };
-
+/* ---------- Ligne matériel (CLIC -> MODALE) ---------- */
+function MaterielRow({ row, onOpen }) {
   return (
     <tr
+      onClick={() => onOpen(row)}
+      title="Cliquer pour modifier"
       style={{
         background: "white",
         borderBottom: "1px dashed #e2e8f0",
         height: 34,
+        cursor: "pointer",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
-      onKeyDown={onKeyDownRow}
     >
       {/* NOM */}
-      <td style={{ ...styles.td, padding: "6px 8px", maxWidth: 480 }}>
-        {!editing ? (
-          <div
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-            title="Cliquer pour modifier"
-            onClick={startEdit}
-          >
-            {row.nom || "—"}
-          </div>
-        ) : (
-          <input
-            value={eNom}
-            onChange={(e) => setENom(e.target.value)}
-            autoFocus
-            style={{
-              ...styles.input,
-              height: 28,
-              padding: "2px 6px",
-              fontSize: 13,
-            }}
-            aria-label="Nom de l'article"
-          />
-        )}
+      <td style={{ ...styles.td, padding: "6px 10px", maxWidth: 520 }}>
+        <div
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontWeight: 650,
+          }}
+        >
+          {row.nom || "—"}
+        </div>
       </td>
 
       {/* PRIX */}
       <td
         style={{
           ...styles.td,
-          padding: "6px 8px",
-          width: 110,
+          padding: "6px 10px",
+          width: 130,
           textAlign: "right",
           fontVariantNumeric: "tabular-nums",
         }}
       >
-        {!editing ? (
-          <div
-            style={{ cursor: "pointer" }}
-            title="Cliquer pour modifier"
-            onClick={startEdit}
-          >
-            {formatCAD(row.prix)}
-          </div>
-        ) : (
-          <input
-            value={ePrix}
-            onChange={(e) => setEPrix(e.target.value)}
-            inputMode="decimal"
-            placeholder="0.00"
-            style={{
-              ...styles.input,
-              height: 28,
-              padding: "2px 6px",
-              fontSize: 13,
-              textAlign: "right",
-            }}
-            aria-label="Prix de l'article"
-          />
-        )}
-      </td>
-
-      {/* CATEGORIE */}
-      <td style={{ ...styles.td, padding: "6px 8px", width: 200 }}>
-        <select
-          value={catId}
-          onChange={(e) => moveToCat(e.target.value)}
-          style={{
-            ...styles.input,
-            height: 28,
-            minWidth: 160,
-            padding: "2px 6px",
-            fontSize: 13,
-          }}
-          aria-label="Changer la catégorie"
-        >
-          <option value="">— Aucune —</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.nom}
-            </option>
-          ))}
-        </select>
-      </td>
-
-      {/* ACTIONS */}
-      <td style={{ ...styles.td, padding: "6px 8px", width: 120, textAlign: "right" }}>
-        {!editing ? (
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-            <Button
-              variant="neutral"
-              onClick={startEdit}
-              title="Renommer / modifier prix"
-              style={{ padding: "0 8px", height: 24, minWidth: 0, borderRadius: 6, fontSize: 12, fontWeight: 700 }}
-            >
-              Modifier
-            </Button>
-            <Button
-              variant="danger"
-              onClick={del}
-              aria-label="Supprimer l'article"
-              title="Supprimer"
-              style={{
-                padding: "0 6px",
-                minWidth: 0,
-                width: 24,
-                height: 24,
-                lineHeight: "20px",
-                borderRadius: 6,
-                fontSize: 16,
-                fontWeight: 700,
-              }}
-            >
-              ×
-            </Button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-            <Button
-              variant="success"
-              onClick={saveEdit}
-              disabled={saving}
-              title="Sauver (Enter)"
-              style={{ padding: "0 8px", height: 24, minWidth: 0, borderRadius: 6, fontSize: 12, fontWeight: 800 }}
-            >
-              OK
-            </Button>
-            <Button
-              variant="neutral"
-              onClick={cancelEdit}
-              disabled={saving}
-              title="Annuler (Esc)"
-              style={{ padding: "0 8px", height: 24, minWidth: 0, borderRadius: 6, fontSize: 12, fontWeight: 700 }}
-            >
-              Annuler
-            </Button>
-          </div>
-        )}
+        {formatCAD(row.prix)}
       </td>
     </tr>
   );
 }
 
-/* ---------- En-tête de catégorie (compact + petite croix + confirm) ---------- */
-function CategoryHeaderRow({
-  cat,
-  count,
-  total,
-  collapsed,
-  onToggle,
-  onRename,
-  onAskDelete,
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(cat?.nom || "");
+/* ---------- En-tête de catégorie (GROS + COULEUR + SÉPARATION FORTE) ---------- */
+function CategoryHeaderRow({ cat }) {
   const isNone = !cat;
 
-  // ✅ Quand Firestore renvoie le nouveau nom, on ferme l'édition automatiquement
-  useEffect(() => {
-    setName(cat?.nom || "");
-    setEditing(false);
-  }, [cat?.id, cat?.nom]);
-
-  const save = async () => {
-    const clean = name.trim();
-    if (!cat || !clean) {
-      setEditing(false);
-      return;
-    }
-    if (clean === (cat.nom || "")) {
-      setEditing(false);
-      return;
-    }
-
-    try {
-      // ✅ on attend l'update (si erreur, on reste en édition)
-      await onRename?.(cat, clean);
-      setEditing(false);
-    } catch (e) {
-      // laisse l'édition ouverte si ça fail
-      console.error(e);
-    }
-  };
-
   return (
-    <tr>
-      <th
-        colSpan={4}
-        style={{
-          ...styles.th,
-          textAlign: "left",
-          background: "#f1f5f9",
-          padding: "8px 10px",
-          borderTop: "6px solid #0ea5e9",
-          borderBottom: "1px solid #e2e8f0",
-        }}
-      >
-        <div
+    <>
+      {/* ✅ grosse délimitation entre catégories */}
+      <tr aria-hidden="true">
+        <td colSpan={3} style={{ padding: 0, height: 6, background: "transparent" }} />
+      </tr>
+
+      <tr>
+        <th
+          colSpan={3}
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            justifyContent: "space-between",
+            ...styles.th,
+            textAlign: "left",
+            padding: "4px 12px",
+            background: isNone ? "#0f172a" : "#1e3a8a",
+            color: "white",
+            fontSize: 14, // ✅ titre plus gros
+            fontWeight: 900,
+            letterSpacing: 0.3,
+            borderTop: "1px solid rgba(255,255,255,0.10)",
+            borderBottom: "3px solid rgba(0,0,0,0.10)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button
-              onClick={onToggle}
-              title={collapsed ? "Déplier" : "Replier"}
-              style={{
-                border: "1px solid #cbd5e1",
-                background: "white",
-                borderRadius: 8,
-                padding: "2px 6px",
-                cursor: "pointer",
-                fontWeight: 700,
-              }}
-            >
-              {collapsed ? "▶" : "▼"}
-            </button>
-
-            {editing ? (
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && save()}
-                autoFocus
-                style={{ ...styles.input, height: 34, minWidth: 240 }}
-              />
-            ) : (
-              <div style={{ fontWeight: 900, letterSpacing: 0.3 }}>
-                {isNone ? "— Aucune catégorie —" : cat.nom || "—"}
-              </div>
-            )}
-          </div>
-
-          {!isNone && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {editing ? (
-                <Button
-                  variant="success"
-                  onClick={save}
-                  style={{ padding: "4px 8px", fontSize: 12 }}
-                >
-                  OK
-                </Button>
-              ) : (
-                <Button
-                  variant="neutral"
-                  onClick={() => setEditing(true)}
-                  style={{ padding: "4px 8px", fontSize: 12 }}
-                >
-                  Renommer
-                </Button>
-              )}
-
-              <Button
-                variant="danger"
-                onClick={onAskDelete}
-                title={
-                  count > 0
-                    ? "Impossible: la catégorie n'est pas vide"
-                    : "Supprimer la catégorie"
-                }
-                disabled={count > 0}
-                aria-label="Supprimer la catégorie"
-                style={{
-                  padding: 0,
-                  minWidth: 0,
-                  width: 24,
-                  height: 24,
-                  lineHeight: "20px",
-                  borderRadius: 6,
-                  fontSize: 16,
-                  fontWeight: 700,
-                }}
-              >
-                ×
-              </Button>
-            </div>
-          )}
-        </div>
-      </th>
-    </tr>
+          {isNone ? "— Aucune catégorie —" : cat.nom || "—"}
+        </th>
+      </tr>
+    </>
   );
 }
 
@@ -554,25 +247,44 @@ function CategoryHeaderRow({
 export default function PageMateriels() {
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
-  const [collapsed, setCollapsed] = useState({});
+
   const [openAddItem, setOpenAddItem] = useState(false);
   const [openAddCat, setOpenAddCat] = useState(false);
-  const [confirmDeleteCat, setConfirmDeleteCat] = useState(null); // {cat, itemsCount} | null
 
-  // Modale "article"
+  // Modale "ajouter article"
   const [mNom, setMNom] = useState("");
   const [mPrix, setMPrix] = useState("");
   const [mCatId, setMCatId] = useState("");
   const [busyAdd, setBusyAdd] = useState(false);
 
-  // Modale "catégorie"
+  // Modale "ajouter catégorie"
   const [cNom, setCNom] = useState("");
   const [busyCat, setBusyCat] = useState(false);
+
+  // ✅ Modale "modifier article" (sur clic)
+  const [openEdit, setOpenEdit] = useState(false);
+  const [editRow, setEditRow] = useState(null);
+  const [eNom, setENom] = useState("");
+  const [ePrix, setEPrix] = useState("");
+  const [eCatId, setECatId] = useState("");
+  const [busyEdit, setBusyEdit] = useState(false);
 
   const rows = useMateriels(setError);
   const categories = useCategories(setError);
 
   const term = q.trim().toLowerCase();
+
+  const nameToId = useMemo(() => {
+    const m = new Map();
+    categories.forEach((c) => m.set(c.nom, c.id));
+    return m;
+  }, [categories]);
+
+  const idToName = useMemo(() => {
+    const m = new Map();
+    categories.forEach((c) => m.set(c.id, c.nom));
+    return m;
+  }, [categories]);
 
   const groups = useMemo(() => {
     const byName = new Map();
@@ -592,13 +304,11 @@ export default function PageMateriels() {
       else (byName.get(k) || (byName.set(k, []), byName.get(k))).push(r);
     });
 
-    // Base: toutes les catégories
     let out = categories.map((c) => ({
       cat: c,
       items: byName.get(c.nom) || [],
     }));
 
-    // Groupe "Aucune" seulement si items
     if (none.length > 0) out.push({ cat: null, items: none });
 
     // ✅ Quand on cherche: cacher les catégories vides
@@ -611,18 +321,32 @@ export default function PageMateriels() {
     return groups.reduce((sum, g) => sum + (g.items?.length || 0), 0);
   }, [groups]);
 
-  const idToName = useMemo(() => {
-    const m = new Map();
-    categories.forEach((c) => m.set(c.id, c.nom));
-    return m;
-  }, [categories]);
+  /* --- ouvrir modale édition article --- */
+  const openEditFor = (row) => {
+    setEditRow(row);
+    setENom(row?.nom || "");
+    setEPrix(
+      row?.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
+    );
+    setECatId(row?.categorie ? nameToId.get(row.categorie) || "" : "");
+    setOpenEdit(true);
+  };
+
+  const closeEdit = () => {
+    setOpenEdit(false);
+    setEditRow(null);
+    setENom("");
+    setEPrix("");
+    setECatId("");
+  };
 
   /* --- actions modales --- */
   const submitAddItem = async () => {
     const cleanNom = mNom.trim();
-    const num = parseFloat(String(mPrix).replace(",", "."));
+    const num = parsePrix(mPrix);
     if (!cleanNom) return setError("Nom requis.");
     if (!isFinite(num) || num < 0) return setError("Prix invalide.");
+
     try {
       setBusyAdd(true);
       await addDoc(collection(db, "materiels"), {
@@ -660,35 +384,53 @@ export default function PageMateriels() {
     }
   };
 
-  const renameCategory = async (cat, newName) => {
+  const saveEdit = async () => {
+    if (!editRow?.id) return;
+
+    const cleanNom = String(eNom || "").trim();
+    const num = parsePrix(ePrix);
+
+    if (!cleanNom) return setError("Nom requis.");
+    if (!isFinite(num) || num < 0) return setError("Prix invalide.");
+
     try {
-      await updateDoc(doc(db, "categoriesMateriels", cat.id), { nom: newName });
+      setBusyEdit(true);
+      await updateDoc(doc(db, "materiels", editRow.id), {
+        nom: cleanNom,
+        prix: Math.round(num * 100) / 100,
+        categorie: eCatId ? idToName.get(eCatId) || null : null,
+      });
+      closeEdit();
     } catch (err) {
       setError(err?.message || String(err));
+    } finally {
+      setBusyEdit(false);
     }
   };
 
-  const deleteCategory = async (cat) => {
+  const deleteItem = async () => {
+    if (!editRow?.id) return;
+    const ok = window.confirm(`Supprimer "${editRow?.nom || "cet article"}" ?`);
+    if (!ok) return;
+
     try {
-      await deleteDoc(doc(db, "categoriesMateriels", cat.id));
+      setBusyEdit(true);
+      await deleteDoc(doc(db, "materiels", editRow.id));
+      closeEdit();
     } catch (err) {
       setError(err?.message || String(err));
+    } finally {
+      setBusyEdit(false);
     }
   };
-
-  const totalFor = (items) =>
-    items.reduce((sum, r) => sum + (Number(r.prix) || 0), 0);
-
-  const toggle = (catIdKey) =>
-    setCollapsed((m) => ({ ...m, [catIdKey]: !m[catIdKey] }));
 
   /* --- rendering --- */
   return (
     <PageContainer>
       <TopBar
         left={
-          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 900 }}>
-            Inventaire — entrepôt
+          <h1 style={{ margin: 0, fontSize: 25, fontWeight: 900 }}>
+            Matériels
           </h1>
         }
         right={
@@ -696,7 +438,7 @@ export default function PageMateriels() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Recherche (nom, cat., prix)…"
+              placeholder="Recherche"
               style={{
                 ...styles.input,
                 width: 260,
@@ -716,8 +458,7 @@ export default function PageMateriels() {
 
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      <Card title="Matériels (groupé par catégorie)">
-        {/* Table plein écran : pas de scroll interne */}
+      <Card>
         <div style={{ ...styles.tableWrap, maxHeight: "unset", overflow: "visible" }}>
           <table
             style={{
@@ -727,34 +468,12 @@ export default function PageMateriels() {
               width: "100%",
             }}
           >
-            <thead>
-              <tr>
-                {["Nom", "Prix", "Catégorie", "Actions"].map((h, i) => (
-                  <th
-                    key={h}
-                    style={{
-                      ...styles.th,
-                      background: "#e2e8f0",
-                      textTransform: "uppercase",
-                      letterSpacing: 0.6,
-                      fontSize: 12,
-                      padding: "6px 8px",
-                      ...(i === 1 ? { textAlign: "right", width: 110 } : {}),
-                      ...(i === 2 ? { width: 200 } : {}),
-                      ...(i === 3 ? { textAlign: "right", width: 120 } : {}),
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
+            <thead>{/* volontairement vide */}</thead>
 
             <tbody>
-              {/* ✅ Quand on cherche et qu’il n’y a aucun résultat */}
               {term && totalVisibleItems === 0 && (
                 <tr>
-                  <td colSpan={4} style={{ padding: "8px 10px", color: "#64748b" }}>
+                  <td colSpan={3} style={{ padding: "8px 10px", color: "#64748b" }}>
                     Aucun résultat pour “<strong>{q}</strong>”.
                   </td>
                 </tr>
@@ -762,36 +481,18 @@ export default function PageMateriels() {
 
               {groups.map(({ cat, items }) => {
                 const key = cat ? cat.id : "__NONE__";
-                const isCollapsed = !!collapsed[key];
 
                 return (
                   <React.Fragment key={key}>
-                    <CategoryHeaderRow
-                      cat={cat}
-                      count={items.length}
-                      total={totalFor(items)}
-                      collapsed={isCollapsed}
-                      onToggle={() => toggle(key)}
-                      onRename={renameCategory}
-                      onAskDelete={() =>
-                        cat && setConfirmDeleteCat({ cat, itemsCount: items.length })
-                      }
-                    />
+                    <CategoryHeaderRow cat={cat} />
 
-                    {!isCollapsed &&
-                      items.map((r) => (
-                        <MaterielRow
-                          key={r.id}
-                          row={r}
-                          categories={categories}
-                          onError={setError}
-                        />
-                      ))}
+                    {items.map((r) => (
+                      <MaterielRow key={r.id} row={r} onOpen={openEditFor} />
+                    ))}
 
-                    {/* ✅ “Aucun item…” seulement si PAS en recherche */}
-                    {!term && !isCollapsed && items.length === 0 && (
+                    {!term && items.length === 0 && (
                       <tr>
-                        <td colSpan={4} style={{ padding: "8px 10px", color: "#94a3b8" }}>
+                        <td colSpan={3} style={{ padding: "8px 10px", color: "#94a3b8" }}>
                           Aucun item dans cette catégorie.
                         </td>
                       </tr>
@@ -805,7 +506,7 @@ export default function PageMateriels() {
                 groups[0].items.length === 0 &&
                 categories.length === 0 && (
                   <tr>
-                    <td colSpan={4} style={{ padding: "8px 10px", color: "#64748b" }}>
+                    <td colSpan={3} style={{ padding: "8px 10px", color: "#64748b" }}>
                       Aucune donnée pour l’instant — ajoute une catégorie ou un article.
                     </td>
                   </tr>
@@ -816,31 +517,35 @@ export default function PageMateriels() {
       </Card>
 
       {/* Modale: Ajouter un article */}
-      <Modal open={openAddItem} title="Ajouter un article" onClose={() => setOpenAddItem(false)}>
+      <Modal
+        open={openAddItem}
+        title="Ajouter un article"
+        onClose={() => setOpenAddItem(false)}
+      >
         <div style={{ display: "grid", gap: 10 }}>
           <label style={{ display: "grid", gap: 6 }}>
             <span>Nom</span>
             <input
               value={mNom}
               onChange={(e) => setMNom(e.target.value)}
-              placeholder="Nom de l’article"
               style={{ ...styles.input }}
             />
           </label>
+
           <label style={{ display: "grid", gap: 6 }}>
-            <span>Prix (CAD)</span>
+            <span>Prix</span>
             <input
-              type="number"
-              step="0.01"
-              min="0"
+              type="text"
+              inputMode="decimal"
               value={mPrix}
               onChange={(e) => setMPrix(e.target.value)}
               placeholder="0.00"
               style={{ ...styles.input, textAlign: "right" }}
             />
           </label>
+
           <label style={{ display: "grid", gap: 6 }}>
-            <span>Catégorie (optionnel)</span>
+            <span>Catégorie</span>
             <select
               value={mCatId}
               onChange={(e) => setMCatId(e.target.value)}
@@ -854,6 +559,7 @@ export default function PageMateriels() {
               ))}
             </select>
           </label>
+
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
             <Button variant="neutral" onClick={() => setOpenAddItem(false)}>
               Annuler
@@ -870,17 +576,21 @@ export default function PageMateriels() {
       </Modal>
 
       {/* Modale: Ajouter une catégorie */}
-      <Modal open={openAddCat} title="Ajouter une catégorie" onClose={() => setOpenAddCat(false)}>
+      <Modal
+        open={openAddCat}
+        title="Ajouter une catégorie"
+        onClose={() => setOpenAddCat(false)}
+      >
         <div style={{ display: "grid", gap: 10 }}>
           <label style={{ display: "grid", gap: 6 }}>
             <span>Nom de la catégorie</span>
             <input
               value={cNom}
               onChange={(e) => setCNom(e.target.value)}
-              placeholder="Ex. Électricité"
               style={{ ...styles.input }}
             />
           </label>
+
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
             <Button variant="neutral" onClick={() => setOpenAddCat(false)}>
               Annuler
@@ -896,45 +606,79 @@ export default function PageMateriels() {
         </div>
       </Modal>
 
-      {/* Modale: Confirmation suppression catégorie */}
+      {/* ✅ Modale: Modifier un article (clic sur la ligne) */}
       <Modal
-        open={!!confirmDeleteCat}
-        title="Supprimer la catégorie"
-        onClose={() => setConfirmDeleteCat(null)}
+        open={openEdit}
+        title={editRow?.nom ? `Modifier — ${editRow.nom}` : "Modifier l’article"}
+        onClose={closeEdit}
       >
-        {confirmDeleteCat && (
-          <div style={{ display: "grid", gap: 10 }}>
-            <p style={{ margin: 0 }}>
-              Êtes-vous sûr de vouloir supprimer la catégorie{" "}
-              <strong>{confirmDeleteCat.cat.nom}</strong> ?
-            </p>
-            {confirmDeleteCat.itemsCount > 0 && (
-              <p style={{ margin: 0, color: "#b91c1c" }}>
-                Impossible : la catégorie contient encore {confirmDeleteCat.itemsCount} item(s).
-              </p>
-            )}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <Button variant="neutral" onClick={() => setConfirmDeleteCat(null)}>
+        <div style={{ display: "grid", gap: 10 }}>
+          <label style={{ display: "grid", gap: 6 }}>
+            <span>Nom</span>
+            <input
+              value={eNom}
+              onChange={(e) => setENom(e.target.value)}
+              placeholder="Nom de l’article"
+              style={{ ...styles.input }}
+              autoFocus
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: 6 }}>
+            <span>Prix (CAD)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={ePrix}
+              onChange={(e) => setEPrix(e.target.value)}
+              placeholder="0.00"
+              style={{ ...styles.input, textAlign: "right" }}
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: 6 }}>
+            <span>Catégorie</span>
+            <select
+              value={eCatId}
+              onChange={(e) => setECatId(e.target.value)}
+              style={{ ...styles.input, height: 34 }}
+            >
+              <option value="">— Aucune —</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nom}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              marginTop: 6,
+            }}
+          >
+            <Button variant="danger" onClick={deleteItem} disabled={busyEdit}>
+              Supprimer
+            </Button>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button variant="neutral" onClick={closeEdit} disabled={busyEdit}>
                 Annuler
               </Button>
               <Button
-                variant="danger"
-                onClick={async () => {
-                  if (confirmDeleteCat.itemsCount > 0) return;
-                  try {
-                    await deleteCategory(confirmDeleteCat.cat);
-                    setConfirmDeleteCat(null);
-                  } catch (e) {
-                    setError(e?.message || String(e));
-                  }
-                }}
-                disabled={confirmDeleteCat.itemsCount > 0}
+                variant="primary"
+                onClick={saveEdit}
+                disabled={busyEdit || !eNom.trim()}
               >
-                Supprimer
+                Sauvegarder
               </Button>
             </div>
           </div>
-        )}
+        </div>
       </Modal>
     </PageContainer>
   );

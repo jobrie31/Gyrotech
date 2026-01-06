@@ -1,9 +1,11 @@
 /**
  * Cloud Functions v2 – envoi de facture par courriel avec SendGrid
  * + Activation de compte (email + code + mot de passe)
+ * + ✅ Purge auto des projets fermés complètement après 60 jours (deleteAt)
  */
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
@@ -228,6 +230,92 @@ exports.sendInvoiceEmail = onCall(
         "internal",
         "Erreur lors de l'envoi du courriel de facture."
       );
+    }
+  }
+);
+
+/* =========================
+   ✅ Purge automatique des projets fermés complètement (deleteAt)
+   =========================
+   - Chaque nuit: supprime les projets où fermeComplet=true ET deleteAt <= maintenant
+   - Supprime aussi les fichiers Storage liés (factures/{id}.pdf + projets/{id}/pdfs/*)
+   - Utilise recursiveDelete() => supprime doc + sous-collections
+*/
+async function deleteFilesWithPrefix(bucket, prefix) {
+  try {
+    // Pagination "light" (utile si un projet a beaucoup de PDFs)
+    let pageToken = undefined;
+    do {
+      const [files, , apiResponse] = await bucket.getFiles({
+        prefix,
+        autoPaginate: false,
+        maxResults: 500,
+        pageToken,
+      });
+
+      if (files && files.length) {
+        await Promise.all(
+          files.map((f) => f.delete({ ignoreNotFound: true }).catch(() => null))
+        );
+      }
+
+      pageToken = apiResponse?.nextPageToken;
+    } while (pageToken);
+  } catch (e) {
+    logger.warn(`deleteFilesWithPrefix warning (${prefix}):`, e?.message || e);
+  }
+}
+
+exports.purgeClosedProjects = onSchedule(
+  {
+    schedule: "every day 03:15",
+    timeZone: "America/Toronto",
+  },
+  async () => {
+    const db = admin.firestore();
+    const now = admin.firestore.Timestamp.now();
+    const bucket = admin.storage().bucket();
+
+    let deletedCount = 0;
+
+    // boucle en paquets (au cas où il y en a beaucoup)
+    while (true) {
+      const snap = await db
+        .collection("projets")
+        .where("fermeComplet", "==", true)
+        .where("deleteAt", "<=", now)
+        .orderBy("deleteAt", "asc")
+        .limit(25)
+        .get();
+
+      if (snap.empty) break;
+
+      for (const d of snap.docs) {
+        const projId = d.id;
+
+        try {
+          // Storage (best effort)
+          await bucket
+            .file(`factures/${projId}.pdf`)
+            .delete({ ignoreNotFound: true })
+            .catch(() => null);
+
+          await deleteFilesWithPrefix(bucket, `projets/${projId}/pdfs/`);
+
+          // Firestore: doc + sous-collections
+          await db.recursiveDelete(d.ref);
+
+          deletedCount++;
+          logger.info(`purgeClosedProjects: projet supprimé: ${projId}`);
+        } catch (e) {
+          logger.error(`purgeClosedProjects FAILED (${projId}):`, e?.message || e);
+          // continue sur les suivants
+        }
+      }
+    }
+
+    if (deletedCount > 0) {
+      logger.info(`purgeClosedProjects: total supprimés = ${deletedCount}`);
     }
   }
 );

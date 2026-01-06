@@ -23,7 +23,14 @@ export const styles = {
   container: {
     maxWidth: 1200,
     margin: "0 auto",
-    padding: 20,
+    paddingLeft: 20,
+    paddingRight: 20,
+    paddingBottom: 20,
+
+    // ✅ IMPORTANT: par défaut, PAS de padding en haut
+    // (comme ça la 1ère card monte tout de suite sous ton FullWidthTopBar)
+    paddingTop: 0,
+
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial",
     color: palette.text,
   },
@@ -90,10 +97,10 @@ export const styles = {
 };
 
 /* ===== Primitives ===== */
-export function PageContainer({ children }) {
+export function PageContainer({ children, containerStyle }) {
   return (
     <div style={styles.pageBg}>
-      <div style={styles.container}>{children}</div>
+      <div style={{ ...styles.container, ...(containerStyle || {}) }}>{children}</div>
     </div>
   );
 }
@@ -128,6 +135,7 @@ export function Button({ variant = "primary", children, style, ...props }) {
     danger: { bg: "#ef4444", fg: "#fff", bd: "#dc2626" },
     neutral: { bg: "#fff", fg: "#0f172a", bd: palette.border },
   }[variant];
+
   return (
     <button
       {...props}
@@ -157,6 +165,7 @@ export function Pill({ variant = "neutral", children }) {
     info: { bg: "#e0f2fe", bd: "#bae6fd", fg: "#0c4a6e" },
     neutral: { bg: "#f1f5f9", bd: "#e2e8f0", fg: "#334155" },
   }[variant];
+
   return (
     <span
       style={{
@@ -207,20 +216,31 @@ export function ProTable({ columns = [], rows = [], emptyText = "Aucune donnée.
         <thead>
           <tr>
             {columns.map((c, i) => (
-              <th key={i} style={styles.th}>{c}</th>
+              <th key={i} style={styles.th}>
+                {c}
+              </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} style={{ ...styles.td, color: "#64748b" }}>{emptyText}</td>
+              <td colSpan={columns.length} style={{ ...styles.td, color: "#64748b" }}>
+                {emptyText}
+              </td>
             </tr>
           ) : (
             rows.map((cells, r) => (
-              <tr key={r} style={styles.row} onMouseEnter={e => (e.currentTarget.style.background = styles.rowHover.background)} onMouseLeave={e => (e.currentTarget.style.background = styles.row.background)}>
+              <tr
+                key={r}
+                style={styles.row}
+                onMouseEnter={(e) => (e.currentTarget.style.background = styles.rowHover.background)}
+                onMouseLeave={(e) => (e.currentTarget.style.background = styles.row.background)}
+              >
                 {cells.map((cell, c) => (
-                  <td key={c} style={styles.td}>{cell}</td>
+                  <td key={c} style={styles.td}>
+                    {cell}
+                  </td>
                 ))}
               </tr>
             ))

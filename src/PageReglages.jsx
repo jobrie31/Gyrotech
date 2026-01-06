@@ -11,7 +11,8 @@ import {
   addModele,
   deleteModele,
 } from "./refData";
-import { db } from "./firebaseConfig";
+import { db, auth } from "./firebaseConfig";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   doc,
   getDoc,
@@ -26,6 +27,7 @@ import {
   where,
   orderBy,
   addDoc,
+  limit,
 } from "firebase/firestore";
 
 export default function PageReglages() {
@@ -50,7 +52,83 @@ export default function PageReglages() {
     [annees]
   );
 
-  // ⚙️ Zone facture : infos Gyrotech + taux horaire
+  /* ============================================================
+     ✅ Détection utilisateur courant + admin
+     - on mappe auth.user -> doc employes (uid == user.uid)
+     - fallback: emailLower == user.email
+  ============================================================ */
+  const [authUser, setAuthUser] = useState(null);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUser(u || null));
+    return () => unsub();
+  }, []);
+
+  const [me, setMe] = useState(null);
+  const [meLoading, setMeLoading] = useState(true);
+
+  useEffect(() => {
+    let unsub = null;
+
+    (async () => {
+      setMeLoading(true);
+      try {
+        if (!authUser) {
+          setMe(null);
+          return;
+        }
+
+        const uid = authUser.uid;
+        const emailLower = String(authUser.email || "").trim().toLowerCase();
+
+        // 1) cherche par uid
+        let q = query(
+          collection(db, "employes"),
+          where("uid", "==", uid),
+          limit(1)
+        );
+        let snap = await getDocs(q);
+
+        // 2) fallback emailLower (au cas où uid pas encore rempli)
+        if (snap.empty && emailLower) {
+          q = query(
+            collection(db, "employes"),
+            where("emailLower", "==", emailLower),
+            limit(1)
+          );
+          snap = await getDocs(q);
+        }
+
+        if (snap.empty) {
+          setMe(null);
+          return;
+        }
+
+        const empDoc = snap.docs[0];
+        unsub = onSnapshot(
+          doc(db, "employes", empDoc.id),
+          (s) => setMe(s.exists() ? { id: s.id, ...s.data() } : null),
+          (err) => {
+            console.error(err);
+            setMe(null);
+          }
+        );
+      } catch (e) {
+        console.error(e);
+        setMe(null);
+      } finally {
+        setMeLoading(false);
+      }
+    })();
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [authUser?.uid, authUser?.email]);
+
+  const isAdmin = me?.isAdmin === true;
+  const canShowAdmin = isAdmin === true;
+
+  /* ================== ⚙️ Zone facture : infos + taux horaire ================== */
   const [factureNom, setFactureNom] = useState("Gyrotech");
   const [factureSousTitre, setFactureSousTitre] = useState(
     "Service mobile – Diagnostic & réparation"
@@ -71,10 +149,16 @@ export default function PageReglages() {
   // 👉 Savoir si on a un brouillon de projet en cours (pour afficher le bouton Retour)
   const [hasDraftProjet, setHasDraftProjet] = useState(false);
 
-  // 🔁 Charger config facture
+  // 🔁 Charger config facture (ADMIN SEULEMENT)
   useEffect(() => {
     (async () => {
       try {
+        // si pas admin: on ne charge rien (et on "dé-bloque" l'UI)
+        if (!canShowAdmin) {
+          setFactureLoading(false);
+          return;
+        }
+
         setFactureLoading(true);
         setFactureError(null);
         const ref = doc(db, "config", "facture");
@@ -95,12 +179,17 @@ export default function PageReglages() {
         setFactureLoading(false);
       }
     })();
-  }, []);
+  }, [canShowAdmin]);
 
-  // 🔁 Charger config "code Autres projets"
+  // 🔁 Charger config "code Autres projets" (ADMIN SEULEMENT)
   useEffect(() => {
     (async () => {
       try {
+        if (!canShowAdmin) {
+          setAutresCodeLoading(false);
+          return;
+        }
+
         setAutresCodeLoading(true);
         setAutresCodeError(null);
         const ref = doc(db, "config", "punchCodes");
@@ -118,7 +207,7 @@ export default function PageReglages() {
         setAutresCodeLoading(false);
       }
     })();
-  }, []);
+  }, [canShowAdmin]);
 
   // 🔁 Détecter si on a un brouillon de projet (création en cours)
   useEffect(() => {
@@ -131,6 +220,7 @@ export default function PageReglages() {
   }, []);
 
   const saveFacture = async () => {
+    if (!canShowAdmin) return;
     try {
       setFactureError(null);
       setFactureSaved(false);
@@ -156,6 +246,7 @@ export default function PageReglages() {
 
   // ✅ sauver code "Autres projets"
   const saveAutresCode = async () => {
+    if (!canShowAdmin) return;
     try {
       setAutresCodeError(null);
       setAutresCodeSaved(false);
@@ -231,14 +322,19 @@ export default function PageReglages() {
     }
   };
 
-  /* ================== TRAVAILLEURS ================== */
-
+  /* ================== TRAVAILLEURS (ADMIN) ================== */
   const [employes, setEmployes] = useState([]);
   const [employeNomInput, setEmployeNomInput] = useState("");
   const [employeEmailInput, setEmployeEmailInput] = useState("");
   const [employeCodeInput, setEmployeCodeInput] = useState("");
+  const [employeIsAdminInput, setEmployeIsAdminInput] = useState(false);
 
   useEffect(() => {
+    if (!canShowAdmin) {
+      setEmployes([]);
+      return;
+    }
+
     const c = collection(db, "employes");
     const q = query(c, orderBy("nom", "asc"));
     const unsub = onSnapshot(
@@ -254,7 +350,7 @@ export default function PageReglages() {
       }
     );
     return () => unsub();
-  }, []);
+  }, [canShowAdmin]);
 
   function isValidEmail(v) {
     const s = String(v || "").trim().toLowerCase();
@@ -266,6 +362,8 @@ export default function PageReglages() {
   }
 
   const onAddEmploye = async () => {
+    if (!canShowAdmin) return;
+
     const nom = (employeNomInput || "").trim();
     const email = (employeEmailInput || "").trim();
     const emailLower = email.toLowerCase();
@@ -274,12 +372,10 @@ export default function PageReglages() {
     if (!nom) return alert("Nom requis.");
     if (!isValidEmail(emailLower)) return alert("Email invalide.");
 
-    // évite doublon d'email (selon la liste déjà chargée)
     if (employes.some((e) => (e.emailLower || "").toLowerCase() === emailLower)) {
       return alert("Cet email existe déjà dans la liste des travailleurs.");
     }
 
-    // Si tu veux forcer numérique: ici on garde string (ex: "1234")
     if (code.length < 4) {
       return alert("Code d’activation trop court (min 4 caractères).");
     }
@@ -290,7 +386,10 @@ export default function PageReglages() {
         email,
         emailLower,
 
-        // ✅ Activation (pour ta Cloud Function activateAccount)
+        // ✅ admin
+        isAdmin: !!employeIsAdminInput,
+
+        // ✅ Activation
         activationCode: code,
         activatedAt: null,
         uid: null,
@@ -301,6 +400,7 @@ export default function PageReglages() {
       setEmployeNomInput("");
       setEmployeEmailInput("");
       setEmployeCodeInput("");
+      setEmployeIsAdminInput(false);
     } catch (e) {
       console.error(e);
       alert(e?.message || String(e));
@@ -308,6 +408,8 @@ export default function PageReglages() {
   };
 
   const onDelEmploye = async (id, nom) => {
+    if (!canShowAdmin) return;
+
     const label = nom || "ce travailleur";
     if (
       !window.confirm(
@@ -323,8 +425,9 @@ export default function PageReglages() {
     }
   };
 
-  // ✅ Optionnel: reset code d’activation (si quelqu’un l’a perdu)
   const onResetActivationCode = async (id) => {
+    if (!canShowAdmin) return;
+
     const newCode = genCode4();
     if (!window.confirm(`Générer un nouveau code (${newCode}) ?`)) return;
     try {
@@ -342,7 +445,6 @@ export default function PageReglages() {
   };
 
   /* ================== GESTION DU TEMPS (ADMIN) ================== */
-
   const [timeDate, setTimeDate] = useState("");
   const [timeProjId, setTimeProjId] = useState("");
   const [timeEmpId, setTimeEmpId] = useState("");
@@ -353,12 +455,15 @@ export default function PageReglages() {
   const [timeError, setTimeError] = useState(null);
   const [timeRowEdits, setTimeRowEdits] = useState({});
 
-  // ⚙️ État pour le dé-punch auto à 17h
   const [massDepunchLoading, setMassDepunchLoading] = useState(false);
   const [massDepunchMsg, setMassDepunchMsg] = useState("");
 
-  // Projets (liste simple)
+  // Projets (liste simple) — ADMIN ONLY
   useEffect(() => {
+    if (!canShowAdmin) {
+      setTimeProjets([]);
+      return;
+    }
     (async () => {
       try {
         const snap = await getDocs(collection(db, "projets"));
@@ -373,10 +478,14 @@ export default function PageReglages() {
         setTimeError(e?.message || String(e));
       }
     })();
-  }, []);
+  }, [canShowAdmin]);
 
-  // Employés (liste simple pour le filtre temps)
+  // Employés (liste simple pour le filtre temps) — ADMIN ONLY
   useEffect(() => {
+    if (!canShowAdmin) {
+      setTimeEmployes([]);
+      return;
+    }
     (async () => {
       try {
         const snap = await getDocs(collection(db, "employes"));
@@ -391,14 +500,20 @@ export default function PageReglages() {
         setTimeError(e?.message || String(e));
       }
     })();
-  }, []);
+  }, [canShowAdmin]);
 
-  // Charger les segments du projet + date (pour l'édition manuelle)
+  // Charger les segments du projet + date (ADMIN ONLY)
   useEffect(() => {
+    if (!canShowAdmin) {
+      setTimeSegments([]);
+      return;
+    }
+
     if (!timeDate || !timeProjId) {
       setTimeSegments([]);
       return;
     }
+
     setTimeLoading(true);
     setTimeError(null);
 
@@ -410,6 +525,7 @@ export default function PageReglages() {
       timeDate,
       "segments"
     );
+
     const unsub = onSnapshot(
       segCol,
       (snap) => {
@@ -430,7 +546,7 @@ export default function PageReglages() {
       }
     );
     return () => unsub();
-  }, [timeDate, timeProjId]);
+  }, [canShowAdmin, timeDate, timeProjId]);
 
   // Initialiser les valeurs HH:MM quand les segments changent
   useEffect(() => {
@@ -456,7 +572,6 @@ export default function PageReglages() {
     }));
   };
 
-  // 🔍 Trouver le segment employé correspondant à un segment projet
   async function findEmployeeSegmentForProject(seg, dateKey, projId) {
     if (!seg.empId || !projId || !dateKey) return null;
 
@@ -473,7 +588,6 @@ export default function PageReglages() {
     const snap = await getDocs(qEmp);
     if (snap.empty) return null;
 
-    // on prend celui dont le start est le plus proche de celui du projet
     const projStartMs = toMillis(seg.start);
     let bestDoc = null;
     let bestDiff = Infinity;
@@ -490,6 +604,8 @@ export default function PageReglages() {
   }
 
   const saveSegment = async (seg) => {
+    if (!canShowAdmin) return;
+
     const edit = timeRowEdits[seg.id] || {};
     const startStr = (edit.startTime || "").trim();
     const endStr = (edit.endTime || "").trim();
@@ -511,7 +627,6 @@ export default function PageReglages() {
     setTimeError(null);
 
     try {
-      // ✅ projet
       const projSegRef = doc(
         db,
         "projets",
@@ -530,11 +645,8 @@ export default function PageReglages() {
 
       const promises = [updateDoc(projSegRef, updates)];
 
-      // ✅ employé : on trouve le segment correspondant (jobId == projId + start le plus proche)
       const empRef = await findEmployeeSegmentForProject(seg, timeDate, timeProjId);
-      if (empRef) {
-        promises.push(updateDoc(empRef, updates));
-      }
+      if (empRef) promises.push(updateDoc(empRef, updates));
 
       await Promise.all(promises);
     } catch (e) {
@@ -546,6 +658,8 @@ export default function PageReglages() {
   };
 
   const deleteSegment = async (seg) => {
+    if (!canShowAdmin) return;
+
     if (!window.confirm("Supprimer ce bloc de temps ?")) return;
     setTimeLoading(true);
     setTimeError(null);
@@ -562,9 +676,7 @@ export default function PageReglages() {
       const ops = [deleteDoc(projSegRef)];
 
       const empRef = await findEmployeeSegmentForProject(seg, timeDate, timeProjId);
-      if (empRef) {
-        ops.push(deleteDoc(empRef));
-      }
+      if (empRef) ops.push(deleteDoc(empRef));
 
       await Promise.all(ops);
     } catch (e) {
@@ -575,9 +687,10 @@ export default function PageReglages() {
     }
   };
 
-  /* ========= DÉ-PUNCH AUTOMATIQUE À 17H (tant que la page est ouverte) ========= */
-
+  /* ========= DÉ-PUNCH AUTOMATIQUE À 17H (ADMIN + page ouverte) ========= */
   useEffect(() => {
+    if (!canShowAdmin) return;
+
     let timerId;
     let running = false;
 
@@ -587,27 +700,21 @@ export default function PageReglages() {
 
         const now = new Date();
         const hours = now.getHours();
-        const minutes = now.getMinutes();
-        void minutes;
 
-        // Date du jour "YYYY-MM-DD"
         const y = now.getFullYear();
         const m = String(now.getMonth() + 1).padStart(2, "0");
         const d = String(now.getDate()).padStart(2, "0");
         const dateKey = `${y}-${m}-${d}`;
 
-        // On se rappelle si on a déjà fait le dé-punch auto aujourd'hui
         const lastDone =
           window.localStorage?.getItem("massDepunchLastDate") || null;
 
-        // On déclenche si : il est 17h ou plus, et pas encore fait aujourd'hui
         if (hours >= 17 && lastDone !== dateKey) {
           running = true;
           setMassDepunchLoading(true);
           setMassDepunchMsg("");
           setTimeError(null);
 
-          // Fin fixée à 17:00 précise aujourd'hui
           const endTime = new Date(
             y,
             now.getMonth(),
@@ -620,13 +727,11 @@ export default function PageReglages() {
 
           let countSegs = 0;
 
-          // 1) On va chercher tous les employés
           const empSnap = await getDocs(collection(db, "employes"));
 
           for (const empDoc of empSnap.docs) {
             const empId = empDoc.id;
 
-            // Segments du jour pour cet employé
             const segCol = collection(
               db,
               "employes",
@@ -639,21 +744,17 @@ export default function PageReglages() {
 
             for (const segDoc of segSnap.docs) {
               const segData = segDoc.data();
-
-              // Si déjà dépunché → on saute
               if (segData.end) continue;
 
               const jobId = segData.jobId;
               const startTs = segData.start;
 
-              // ✅ Côté employé : on ferme à 17h
               await updateDoc(segDoc.ref, {
                 end: endTime,
                 updatedAt: serverTimestamp(),
               });
               countSegs++;
 
-              // ✅ Côté projet : on cherche le segment correspondant (même jobId, même start, même empId)
               if (jobId && startTs) {
                 const projSegCol = collection(
                   db,
@@ -701,7 +802,7 @@ export default function PageReglages() {
     return () => {
       if (timerId) window.clearInterval(timerId);
     };
-  }, []);
+  }, [canShowAdmin]);
 
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
@@ -738,282 +839,543 @@ export default function PageReglages() {
             ⬅️ Retour au projet en cours
           </button>
         )}
+
+        {/* Petit badge informatif */}
+        {!meLoading && (
+          <div style={{ fontSize: 12, color: "#6b7280" }}>
+            Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong>{" "}
+            {canShowAdmin ? "— (Admin)" : ""}
+          </div>
+        )}
       </div>
 
-      {/* 🔐 Code "Autres projets" */}
-      <section style={section}>
-        <h3 style={h3}>Code — Autres projets</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres
-          projets” avant de puncher.
-          <br />
-          Laisse vide pour ne pas demander de code.
-        </div>
+      {/* ================== BLOCS ADMIN (CACHÉS SI NON-ADMIN) ================== */}
 
-        {autresCodeError && (
-          <div
-            style={{
-              background: "#fee2e2",
-              color: "#b91c1c",
-              border: "1px solid #fecaca",
-              padding: "6px 8px",
-              borderRadius: 8,
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            {autresCodeError}
-          </div>
-        )}
-        {autresCodeSaved && !autresCodeError && (
-          <div
-            style={{
-              background: "#dcfce7",
-              color: "#166534",
-              border: "1px solid #bbf7d0",
-              padding: "6px 8px",
-              borderRadius: 8,
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            Code “Autres projets” enregistré.
-          </div>
-        )}
-
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            alignItems: "end",
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <label style={label}>Code</label>
-            <input
-              value={autresCode}
-              onChange={(e) => setAutresCode(e.target.value)}
-              placeholder="Ex.: 1234"
-              type="password"
-              style={{ ...input, width: "100%" }}
-              disabled={autresCodeLoading}
-            />
-          </div>
-
-          <button
-            onClick={saveAutresCode}
-            disabled={autresCodeLoading}
-            style={btnPrimary}
-          >
-            {autresCodeLoading ? "Chargement..." : "Enregistrer le code"}
-          </button>
-        </div>
-      </section>
-
-      {/* 🔧 Facturation (infos Gyrotech + taux horaire) */}
-      <section style={section}>
-        <h3 style={h3}>Facturation</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ces informations sont utilisées en haut de la facture et pour le prix
-          unitaire de la main-d&apos;œuvre.
-        </div>
-
-        {factureError && (
-          <div
-            style={{
-              background: "#fee2e2",
-              color: "#b91c1c",
-              border: "1px solid #fecaca",
-              padding: "6px 8px",
-              borderRadius: 8,
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            {factureError}
-          </div>
-        )}
-        {factureSaved && !factureError && (
-          <div
-            style={{
-              background: "#dcfce7",
-              color: "#166534",
-              border: "1px solid #bbf7d0",
-              padding: "6px 8px",
-              borderRadius: 8,
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            Réglages de facturation enregistrés.
-          </div>
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Nom de l&apos;entreprise</label>
-              <input
-                value={factureNom}
-                onChange={(e) => setFactureNom(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
+      {canShowAdmin && (
+        <>
+          {/* 🔐 Code "Autres projets" */}
+          <section style={section}>
+            <h3 style={h3}>Code — Autres projets</h3>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+              Ce code sera demandé quand quelqu&apos;un choisit un item dans
+              “Autres projets” avant de puncher.
+              <br />
+              Laisse vide pour ne pas demander de code.
             </div>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Sous-titre / description</label>
-              <input
-                value={factureSousTitre}
-                onChange={(e) => setFactureSousTitre(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
-            </div>
-          </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Téléphone</label>
-              <input
-                value={factureTel}
-                onChange={(e) => setFactureTel(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
-            </div>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Courriel</label>
-              <input
-                value={factureCourriel}
-                onChange={(e) => setFactureCourriel(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
-            </div>
-          </div>
+            {autresCodeError && (
+              <div
+                style={{
+                  background: "#fee2e2",
+                  color: "#b91c1c",
+                  border: "1px solid #fecaca",
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  marginBottom: 8,
+                }}
+              >
+                {autresCodeError}
+              </div>
+            )}
+            {autresCodeSaved && !autresCodeError && (
+              <div
+                style={{
+                  background: "#dcfce7",
+                  color: "#166534",
+                  border: "1px solid #bbf7d0",
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  marginBottom: 8,
+                }}
+              >
+                Code “Autres projets” enregistré.
+              </div>
+            )}
 
-          <div style={{ maxWidth: 220 }}>
-            <label style={label}>Taux horaire (main-d&apos;œuvre)</label>
-            <input
-              value={factureTauxHoraire}
-              onChange={(e) => setFactureTauxHoraire(e.target.value)}
-              placeholder="Ex.: 120"
-              inputMode="decimal"
-              style={{ ...input, width: "100%" }}
-            />
-          </div>
-
-          <div style={{ marginTop: 4 }}>
-            <button
-              onClick={saveFacture}
-              disabled={factureLoading}
-              style={btnPrimary}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                alignItems: "end",
+              }}
             >
-              {factureLoading ? "Chargement..." : "Enregistrer la facture"}
-            </button>
-          </div>
-        </div>
-      </section>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <label style={label}>Code</label>
+                <input
+                  value={autresCode}
+                  onChange={(e) => setAutresCode(e.target.value)}
+                  placeholder="Ex.: 1234"
+                  type="password"
+                  style={{ ...input, width: "100%" }}
+                  disabled={autresCodeLoading}
+                />
+              </div>
 
-      {/* 👥 TRAVAILLEURS */}
-      <section style={section}>
-        <h3 style={h3}>Travailleurs</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ajoute un travailleur avec son email + un code d’activation (utilisé
-          dans “Activer mon compte”).
-        </div>
+              <button
+                onClick={saveAutresCode}
+                disabled={autresCodeLoading}
+                style={btnPrimary}
+              >
+                {autresCodeLoading ? "Chargement..." : "Enregistrer le code"}
+              </button>
+            </div>
+          </section>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            marginBottom: 8,
-            flexWrap: "wrap",
-          }}
-        >
-          <input
-            value={employeNomInput}
-            onChange={(e) => setEmployeNomInput(e.target.value)}
-            placeholder="Nom du travailleur"
-            style={{ ...input, flex: 1, minWidth: 200 }}
-          />
-          <input
-            value={employeEmailInput}
-            onChange={(e) => setEmployeEmailInput(e.target.value)}
-            placeholder="Email (ex: phil@domaine.com)"
-            style={{ ...input, flex: 1, minWidth: 260 }}
-          />
-          <input
-            value={employeCodeInput}
-            onChange={(e) => setEmployeCodeInput(e.target.value)}
-            placeholder="Code activation (ex: 1234) — vide = auto"
-            style={{ ...input, flex: 1, minWidth: 240 }}
-          />
-          <button onClick={onAddEmploye} style={btnPrimary}>
-            Ajouter
-          </button>
-        </div>
+          {/* 🔧 Facturation */}
+          <section style={section}>
+            <h3 style={h3}>Facturation</h3>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+              Ces informations sont utilisées en haut de la facture et pour le
+              prix unitaire de la main-d&apos;œuvre.
+            </div>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {employes.map((emp) => {
-            const activated = !!emp.activatedAt || !!emp.uid;
-            return (
-              <div key={emp.id} style={chip}>
-                <span>
-                  <strong>{emp.nom || "—"}</strong>
-                  {" — "}
-                  <span style={{ color: "#6b7280" }}>{emp.email || "—"}</span>
-                  {" — "}
-                  <span
-                    style={{
-                      fontWeight: 800,
-                      color: activated ? "#166534" : "#b45309",
-                    }}
-                  >
-                    {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
-                  </span>
-                  {!activated && (
-                    <>
-                      {" — "}
-                      <span style={{ color: "#6b7280" }}>
-                        Code: {emp.activationCode || "—"}
-                      </span>
-                    </>
-                  )}
-                </span>
+            {factureError && (
+              <div
+                style={{
+                  background: "#fee2e2",
+                  color: "#b91c1c",
+                  border: "1px solid #fecaca",
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  marginBottom: 8,
+                }}
+              >
+                {factureError}
+              </div>
+            )}
+            {factureSaved && !factureError && (
+              <div
+                style={{
+                  background: "#dcfce7",
+                  color: "#166534",
+                  border: "1px solid #bbf7d0",
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  marginBottom: 8,
+                }}
+              >
+                Réglages de facturation enregistrés.
+              </div>
+            )}
 
-                {!activated && (
-                  <button
-                    onClick={() => onResetActivationCode(emp.id)}
-                    style={{
-                      border: "1px solid #cbd5e1",
-                      background: "#f8fafc",
-                      color: "#111827",
-                      borderRadius: 999,
-                      padding: "4px 10px",
-                      cursor: "pointer",
-                      fontWeight: 800,
-                      fontSize: 12,
-                    }}
-                    title="Générer un nouveau code"
-                  >
-                    Nouveau code
-                  </button>
-                )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <label style={label}>Nom de l&apos;entreprise</label>
+                  <input
+                    value={factureNom}
+                    onChange={(e) => setFactureNom(e.target.value)}
+                    style={{ ...input, width: "100%" }}
+                  />
+                </div>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <label style={label}>Sous-titre / description</label>
+                  <input
+                    value={factureSousTitre}
+                    onChange={(e) => setFactureSousTitre(e.target.value)}
+                    style={{ ...input, width: "100%" }}
+                  />
+                </div>
+              </div>
 
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <label style={label}>Téléphone</label>
+                  <input
+                    value={factureTel}
+                    onChange={(e) => setFactureTel(e.target.value)}
+                    style={{ ...input, width: "100%" }}
+                  />
+                </div>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <label style={label}>Courriel</label>
+                  <input
+                    value={factureCourriel}
+                    onChange={(e) => setFactureCourriel(e.target.value)}
+                    style={{ ...input, width: "100%" }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ maxWidth: 220 }}>
+                <label style={label}>Taux horaire (main-d&apos;œuvre)</label>
+                <input
+                  value={factureTauxHoraire}
+                  onChange={(e) => setFactureTauxHoraire(e.target.value)}
+                  placeholder="Ex.: 120"
+                  inputMode="decimal"
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={{ marginTop: 4 }}>
                 <button
-                  onClick={() => onDelEmploye(emp.id, emp.nom)}
-                  style={btnChipDanger}
-                  title="Supprimer ce travailleur"
+                  onClick={saveFacture}
+                  disabled={factureLoading}
+                  style={btnPrimary}
                 >
-                  ×
+                  {factureLoading ? "Chargement..." : "Enregistrer la facture"}
                 </button>
               </div>
-            );
-          })}
+            </div>
+          </section>
 
-          {employes.length === 0 && (
-            <div style={{ color: "#666" }}>Aucun travailleur pour l’instant.</div>
-          )}
-        </div>
-      </section>
+          {/* 👥 TRAVAILLEURS */}
+          <section style={section}>
+            <h3 style={h3}>Travailleurs</h3>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+              Ajoute un travailleur avec son email + un code d’activation (utilisé
+              dans “Activer mon compte”).
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                marginBottom: 8,
+                flexWrap: "wrap",
+                alignItems: "end",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label style={label}>Nom</label>
+                <input
+                  value={employeNomInput}
+                  onChange={(e) => setEmployeNomInput(e.target.value)}
+                  placeholder="Nom du travailleur"
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={{ flex: 1, minWidth: 260 }}>
+                <label style={label}>Email</label>
+                <input
+                  value={employeEmailInput}
+                  onChange={(e) => setEmployeEmailInput(e.target.value)}
+                  placeholder="Email (ex: phil@domaine.com)"
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <label style={label}>Code activation</label>
+                <input
+                  value={employeCodeInput}
+                  onChange={(e) => setEmployeCodeInput(e.target.value)}
+                  placeholder="Code (ex: 1234) — vide = auto"
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  id="empIsAdmin"
+                  type="checkbox"
+                  checked={!!employeIsAdminInput}
+                  onChange={(e) => setEmployeIsAdminInput(e.target.checked)}
+                />
+                <label htmlFor="empIsAdmin" style={{ fontWeight: 800 }}>
+                  Admin
+                </label>
+              </div>
+
+              <button onClick={onAddEmploye} style={btnPrimary}>
+                Ajouter
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {employes.map((emp) => {
+                const activated = !!emp.activatedAt || !!emp.uid;
+                return (
+                  <div key={emp.id} style={chip}>
+                    <span>
+                      <strong>{emp.nom || "—"}</strong>
+                      {" — "}
+                      <span style={{ color: "#6b7280" }}>{emp.email || "—"}</span>
+                      {" — "}
+                      <span
+                        style={{
+                          fontWeight: 800,
+                          color: activated ? "#166534" : "#b45309",
+                        }}
+                      >
+                        {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
+                      </span>
+                      {" — "}
+                      <span style={{ fontWeight: 900 }}>
+                        {emp.isAdmin ? "ADMIN" : "USER"}
+                      </span>
+                      {!activated && (
+                        <>
+                          {" — "}
+                          <span style={{ color: "#6b7280" }}>
+                            Code: {emp.activationCode || "—"}
+                          </span>
+                        </>
+                      )}
+                    </span>
+
+                    {!activated && (
+                      <button
+                        onClick={() => onResetActivationCode(emp.id)}
+                        style={{
+                          border: "1px solid #cbd5e1",
+                          background: "#f8fafc",
+                          color: "#111827",
+                          borderRadius: 999,
+                          padding: "4px 10px",
+                          cursor: "pointer",
+                          fontWeight: 800,
+                          fontSize: 12,
+                        }}
+                        title="Générer un nouveau code"
+                      >
+                        Nouveau code
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => onDelEmploye(emp.id, emp.nom)}
+                      style={btnChipDanger}
+                      title="Supprimer ce travailleur"
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+
+              {employes.length === 0 && (
+                <div style={{ color: "#666" }}>
+                  Aucun travailleur pour l’instant.
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* 🕒 GESTION DU TEMPS (ADMIN) */}
+          <section style={section}>
+            <h3 style={h3}>Gestion du temps (admin)</h3>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+              Choisis une date, un projet et (optionnel) un employé pour voir les
+              blocs de temps, puis les modifier ou les supprimer. Les changements
+              sont appliqués au projet et à l&apos;employé.
+            </div>
+
+            {massDepunchMsg && (
+              <div
+                style={{
+                  marginBottom: 8,
+                  padding: 6,
+                  borderRadius: 8,
+                  background: "#ecfdf3",
+                  border: "1px solid #bbf7d0",
+                  fontSize: 12,
+                  color: "#166534",
+                }}
+              >
+                {massDepunchMsg}
+              </div>
+            )}
+
+            {timeError && (
+              <div
+                style={{
+                  background: "#fee2e2",
+                  color: "#b91c1c",
+                  border: "1px solid #fecaca",
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  marginBottom: 8,
+                }}
+              >
+                {timeError}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                marginBottom: 8,
+              }}
+            >
+              <div>
+                <label style={label}>Date</label>
+                <input
+                  type="date"
+                  value={timeDate}
+                  onChange={(e) => setTimeDate(e.target.value)}
+                  style={input}
+                />
+              </div>
+
+              <div>
+                <label style={label}>Projet</label>
+                <select
+                  value={timeProjId}
+                  onChange={(e) => setTimeProjId(e.target.value)}
+                  style={input}
+                >
+                  <option value="">Sélectionner…</option>
+                  {timeProjets.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nom}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={label}>Employé</label>
+                <select
+                  value={timeEmpId}
+                  onChange={(e) => setTimeEmpId(e.target.value)}
+                  style={input}
+                >
+                  <option value="">Tous</option>
+                  {timeEmployes.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.nom}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {!timeDate || !timeProjId ? (
+              <div style={{ color: "#6b7280", fontSize: 12 }}>
+                Choisis au minimum une date et un projet.
+              </div>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                {timeLoading && (
+                  <div style={{ color: "#6b7280", fontSize: 12 }}>
+                    Chargement…
+                  </div>
+                )}
+
+                <div style={{ overflowX: "auto", marginTop: 4 }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      fontSize: 12,
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 8,
+                    }}
+                  >
+                    <thead>
+                      <tr style={{ background: "#f9fafb" }}>
+                        <th style={thTime}>Début</th>
+                        <th style={thTime}>Fin</th>
+                        <th style={thTime}>Employé</th>
+                        <th style={thTime}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {displayedSegments.map((seg) => {
+                        const edit = timeRowEdits[seg.id] || {};
+                        const empName =
+                          seg.empName ||
+                          timeEmployes.find((e) => e.id === seg.empId)?.nom ||
+                          "—";
+                        return (
+                          <tr key={seg.id}>
+                            <td style={tdTime}>
+                              <input
+                                type="time"
+                                value={edit.startTime || ""}
+                                onChange={(e) =>
+                                  updateRowEdit(
+                                    seg.id,
+                                    "startTime",
+                                    e.target.value
+                                  )
+                                }
+                                style={{
+                                  ...input,
+                                  width: 110,
+                                  padding: "4px 6px",
+                                }}
+                              />
+                            </td>
+                            <td style={tdTime}>
+                              <input
+                                type="time"
+                                value={edit.endTime || ""}
+                                onChange={(e) =>
+                                  updateRowEdit(seg.id, "endTime", e.target.value)
+                                }
+                                style={{
+                                  ...input,
+                                  width: 110,
+                                  padding: "4px 6px",
+                                }}
+                              />
+                            </td>
+                            <td style={tdTime}>{empName}</td>
+                            <td style={tdTime}>
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => saveSegment(seg)}
+                                  disabled={timeLoading}
+                                  style={btnPrimarySmall}
+                                >
+                                  Enregistrer
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteSegment(seg)}
+                                  disabled={timeLoading}
+                                  style={btnDangerSmall}
+                                >
+                                  Supprimer
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!timeLoading && displayedSegments.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            style={{
+                              padding: 8,
+                              color: "#6b7280",
+                              textAlign: "center",
+                            }}
+                          >
+                            Aucun bloc de temps pour ces critères.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {massDepunchLoading && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+                    Dé-punch auto en cours…
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      {/* ================== SECTIONS NON-MENTIONNÉES (restent visibles) ================== */}
 
       {/* ANNEES */}
       <section style={section}>
@@ -1043,7 +1405,9 @@ export default function PageReglages() {
               </button>
             </div>
           ))}
-          {anneesAsc.length === 0 && <div style={{ color: "#666" }}>Aucune année.</div>}
+          {anneesAsc.length === 0 && (
+            <div style={{ color: "#666" }}>Aucune année.</div>
+          )}
         </div>
       </section>
 
@@ -1087,7 +1451,9 @@ export default function PageReglages() {
               </button>
             </div>
           ))}
-          {marques.length === 0 && <div style={{ color: "#666" }}>Aucune marque.</div>}
+          {marques.length === 0 && (
+            <div style={{ color: "#666" }}>Aucune marque.</div>
+          )}
         </div>
       </section>
 
@@ -1126,217 +1492,11 @@ export default function PageReglages() {
                   </button>
                 </div>
               ))}
-              {modeles.length === 0 && <div style={{ color: "#666" }}>Aucun modèle.</div>}
+              {modeles.length === 0 && (
+                <div style={{ color: "#666" }}>Aucun modèle.</div>
+              )}
             </div>
           </>
-        )}
-      </section>
-
-      {/* 🕒 GESTION DU TEMPS (ADMIN) */}
-      <section style={section}>
-        <h3 style={h3}>Gestion du temps (admin)</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Choisis une date, un projet et (optionnel) un employé pour voir les
-          blocs de temps, puis les modifier ou les supprimer. Les changements
-          sont appliqués au projet et à l&apos;employé.
-        </div>
-
-        {massDepunchMsg && (
-          <div
-            style={{
-              marginBottom: 8,
-              padding: 6,
-              borderRadius: 8,
-              background: "#ecfdf3",
-              border: "1px solid #bbf7d0",
-              fontSize: 12,
-              color: "#166534",
-            }}
-          >
-            {massDepunchMsg}
-          </div>
-        )}
-
-        {timeError && (
-          <div
-            style={{
-              background: "#fee2e2",
-              color: "#b91c1c",
-              border: "1px solid #fecaca",
-              padding: "6px 8px",
-              borderRadius: 8,
-              fontSize: 12,
-              marginBottom: 8,
-            }}
-          >
-            {timeError}
-          </div>
-        )}
-
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            marginBottom: 8,
-          }}
-        >
-          <div>
-            <label style={label}>Date</label>
-            <input
-              type="date"
-              value={timeDate}
-              onChange={(e) => setTimeDate(e.target.value)}
-              style={input}
-            />
-          </div>
-          <div>
-            <label style={label}>Projet</label>
-            <select
-              value={timeProjId}
-              onChange={(e) => setTimeProjId(e.target.value)}
-              style={input}
-            >
-              <option value="">Sélectionner…</option>
-              {timeProjets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nom}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label style={label}>Employé</label>
-            <select
-              value={timeEmpId}
-              onChange={(e) => setTimeEmpId(e.target.value)}
-              style={input}
-            >
-              <option value="">Tous</option>
-              {timeEmployes.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.nom}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {!timeDate || !timeProjId ? (
-          <div style={{ color: "#6b7280", fontSize: 12 }}>
-            Choisis au minimum une date et un projet.
-          </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            {timeLoading && (
-              <div style={{ color: "#6b7280", fontSize: 12 }}>
-                Chargement…
-              </div>
-            )}
-
-            <div style={{ overflowX: "auto", marginTop: 4 }}>
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  fontSize: 12,
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 8,
-                }}
-              >
-                <thead>
-                  <tr style={{ background: "#f9fafb" }}>
-                    <th style={thTime}>Début</th>
-                    <th style={thTime}>Fin</th>
-                    <th style={thTime}>Employé</th>
-                    <th style={thTime}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayedSegments.map((seg) => {
-                    const edit = timeRowEdits[seg.id] || {};
-                    const empName =
-                      seg.empName ||
-                      timeEmployes.find((e) => e.id === seg.empId)?.nom ||
-                      "—";
-                    return (
-                      <tr key={seg.id}>
-                        <td style={tdTime}>
-                          <input
-                            type="time"
-                            value={edit.startTime || ""}
-                            onChange={(e) =>
-                              updateRowEdit(seg.id, "startTime", e.target.value)
-                            }
-                            style={{
-                              ...input,
-                              width: 110,
-                              padding: "4px 6px",
-                            }}
-                          />
-                        </td>
-                        <td style={tdTime}>
-                          <input
-                            type="time"
-                            value={edit.endTime || ""}
-                            onChange={(e) =>
-                              updateRowEdit(seg.id, "endTime", e.target.value)
-                            }
-                            style={{
-                              ...input,
-                              width: 110,
-                              padding: "4px 6px",
-                            }}
-                          />
-                        </td>
-                        <td style={tdTime}>{empName}</td>
-                        <td style={tdTime}>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                            <button
-                              type="button"
-                              onClick={() => saveSegment(seg)}
-                              disabled={timeLoading}
-                              style={btnPrimarySmall}
-                            >
-                              Enregistrer
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteSegment(seg)}
-                              disabled={timeLoading}
-                              style={btnDangerSmall}
-                            >
-                              Supprimer
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {!timeLoading && displayedSegments.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={4}
-                        style={{
-                          padding: 8,
-                          color: "#6b7280",
-                          textAlign: "center",
-                        }}
-                      >
-                        Aucun bloc de temps pour ces critères.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {massDepunchLoading && (
-              <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-                Dé-punch auto en cours…
-              </div>
-            )}
-          </div>
         )}
       </section>
     </div>
@@ -1344,7 +1504,6 @@ export default function PageReglages() {
 }
 
 /* ================== Helpers temps ================== */
-
 function toMillis(v) {
   try {
     if (!v) return 0;

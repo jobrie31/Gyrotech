@@ -10,6 +10,7 @@ import PageAccueil from "./pageAccueil";
 import PageListeProjet from "./PageListeProjet";
 import PageMateriels from "./PageMateriels";
 import PageReglages from "./PageReglages";
+import PageProjetsFermes from "./PageProjetsFermes"; // ✅ AJOUT (route cachée)
 
 // ➜ Supporte aussi les sous-chemins (#/projets/xxx, #/materiels/yyy, etc.)
 function getRouteFromHash() {
@@ -42,7 +43,6 @@ export default function App() {
 
   const handleLogout = async () => {
     await signOut(auth);
-    // optionnel: ramener au login/accueil
     window.location.hash = "#/accueil";
   };
 
@@ -57,6 +57,7 @@ export default function App() {
   }
 
   // ✅ Ici l’utilisateur est connecté → request.auth ≠ null dans Firestore
+  // ❌ ON NE MET PAS "projets-fermes" DANS LE MENU
   const pages = [
     { key: "accueil", label: "PageAccueil" },
     { key: "projets", label: "Projets" },
@@ -64,24 +65,49 @@ export default function App() {
     { key: "reglages", label: "Réglages" },
   ];
 
+  const validRoutes = ["accueil", "projets", "projets-fermes", "materiels", "reglages"];
+
   return (
     <div>
       {/* petite barre en haut avec bouton logout */}
-      <div style={{ display: "flex", justifyContent: "space-between", padding: 8 }}>
-        <div>Connecté comme : {user.email}</div>
-        <button onClick={handleLogout}>Se déconnecter</button>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
+          alignItems: "center",
+          padding: 1,
+          borderBottom: "1px solid #e5e7eb",
+          background: "#fff",
+        }}
+      >
+        <div /> {/* spacer gauche */}
+
+        <div
+          style={{
+            justifySelf: "center",
+            fontWeight: 700,
+            fontSize: 12,
+            color: "#64748b",
+            lineHeight: 1.2,
+                  }}
+        >
+          Connecté comme : {user.email}
+        </div>
+
+        <div style={{ justifySelf: "end" }}>
+          <button onClick={handleLogout}>Se déconnecter</button>
+        </div>
       </div>
 
       <BurgerMenu pages={pages} />
 
       {route === "accueil" && <PageAccueil />}
       {route === "projets" && <PageListeProjet />}
+      {route === "projets-fermes" && <PageProjetsFermes />} {/* ✅ route cachée */}
       {route === "materiels" && <PageMateriels />}
       {route === "reglages" && <PageReglages />}
 
-      {!["accueil", "projets", "materiels", "reglages"].includes(route) && (
-        <PageAccueil />
-      )}
+      {!validRoutes.includes(route) && <PageAccueil />}
     </div>
   );
 }

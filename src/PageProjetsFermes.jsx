@@ -1,7 +1,9 @@
 // src/PageProjetsFermes.jsx
-// Projets fermés + popup de fermeture complète (PDF)
-// ✅ DEMANDE: Quand un projet se ferme (peu importe la façon), dépunch tous les travailleurs punchés dessus
-// ✅ DEMANDE: Support startAtSummary => ouvrir directement l’étape facture
+// Wizard de fermeture complète (PDF + email) — utilisé par PageListeProjet
+// ✅ Quand un projet se ferme (soft ou full) : dépunch tous les travailleurs punchés dessus
+// ✅ startAtSummary => ouvre directement l’étape facture
+// ✅ Option A: deleteAt (60 jours) lors de la fermeture complète (pour suppression automatique future)
+// ✅ Bonus: clear lastProjectId/lastProjectName chez les employés qui pointaient sur ce projet (best effort)
 
 import React, { useEffect, useState } from "react";
 import html2pdf from "html2pdf.js";
@@ -19,25 +21,14 @@ import {
   serverTimestamp,
   updateDoc,
   where,
+  Timestamp,
+  limit,
 } from "firebase/firestore";
 import { db, storage, functions } from "./firebaseConfig";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 
 /* ---------------------- Utils ---------------------- */
-const MONTHS_FR_ABBR = [
-  "janv",
-  "févr",
-  "mars",
-  "avr",
-  "mai",
-  "juin",
-  "juil",
-  "août",
-  "sept",
-  "oct",
-  "nov",
-  "déc",
-];
+const MONTHS_FR_ABBR = ["janv","févr","mars","avr","mai","juin","juil","août","sept","oct","nov","déc"];
 
 function toDateSafe(ts) {
   if (!ts) return null;
@@ -70,14 +61,14 @@ function fmtHM(ms) {
   return `${h}:${m.toString().padStart(2, "0")}`;
 }
 
-function minusDays(d, n) {
+function plusDays(d, n) {
   const x = new Date(d);
-  x.setDate(x.getDate() - n);
+  x.setDate(x.getDate() + n);
   return x;
 }
 
 /**
- * ✅ NO (en haut de la facture) = numéro de dossier du projet.
+ * NO (en haut de la facture) = numéro de dossier du projet.
  */
 function getDossierNo(projet) {
   const candidates = [
@@ -133,11 +124,33 @@ async function depunchWorkersOnProject(projId) {
   }
 }
 
-/* ---------------------- Hooks communs ---------------------- */
+/* ---------------------- ✅ Clear lastProjectId/Name (best effort) ---------------------- */
+async function clearEmployeesLastProject(projId) {
+  if (!projId) return;
+  try {
+    const qEmp = query(collection(db, "employes"), where("lastProjectId", "==", projId), limit(300));
+    const snap = await getDocs(qEmp);
+    const tasks = [];
+    snap.forEach((d) => {
+      tasks.push(
+        updateDoc(d.ref, {
+          lastProjectId: null,
+          lastProjectName: null,
+          lastProjectUpdatedAt: serverTimestamp(),
+        })
+      );
+    });
+    if (tasks.length) await Promise.all(tasks);
+  } catch (e) {
+    // pas bloquant
+    console.warn("clearEmployeesLastProject warning:", e);
+  }
+}
 
-// temps total de tout le projet (segments)
+/* ---------------------- Temps total de tout le projet (segments) ---------------------- */
 async function computeProjectTotalMs(projId) {
   let total = 0;
+
   const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
   const dayIds = [];
   daysSnap.forEach((d) => dayIds.push(d.id));
@@ -156,51 +169,20 @@ async function computeProjectTotalMs(projId) {
       total += dur;
     });
   }
+
   return total;
 }
 
 /* ---------------------- Génération + upload PDF ---------------------- */
-
 async function generateAndUploadInvoicePdf(projet) {
   const el = document.getElementById("invoice-sheet");
-  if (!el) {
-    throw new Error("Invoice introuvable (#invoice-sheet)");
-  }
+  if (!el) throw new Error("Invoice introuvable (#invoice-sheet)");
 
-  const html = `
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>Facture Gyrotech</title>
-        <style>
-          body {
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            margin: 24px;
-            background: #ffffff;
-          }
-          h1, h2, h3, h4 {
-            margin: 0;
-          }
-          table {
-            width: 100%;
-            border-collapse: collapse;
-          }
-          th, td {
-            padding: 6px;
-            border-bottom: 1px solid #e5e7eb;
-            font-size: 12px;
-          }
-          .no-print {
-            display: none !important;
-          }
-        </style>
-      </head>
-      <body>
-        ${el.outerHTML}
-      </body>
-    </html>
-  `;
+  // Clone + retire éléments no-print pour éviter qu’ils apparaissent dans le PDF
+  const clone = el.cloneNode(true);
+  try {
+    clone.querySelectorAll?.(".no-print").forEach((x) => x.remove());
+  } catch {}
 
   const opt = {
     margin: 10,
@@ -210,20 +192,16 @@ async function generateAndUploadInvoicePdf(projet) {
     jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
   };
 
-  const pdfBlob = await html2pdf().set(opt).from(html).output("blob");
+  const pdfBlob = await html2pdf().set(opt).from(clone).output("blob");
 
   const filePath = `factures/${projet.id}.pdf`;
   const fileRef = ref(storage, filePath);
 
-  await uploadBytes(fileRef, pdfBlob, {
-    contentType: "application/pdf",
-  });
-
+  await uploadBytes(fileRef, pdfBlob, { contentType: "application/pdf" });
   return filePath;
 }
 
-/* ---------------------- Popup de fermeture complète ---------------------- */
-
+/* ---------------------- Wizard fermeture complète ---------------------- */
 export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSummary = false }) {
   const [step, setStep] = useState("ask"); // "ask" | "summary"
   const [loading, setLoading] = useState(false);
@@ -231,24 +209,20 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   const [totalMs, setTotalMs] = useState(0);
   const [usages, setUsages] = useState([]);
-  const [checks, setChecks] = useState({
-    infos: false,
-    materiel: false,
-    temps: false,
-  });
-
+  const [checks, setChecks] = useState({ infos: false, materiel: false, temps: false });
   const [materielOpen, setMaterielOpen] = useState(false);
 
   const [factureConfig, setFactureConfig] = useState({
     companyName: "Gyrotech",
     companySubtitle: "Service mobile – Diagnostic & réparation",
-    companyPhone: "(xxx) xxx-xxxx",
-    companyEmail: "info@gyrotech.ca",
+    companyPhone: "",
+    companyEmail: "",
     tauxHoraire: 0,
   });
 
   useEffect(() => {
     if (!open) return;
+
     setError(null);
     setChecks({ infos: false, materiel: false, temps: false });
     setTotalMs(0);
@@ -262,10 +236,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         const snap = await getDoc(refCfg);
         if (snap.exists()) {
           const data = snap.data() || {};
-          setFactureConfig((prev) => ({
-            ...prev,
-            ...data,
-          }));
+          setFactureConfig((prev) => ({ ...prev, ...data }));
         }
       } catch (e) {
         console.error(e);
@@ -273,7 +244,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     })();
   }, [open, projet?.id, startAtSummary]);
 
-  // ✅ si startAtSummary => calcule tout automatiquement au début
+  // si startAtSummary => calcule tout automatiquement
   useEffect(() => {
     if (!open || !startAtSummary || !projet?.id) return;
     let cancelled = false;
@@ -298,6 +269,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     return () => { cancelled = true; };
   }, [open, startAtSummary, projet?.id]);
 
+  // live usages matériel
   useEffect(() => {
     if (!open || step !== "summary" || !projet?.id) return;
     const qy = query(collection(db, "projets", projet.id, "usagesMateriels"), orderBy("nom", "asc"));
@@ -308,10 +280,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
         setUsages(rows);
       },
-      (err) => {
-        console.error(err);
-        setError(err?.message || String(err));
-      }
+      (err) => setError(err?.message || String(err))
     );
     return () => unsub();
   }, [open, step, projet?.id]);
@@ -338,13 +307,19 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     if (!projet?.id) return;
     try {
       setLoading(true);
+      setError(null);
 
-      // ✅ dépunch avant de fermer
       await depunchWorkersOnProject(projet.id);
+      await clearEmployeesLastProject(projet.id);
 
+      // soft = fermé, mais PAS fermeComplet
       await updateDoc(doc(db, "projets", projet.id), {
         ouvert: false,
+        fermeComplet: false,
+        fermeCompletAt: null,
+        deleteAt: null,
       });
+
       onClosed?.("soft");
     } catch (e) {
       console.error(e);
@@ -356,33 +331,37 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   const handleFinalClose = async () => {
     if (!projet?.id || !canConfirm) return;
+
     try {
       setLoading(true);
       setError(null);
 
-      // ✅ dépunch avant de fermer + facture
       await depunchWorkersOnProject(projet.id);
+      await clearEmployeesLastProject(projet.id);
 
+      // 1) PDF
       const pdfPath = await generateAndUploadInvoicePdf(projet);
-      console.log("Facture uploadée à :", pdfPath);
 
+      // 2) email (cloud function)
+      // ⚠️ garde ton toEmail comme tu veux (tu pourras l’amener du projet/config)
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
       const toEmail = "jlabrie@styro.ca";
-
       const dossierNo = getDossierNo(projet);
 
       await sendInvoiceEmail({
         projetId: projet.id,
         toEmail,
-        subject: `Facture Gyrotech – Dossier ${dossierNo} – ${projet.nom || projet.id || "Projet"}`,
+        subject: `Facture Gyrotech – Dossier ${dossierNo} – ${projet.nom || projet.clientNom || projet.id}`,
         text: "Bonjour, veuillez trouver ci-joint la facture de votre intervention.",
         pdfPath,
       });
 
+      // 3) ferme complet + deleteAt
       await updateDoc(doc(db, "projets", projet.id), {
         ouvert: false,
         fermeComplet: true,
         fermeCompletAt: serverTimestamp(),
+        deleteAt: Timestamp.fromDate(plusDays(new Date(), 60)),
         factureEnvoyeeA: toEmail,
       });
 
@@ -397,7 +376,11 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   if (!open || !projet) return null;
 
-  const totalMateriel = usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0);
+  const totalMateriel = usages.reduce(
+    (s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0),
+    0
+  );
+
   const tempsOuvertureMinutes = Number(projet.tempsOuvertureMinutes || 0) || 0;
   const totalMsInclOuverture = totalMs + tempsOuvertureMinutes * 60 * 1000;
 
@@ -444,14 +427,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     >
       <style>{`
         @media print {
-          body {
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-            background: #ffffff !important;
-          }
-          .no-print {
-            display: none !important;
-          }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #ffffff !important; }
+          .no-print { display: none !important; }
         }
       `}</style>
 
@@ -474,13 +451,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
           </div>
           <button
             onClick={onCancel}
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 24,
-              cursor: "pointer",
-              lineHeight: 1,
-            }}
+            style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}
             title="Fermer"
           >
             ×
@@ -508,7 +479,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
               Tu es en train de mettre le projet en <strong>fermé</strong>.
             </p>
             <p style={{ marginTop: 0, marginBottom: 16 }}>
-              Veux-tu <strong>fermer complètement</strong> le projet&nbsp;?
+              Veux-tu <strong>fermer complètement</strong> le projet ?
             </p>
 
             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -528,6 +499,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
               >
                 Oui, fermer complètement
               </button>
+
               <button
                 type="button"
                 onClick={handleSoftClose}
@@ -564,28 +536,16 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                   <div style={{ fontSize: 11, color: "#6b7280" }}>
                     {factureConfig.companySubtitle || "Service mobile – Diagnostic & réparation"}
                     <br />
-                    {factureConfig.companyPhone && (
-                      <>
-                        Téléphone : {factureConfig.companyPhone}
-                        <br />
-                      </>
-                    )}
-                    {factureConfig.companyEmail && <>Courriel : {factureConfig.companyEmail}</>}
+                    {factureConfig.companyPhone ? <>Téléphone : {factureConfig.companyPhone}<br /></> : null}
+                    {factureConfig.companyEmail ? <>Courriel : {factureConfig.companyEmail}</> : null}
                   </div>
                 </div>
 
                 <div style={{ textAlign: "right", fontSize: 12 }}>
                   <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>FACTURE</div>
-                  <div>
-                    <strong>No :</strong> {dossierNo}
-                  </div>
-                  <div>
-                    <strong>Date :</strong>{" "}
-                    {fmtDate(projet.fermeCompletAt || projet.createdAt || new Date())}
-                  </div>
-                  <div>
-                    <strong>Projet :</strong> {projet.nom || projet.clientNom || "—"}
-                  </div>
+                  <div><strong>No :</strong> {dossierNo}</div>
+                  <div><strong>Date :</strong> {fmtDate(new Date())}</div>
+                  <div><strong>Projet :</strong> {projet.nom || projet.clientNom || "—"}</div>
                 </div>
               </div>
 
@@ -593,12 +553,10 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Facturé à</div>
                   <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, fontSize: 12 }}>
-                    <div>
-                      <strong>{projet.clientNom || projet.nom || "—"}</strong>
-                    </div>
-                    {projet.clientAdresse && <div>{projet.clientAdresse}</div>}
-                    {projet.clientTelephone && <div>Tél : {projet.clientTelephone}</div>}
-                    {projet.clientCourriel && <div>Courriel : {projet.clientCourriel}</div>}
+                    <div><strong>{projet.clientNom || projet.nom || "—"}</strong></div>
+                    {projet.clientAdresse ? <div>{projet.clientAdresse}</div> : null}
+                    {projet.clientTelephone ? <div>Tél : {projet.clientTelephone}</div> : null}
+                    {projet.clientCourriel ? <div>Courriel : {projet.clientCourriel}</div> : null}
                   </div>
                 </div>
 
@@ -624,14 +582,9 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                     <Chip k="Plaque" v={projet.plaque || "—"} />
                     <Chip
                       k="Odomètre"
-                      v={
-                        typeof projet.odometre === "number"
-                          ? projet.odometre.toLocaleString("fr-CA")
-                          : projet.odometre || "—"
-                      }
+                      v={typeof projet.odometre === "number" ? projet.odometre.toLocaleString("fr-CA") : (projet.odometre || "—")}
                     />
                     <Chip k="VIN" v={projet.vin || "—"} />
-                    <Chip k="Créé le" v={fmtDate(projet.createdAt)} />
                   </div>
                 </div>
               </div>
@@ -642,32 +595,22 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 8 }}>
                   <thead>
                     <tr style={{ background: "#f1f5f9" }}>
-                      <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid #e2e8f0" }}>
-                        Description
-                      </th>
+                      <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Description</th>
                       <th style={{ textAlign: "center", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Qté</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>
-                        Prix unitaire
-                      </th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Prix unitaire</th>
                       <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Total</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td style={{ padding: 6, borderBottom: "1px solid #f1f5f9" }}>
-                        Main-d&apos;œuvre – {projet.nom || "Travaux mécaniques"}
+                        Main-d'œuvre – {projet.nom || "Travaux mécaniques"}
                       </td>
                       <td style={{ padding: 6, textAlign: "center", borderBottom: "1px solid #f1f5f9" }}>
-                        {totalHeuresArrondies.toLocaleString("fr-CA", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}{" "}
-                        h
+                        {totalHeuresArrondies.toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h
                       </td>
                       <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
-                        {tauxHoraire > 0
-                          ? tauxHoraire.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })
-                          : "—"}
+                        {tauxHoraire > 0 ? tauxHoraire.toLocaleString("fr-CA", { style: "currency", currency: "CAD" }) : "—"}
                       </td>
                       <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
                         {coutMainOeuvre != null
@@ -712,9 +655,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                     <tr style={{ background: "#f1f5f9" }}>
                       <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Nom</th>
                       <th style={{ textAlign: "center", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Qté</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>
-                        Prix unitaire
-                      </th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Prix unitaire</th>
                       <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Total</th>
                     </tr>
                   </thead>
@@ -726,9 +667,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                       return (
                         <tr key={u.id}>
                           <td style={{ padding: 6, borderBottom: "1px solid #f1f5f9" }}>{u.nom}</td>
-                          <td style={{ padding: 6, textAlign: "center", borderBottom: "1px solid #f1f5f9" }}>
-                            {qty}
-                          </td>
+                          <td style={{ padding: 6, textAlign: "center", borderBottom: "1px solid #f1f5f9" }}>{qty}</td>
                           <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
                             {prix.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                           </td>
@@ -741,40 +680,30 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
                     {usages.length === 0 && (
                       <tr>
-                        <td colSpan={4} style={{ padding: 6, color: "#6b7280" }}>
-                          Aucun matériel enregistré.
-                        </td>
+                        <td colSpan={4} style={{ padding: 6, color: "#6b7280" }}>Aucun matériel enregistré.</td>
                       </tr>
                     )}
 
                     <tr>
-                      <td colSpan={3} style={{ padding: 6, textAlign: "right", fontWeight: 600 }}>
-                        Sous-total :
-                      </td>
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right", fontWeight: 600 }}>Sous-total :</td>
                       <td style={{ padding: 6, textAlign: "right", fontWeight: 600 }}>
                         {sousTotal.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
                     </tr>
                     <tr>
-                      <td colSpan={3} style={{ padding: 6, textAlign: "right" }}>
-                        TPS (5,0 %) :
-                      </td>
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right" }}>TPS (5,0 %) :</td>
                       <td style={{ padding: 6, textAlign: "right" }}>
                         {tps.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
                     </tr>
                     <tr>
-                      <td colSpan={3} style={{ padding: 6, textAlign: "right" }}>
-                        TVQ (9,975 %) :
-                      </td>
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right" }}>TVQ (9,975 %) :</td>
                       <td style={{ padding: 6, textAlign: "right" }}>
                         {tvq.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
                     </tr>
                     <tr>
-                      <td colSpan={3} style={{ padding: 6, textAlign: "right", fontWeight: 700 }}>
-                        Total :
-                      </td>
+                      <td colSpan={3} style={{ padding: 6, textAlign: "right", fontWeight: 700 }}>Total :</td>
                       <td style={{ padding: 6, textAlign: "right", fontWeight: 700 }}>
                         {totalFacture.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
                       </td>
@@ -830,6 +759,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
               >
                 Annuler
               </button>
+
               <button
                 type="button"
                 onClick={handleFinalClose}
@@ -851,7 +781,11 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         )}
 
         {materielOpen && (
-          <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />
+          <ProjectMaterielPanel
+            projId={projet.id}
+            onClose={() => setMaterielOpen(false)}
+            setParentError={setError}
+          />
         )}
       </div>
     </div>
@@ -879,149 +813,11 @@ function Chip({ k, v }) {
   );
 }
 
-/* ---------------------- Liste des projets fermés (moins de 2 mois) ---------------------- */
-
-function useClosedProjects(setError) {
-  const [rows, setRows] = useState([]);
-  useEffect(() => {
-    const c = collection(db, "projets");
-    const unsub = onSnapshot(
-      c,
-      (snap) => {
-        const cutoff = minusDays(new Date(), 60);
-        const list = [];
-        snap.forEach((d) => {
-          const data = d.data();
-          if (!data.fermeComplet) return;
-
-          const isOpen = data?.ouvert !== false;
-          if (isOpen) return;
-
-          const closedAt = toDateSafe(data.fermeCompletAt);
-          if (closedAt && closedAt < cutoff) return;
-
-          list.push({ id: d.id, ...data });
-        });
-        list.sort((a, b) => {
-          const da = toDateSafe(a.fermeCompletAt)?.getTime() || 0;
-          const dbt = toDateSafe(b.fermeCompletAt)?.getTime() || 0;
-          return dbt - da;
-        });
-        setRows(list);
-      },
-      (err) => setError?.(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [setError]);
-  return rows;
-}
-
-/* ---------------------- Page Projets Fermés ---------------------- */
-
+/**
+ * IMPORTANT:
+ * - Il n’y a PAS de "PageProjetsFermes" ici, parce que tu as déjà ClosedProjectsPopup dans PageListeProjet.
+ * - Ce fichier sert uniquement à exporter CloseProjectWizard.
+ */
 export default function PageProjetsFermes() {
-  const [error, setError] = useState(null);
-  const projets = useClosedProjects(setError);
-
-  const handleReopen = async (proj) => {
-    if (!proj?.id) return;
-    const ok = window.confirm("Voulez-vous réouvrir ce projet ?");
-    if (!ok) return;
-    try {
-      await updateDoc(doc(db, "projets", proj.id), {
-        ouvert: true,
-      });
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    }
-  };
-
-  return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      {error && (
-        <div
-          style={{
-            background: "#fdecea",
-            color: "#b71c1c",
-            border: "1px solid #f5c6cb",
-            padding: "8px 12px",
-            borderRadius: 8,
-            marginBottom: 12,
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      <h1 style={{ margin: 0, marginBottom: 10, fontSize: 26, fontWeight: 900 }}>📁 Projets fermés</h1>
-      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
-        Affiche les projets fermés complètement depuis moins de 2 mois. Tu peux les réouvrir au besoin.
-      </div>
-
-      <div style={{ overflowX: "auto" }}>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            background: "#fff",
-            border: "1px solid #eee",
-            borderRadius: 12,
-            fontSize: 13,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "#f6f7f8" }}>
-              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Nom</th>
-              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Unité</th>
-              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Date fermeture</th>
-              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>
-                Temps ouverture (min)
-              </th>
-              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Remarque</th>
-              <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {projets.map((p) => (
-              <tr key={p.id}>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{p.nom || p.clientNom || "—"}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{p.numeroUnite || "—"}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>{fmtDate(p.fermeCompletAt)}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  {Number(p.tempsOuvertureMinutes || 0) || 0}
-                </td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee", color: "#6b7280" }}>
-                  Projet archivé (sera supprimé après 2 mois).
-                </td>
-                <td style={{ padding: 8, borderBottom: "1px solid #eee" }}>
-                  <button
-                    type="button"
-                    onClick={() => handleReopen(p)}
-                    style={{
-                      border: "none",
-                      background: "#0ea5e9",
-                      color: "#fff",
-                      borderRadius: 10,
-                      padding: "6px 10px",
-                      cursor: "pointer",
-                      fontWeight: 800,
-                    }}
-                  >
-                    Réouvrir
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {projets.length === 0 && (
-              <tr>
-                <td colSpan={6} style={{ padding: 10, color: "#666" }}>
-                  Aucun projet fermé récemment.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  return null;
 }

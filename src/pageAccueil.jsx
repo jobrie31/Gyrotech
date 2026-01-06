@@ -1,11 +1,8 @@
 // PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
 // Nécessite: UIPro.jsx dans le même dossier src/
 //
-// ✅ 1) Ligne punchée: vert plus “normal” (mais visible), moins flash
-// ✅ 2) Bouton: "Punch" (bleu) / "Dépunch" (jaune plus clair)
-// ✅ 3) Texte du bouton: BLANC + très gros (≈80% du bouton)
-// ✅ 4) Enlève la colonne Statut du tableau travailleurs
-// ✅ 5) Long nom: le NOM ne wrap plus; la dropdown rapetisse (priorité au nom)
+// ✅ Admin: voit tous les employés
+// ✅ Non-admin: voit seulement son propre nom
 
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -22,11 +19,13 @@ import {
   getDocs,
   orderBy,
 } from "firebase/firestore";
-import { db } from "./firebaseConfig";
+import { onAuthStateChanged } from "firebase/auth";
+import { db, auth } from "./firebaseConfig";
+
 import PageProjets from "./PageProjets";
 import PageListeProjet from "./PageListeProjet";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
-import { styles, Card, Button, PageContainer, TopBar } from "./UIPro";
+import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
 import HistoriqueEmploye from "./HistoriqueEmploye";
 
@@ -704,7 +703,7 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ---------- Horloge ---------- */
+/* ---------- Horloge (badge) ---------- */
 function ClockBadge({ now }) {
   const heure = now.toLocaleTimeString("fr-CA", {
     hour: "2-digit",
@@ -739,6 +738,50 @@ function ClockBadge({ now }) {
         {dateStr}
       </div>
       <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 1 }}>{heure}</div>
+    </div>
+  );
+}
+
+/**
+ * ✅ BAR "EDGE" (pas de bloc blanc)
+ * - Fixe à gauche/droite du viewport
+ * - Fond TRANSPARENT (donc plus de “zone blanche”)
+ * - Petit spacer transparent pour que le premier Card ne soit pas sous le header
+ *
+ * IMPORTANT:
+ * - Si ton "Connecté comme... / Se déconnecter" (dans App.jsx) est fixed en haut,
+ *   ajuste APP_TOP (ex: 34 / 38 / 44) pour descendre légèrement ce header.
+ */
+const APP_TOP = 38; // mets 38 si ton bandeau App.jsx te cache le header Styro/horloge
+const EDGE_HEADER_H = 30;
+
+function EdgeHeader({ left, right }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: APP_TOP,
+        left: 0,
+        right: 0,
+        zIndex: 2000,
+        pointerEvents: "none",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          padding: "10px 18px",
+          paddingLeft: 72, // laisse la place au burger
+          background: "transparent", // ✅ plus de bloc blanc
+          pointerEvents: "auto",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>{left}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>{right}</div>
+      </div>
     </div>
   );
 }
@@ -839,7 +882,7 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
     await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
   };
 
-  const punchBtnBg = present ? "#fbbf24" : "#2563eb"; // dépunch = jaune clair, punch = bleu
+  const punchBtnBg = present ? "#fbbf24" : "#2563eb";
   const punchBtnHover = present ? "#f59e0b" : "#1d4ed8";
 
   return (
@@ -850,16 +893,12 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        {/* ✅ NOM: ne wrap plus -> priorité au nom */}
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{emp.nom || "—"}</td>
 
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
 
-        {/* Colonne Projet */}
         <td style={{ ...styles.td }} onClick={(e) => e.stopPropagation()}>
-          {/* ✅ Important: minWidth:0 permet aux enfants de shrink */}
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", minWidth: 0 }}>
-            {/* ✅ Dropdown shrink */}
             <div style={{ flex: "1 1 200px", minWidth: 120, maxWidth: "100%" }}>
               {present && currentIsOther ? (
                 <div
@@ -897,7 +936,7 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
                     cursor: present ? "not-allowed" : "pointer",
                     opacity: present ? 0.85 : 1,
                     width: "100%",
-                    minWidth: 0, // ✅ permet de shrink
+                    minWidth: 0,
                   }}
                   disabled={present}
                 >
@@ -1054,11 +1093,34 @@ function getRouteFromHash() {
 export default function PageAccueil() {
   const [error, setError] = useState(null);
 
+  // ✅ user connecté
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u || null));
+    return () => unsub();
+  }, []);
+
   const employes = useEmployes(setError);
   const projetsOuverts = useOpenProjets(setError);
   const autresProjets = useAutresProjets(setError);
-
   const { autresProjetsCode } = usePunchCodes(setError);
+
+  // ✅ Trouver "mon" employé + admin
+  const myEmploye = useMemo(() => {
+    if (!user) return null;
+    const uid = user.uid || "";
+    const emailLower = (user.email || "").toLowerCase();
+    return employes.find((e) => e.uid === uid) || employes.find((e) => (e.emailLower || "") === emailLower) || null;
+  }, [user, employes]);
+
+  const isAdmin = !!myEmploye?.isAdmin;
+
+  // ✅ Liste visible
+  const visibleEmployes = useMemo(() => {
+    if (isAdmin) return employes;
+    if (!myEmploye) return [];
+    return employes.filter((e) => e.id === myEmploye.id);
+  }, [employes, isAdmin, myEmploye]);
 
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -1081,102 +1143,139 @@ export default function PageAccueil() {
 
   if (route === "projets") {
     return (
-      <PageContainer>
-        <TopBar left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Projets</h1>} right={<ClockBadge now={now} />} />
-        <Card>
-          <PageListeProjet />
-        </Card>
-      </PageContainer>
+      <>
+        <EdgeHeader
+          left={<h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>Projets</h1>}
+          right={<ClockBadge now={now} />}
+        />
+        <PageContainer>
+          {/* spacer transparent (pas de blanc) */}
+          <div style={{ height: EDGE_HEADER_H }} />
+          <Card>
+            <PageListeProjet />
+          </Card>
+        </PageContainer>
+      </>
     );
   }
 
   return (
     <>
+      {/* ✅ Header fixé gauche/droite sans “bloc blanc” */}
+      <EdgeHeader
+        left={<h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>Styro</h1>}
+        right={<ClockBadge now={now} />}
+      />
+
       <PageContainer>
-        <TopBar left={<h1 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Styro</h1>} right={<ClockBadge now={now} />} />
+        {/* spacer transparent (pas de blanc) */}
+        <div style={{ height: EDGE_HEADER_H }} />
 
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
-        <Card
-          title="👥 Travailleurs"
-          right={
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <Button
-                variant="neutral"
-                onClick={() => {
-                  setHistEmpId("");
-                  setHistOpen(true);
-                }}
-                aria-label="Voir l’horaire (dans une modale)"
-              >
-                Horaire (Vue)
-              </Button>
+        {/* ✅ Travailleurs le plus haut possible (on enlève un peu le gap du container) */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 26, marginTop: -10 }}>
+          <Card
+            title="👥 Travailleurs"
+            right={
+              <div style={{ display: "flex", gap: 22, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <Button
+                  variant="neutral"
+                  onClick={() => {
+                    setHistEmpId("");
+                    setHistOpen(true);
+                  }}
+                  aria-label="Voir l’horaire (dans une modale)"
+                >
+                  Horaire (Vue)
+                </Button>
 
-              <AddWorkerInline onError={setError} />
-            </div>
-          }
-        >
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  {["Nom", "Total (jour)", "Projet"].map((h, i) => (
-                    <th
-                      key={i}
-                      style={{
-                        ...styles.th,
-                        background: "#f6f7f8",
-                        color: "#111827",
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-
-              <tbody>
-                {employes.map((e) => (
-                  <LigneEmploye
-                    key={e.id}
-                    emp={e}
-                    onOpenHistory={(emp) => {
-                      setHistEmpId(emp?.id || "");
-                      setHistOpen(true);
-                    }}
-                    setError={setError}
-                    projets={projetsOuverts}
-                    autresProjets={autresProjets}
-                    autresProjetsCode={autresProjetsCode}
-                  />
-                ))}
-
-                {employes.length === 0 && (
-                  <tr>
-                    <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                      Aucun employé pour l’instant.
-                    </td>
-                  </tr>
+                {isAdmin && (
+                  <Button
+                    variant="neutral"
+                    onClick={() => (window.location.hash = "#/reglages")}
+                    aria-label="Aller aux réglages"
+                  >
+                    Réglages (admin)
+                  </Button>
                 )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+              </div>
+            }
+          >
+            <div style={styles.tableWrap}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    {["Nom", "Total (jour)", "Projet"].map((h, i) => (
+                      <th
+                        key={i}
+                        style={{
+                          ...styles.th,
+                          background: "#e5e7eb",
+                          color: "#111827",
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
 
-        <Card
-          title="📁 Projets"
-          right={
-            <Button variant="primary" onClick={() => (window.location.hash = "#/projets")} aria-label="Aller à la liste des projets">
-              projet
-            </Button>
-          }
-        >
-          <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
-        </Card>
+                <tbody>
+                  {visibleEmployes.map((e) => (
+                    <LigneEmploye
+                      key={e.id}
+                      emp={e}
+                      onOpenHistory={(emp) => {
+                        setHistEmpId(emp?.id || "");
+                        setHistOpen(true);
+                      }}
+                      setError={setError}
+                      projets={projetsOuverts}
+                      autresProjets={autresProjets}
+                      autresProjetsCode={autresProjetsCode}
+                    />
+                  ))}
 
-        <Card title="📁 Autres projets">
-          <AutresProjetsSection allowEdit={false} showHeader={false} />
-        </Card>
+                  {visibleEmployes.length === 0 && (
+                    <tr>
+                      <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
+                        {isAdmin ? "Aucun employé pour l’instant." : "Aucun employé visible (compte non lié ou pas d’employé)."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <Card
+            title="📁 Projets"
+            right={
+              <Button
+                variant="primary"
+                onClick={() => (window.location.hash = "#/projets")}
+                aria-label="Aller à la liste des projets"
+                style={{
+                  height: 32,
+                  padding: "0 10px",
+                  fontSize: 13,
+                  fontWeight: 800,
+                  borderRadius: 10,
+                  lineHeight: 1,
+                }}
+              >
+                projet
+              </Button>
+            }
+          >
+            <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
+          </Card>
+
+          <Card title="📁 Autres projets">
+            <AutresProjetsSection allowEdit={false} showHeader={false} />
+          </Card>
+        </div>
       </PageContainer>
 
       {materialProjId && (
@@ -1186,57 +1285,10 @@ export default function PageAccueil() {
       <HistoriqueEmploye
         open={histOpen}
         onClose={() => setHistOpen(false)}
-        employes={employes}
+        employes={visibleEmployes}
         initialEmpId={histEmpId}
         onError={setError}
       />
-    </>
-  );
-}
-
-/* ------- Popup “ajouter travailleur” inline ------- */
-function AddWorkerInline({ onAdded, onError }) {
-  const [open, setOpen] = useState(false);
-  const [nom, setNom] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    const clean = nom.trim();
-    if (!clean) return;
-    try {
-      setBusy(true);
-      await addDoc(collection(db, "employes"), { nom: clean, createdAt: new Date() });
-      setNom("");
-      setOpen(false);
-      onAdded?.();
-    } catch (err) {
-      console.error(err);
-      onError?.(err?.message || String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <Button variant="primary" onClick={() => setOpen((v) => !v)}>
-        {open ? "Annuler" : "Ajouter travailleur"}
-      </Button>
-
-      {open && (
-        <form onSubmit={submit} style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            value={nom}
-            onChange={(e) => setNom(e.target.value)}
-            placeholder="Nom de l’employé"
-            style={{ ...styles.input, minWidth: 280, height: 42 }}
-          />
-          <Button type="submit" variant="success" disabled={busy}>
-            Ajouter
-          </Button>
-        </form>
-      )}
     </>
   );
 }

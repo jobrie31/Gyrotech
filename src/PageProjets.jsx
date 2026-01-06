@@ -5,6 +5,8 @@
 // ✅ MODIF: Colonnes miroir = Client, Unité, Modèle (❌ enlève Situation)
 // ✅ AJOUT: Zebra striping (blanc / gris TRÈS pâle)
 // ✅ MODIF: Header plus foncé
+// ✅ MODIF: Grossit l’écriture
+// ✅ MODIF: Le tableau utilise toute la largeur disponible (pas de largeurs fixes par colonne)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -33,20 +35,7 @@ function todayKey() {
 }
 
 /* ——— Format date « 10 oct 2025 » ——— */
-const MONTHS_FR_ABBR = [
-  "janv",
-  "févr",
-  "mars",
-  "avr",
-  "mai",
-  "juin",
-  "juil",
-  "août",
-  "sept",
-  "oct",
-  "nov",
-  "déc",
-];
+const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
 
 function toDateSafe(ts) {
   if (!ts) return null;
@@ -189,16 +178,8 @@ function useSessionsP(projId, key, setError) {
 function computeTotalMs(sessions) {
   const now = Date.now();
   return sessions.reduce((acc, s) => {
-    const st = s.start?.toDate
-      ? s.start.toDate().getTime()
-      : s.start
-      ? new Date(s.start).getTime()
-      : null;
-    const en = s.end?.toDate
-      ? s.end.toDate().getTime()
-      : s.end
-      ? new Date(s.end).getTime()
-      : null;
+    const st = s.start?.toDate ? s.start.toDate().getTime() : s.start ? new Date(s.start).getTime() : null;
+    const en = s.end?.toDate ? s.end.toDate().getTime() : s.end ? new Date(s.end).getTime() : null;
     if (!st) return acc;
     return acc + Math.max(0, (en ?? now) - st);
   }, 0);
@@ -231,9 +212,7 @@ function useProjectLifetimeStats(projId, setError) {
           const open = [];
 
           for (const d of daysSnap.docs) {
-            const segSnap = await getDocs(
-              query(collection(d.ref, "segments"), orderBy("start", "asc"))
-            );
+            const segSnap = await getDocs(query(collection(d.ref, "segments"), orderBy("start", "asc")));
 
             segSnap.forEach((seg) => {
               const s = seg.data();
@@ -277,12 +256,13 @@ function ErrorBanner({ error, onClose }) {
         background: "#fdecea",
         color: "#b71c1c",
         border: "1px solid #f5c6cb",
-        padding: "8px 12px",
-        borderRadius: 8,
+        padding: "10px 14px",
+        borderRadius: 10,
         marginBottom: 12,
         display: "flex",
         alignItems: "center",
         gap: 12,
+        fontSize: 16,
       }}
     >
       <strong>Erreur :</strong>
@@ -296,9 +276,11 @@ function ErrorBanner({ error, onClose }) {
           border: "none",
           background: "#b71c1c",
           color: "white",
-          borderRadius: 6,
-          padding: "6px 10px",
+          borderRadius: 8,
+          padding: "8px 12px",
           cursor: "pointer",
+          fontWeight: 800,
+          fontSize: 14,
         }}
       >
         OK
@@ -361,8 +343,8 @@ function HistoriqueProjet({ proj, open, onClose }) {
 
   if (!open || !proj) return null;
 
-  const th = { textAlign: "left", padding: 10, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap" };
-  const td = { padding: 10, borderBottom: "1px solid #eee" };
+  const th = { textAlign: "left", padding: 12, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap", fontSize: 14, fontWeight: 900 };
+  const td = { padding: 12, borderBottom: "1px solid #eee", fontSize: 14, fontWeight: 700 };
 
   const tempsOuvertureMinutes = Number(proj?.tempsOuvertureMinutes || 0) || 0;
   const totalMsWithOpen = totalMsAll + tempsOuvertureMinutes * 60 * 1000;
@@ -392,17 +374,24 @@ function HistoriqueProjet({ proj, open, onClose }) {
           borderRadius: 12,
           padding: 16,
           boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-          fontSize: 13,
+          fontSize: 14,
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <h3 style={{ margin: 0 }}>Historique — {proj?.nom}</h3>
+          <h3 style={{ margin: 0, fontSize: 18 }}>Historique — {proj?.nom}</h3>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClose?.();
             }}
-            style={{ border: "1px solid #ddd", background: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}
+            style={{
+              border: "1px solid #ddd",
+              background: "#fff",
+              borderRadius: 10,
+              padding: "8px 12px",
+              cursor: "pointer",
+              fontWeight: 800,
+            }}
             title="Fermer"
           >
             Fermer
@@ -412,18 +401,26 @@ function HistoriqueProjet({ proj, open, onClose }) {
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 12 }}>
-          <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Total compilé (incl. ouverture)</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtHM(totalMsWithOpen)}</div>
+          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+            <div style={{ fontSize: 12, color: "#666", fontWeight: 800 }}>Total</div>
+            <div style={{ fontSize: 20, fontWeight: 900 }}>{fmtHM(totalMsWithOpen)}</div>
           </div>
-          <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666" }}>Date d’ouverture</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtDate(proj?.createdAt)}</div>
+          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+            <div style={{ fontSize: 12, color: "#666", fontWeight: 800 }}>Ouverture</div>
+            <div style={{ fontSize: 20, fontWeight: 900 }}>{fmtDate(proj?.createdAt)}</div>
           </div>
         </div>
 
-        <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>Historique — tout</div>
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 12, fontSize: 12 }}>
+        <div style={{ fontWeight: 900, margin: "4px 0 8px", fontSize: 13 }}>Historique — tout</div>
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            border: "1px solid #eee",
+            borderRadius: 12,
+            fontSize: 14,
+          }}
+        >
           <thead>
             <tr style={{ background: "#eef2f7" }}>
               <th style={th}>Jour</th>
@@ -463,13 +460,11 @@ function HistoriqueProjet({ proj, open, onClose }) {
 
 /* ---------------------- Lignes / Tableau ---------------------- */
 function LigneProjet({ proj, idx = 0, tick, onOpenHistory, onOpenMaterial, setError }) {
-  const { card, totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
-  void card;
-
+  const { totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
   const { firstEverStart, totalClosedMs, openStarts } = useProjectLifetimeStats(proj.id, setError);
 
   const statutLabel = hasOpen ? "Actif" : "—";
-  const statutStyle = { fontWeight: 800, color: hasOpen ? "#166534" : "#6b7280" };
+  const statutStyle = { fontWeight: 900, color: hasOpen ? "#166534" : "#6b7280" };
 
   const btn = (label, onClick, color = "#2563eb") => (
     <button
@@ -478,10 +473,11 @@ function LigneProjet({ proj, idx = 0, tick, onOpenHistory, onOpenMaterial, setEr
         border: "none",
         background: color,
         color: "#fff",
-        borderRadius: 8,
-        padding: "6px 10px",
+        borderRadius: 10,
+        padding: "8px 12px",
         cursor: "pointer",
-        fontWeight: 700,
+        fontWeight: 900,
+        fontSize: 14,
       }}
     >
       {label}
@@ -496,8 +492,7 @@ function LigneProjet({ proj, idx = 0, tick, onOpenHistory, onOpenMaterial, setEr
   const tempsOuvertureMinutes = Number(proj.tempsOuvertureMinutes || 0) || 0;
   const totalAllMsWithOpen = totalClosedMs + openExtraMs + tempsOuvertureMinutes * 60 * 1000;
 
-  // ✅ Encore plus pâle
-  const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff"; // (gray-50)
+  const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff";
 
   return (
     <tr
@@ -519,7 +514,7 @@ function LigneProjet({ proj, idx = 0, tick, onOpenHistory, onOpenMaterial, setEr
       <td style={tdCenter}>{fmtHours(proj?.tempsEstimeHeures)}</td>
 
       <td style={tdCenter}>
-        <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
           {btn("Matériel", () => onOpenMaterial(proj.id), "#2563eb")}
           {btn("Historique", () => onOpenHistory(proj), "#6b7280")}
         </div>
@@ -541,6 +536,7 @@ export default function PageProjets({ onOpenMaterial }) {
 
   const [openHist, setOpenHist] = useState(false);
   const [projSel, setProjSel] = useState(null);
+
   const openHistory = (proj) => {
     setProjSel(proj);
     setOpenHist(true);
@@ -551,35 +547,37 @@ export default function PageProjets({ onOpenMaterial }) {
   };
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+    <div style={{ padding: 0, width: "100%" }}>
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      <div style={{ height: 4 }} />
-
-      <div style={{ overflowX: "auto" }}>
+      {/* ✅ WRAP qui colle au conteneur et laisse le tableau prendre toute la largeur */}
+      <div style={{ width: "100%", overflowX: "auto" }}>
         <table
           style={{
             width: "100%",
-            borderCollapse: "collapse",
+            borderCollapse: "separate", // ✅ permet les radius
+            borderSpacing: 0,
             background: "#fff",
             border: "1px solid #eee",
             borderRadius: 12,
+            overflow: "hidden",
+            fontSize: 16, // ✅ grossit globalement
           }}
         >
           <thead>
-            {/* ✅ Header plus foncé */}
             <tr style={{ background: "#e5e7eb" }}>
               <th style={thCenter}>Client</th>
               <th style={thCenter}>Unité</th>
               <th style={thCenter}>Modèle</th>
               <th style={thCenter}>Statut</th>
-              <th style={thCenter}>Date d’ouverture</th>
-              <th style={thCenter}>Total compilé</th>
+              <th style={thCenter}>Ouverture</th>
+              <th style={thCenter}>Total</th>
               <th style={thCenter}>Jour</th>
-              <th style={thCenter}>Temps estimé</th>
+              <th style={thCenter}>Estimé</th>
               <th style={thCenter}>Actions</th>
             </tr>
           </thead>
+
           <tbody>
             {projets.map((p, idx) => (
               <LigneProjet
@@ -592,9 +590,10 @@ export default function PageProjets({ onOpenMaterial }) {
                 setError={setError}
               />
             ))}
+
             {projets.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ padding: 12, color: "#666", textAlign: "center" }}>
+                <td colSpan={9} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16, fontWeight: 800 }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>
@@ -608,18 +607,24 @@ export default function PageProjets({ onOpenMaterial }) {
   );
 }
 
-/* ---------------------- Styles (centrés) ---------------------- */
+/* ---------------------- Styles (centrés + texte plus gros) ---------------------- */ 
+/* ---------------------- FACILE JOUER DANS TABLEAU PROJET DE PAGEACCUEIL LA GROSSEUR ---------------------- */ 
 const thCenter = {
   textAlign: "center",
-  padding: 10,
+  padding: "6px 8px",        // ✅ header plus petit
   borderBottom: "1px solid #d1d5db",
   whiteSpace: "nowrap",
-  fontWeight: 900,
+  fontWeight: 700,
+  fontSize: 18,
+  lineHeight: 1.3,           // ✅ compact
+  color: "#111827",
 };
 
 const tdCenter = {
   textAlign: "center",
-  padding: 10,
+  padding: "4px 8px",        // ✅ lignes plus basses (avant 7px)
   borderBottom: "1px solid #eee",
   verticalAlign: "middle",
+  fontSize: 17,
+  lineHeight: 1.3,          // ✅ compact
 };

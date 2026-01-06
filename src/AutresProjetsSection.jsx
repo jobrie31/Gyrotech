@@ -143,7 +143,7 @@ function ErrorBanner({ error, onClose }) {
     <div
       style={{
         background: "#fdecea",
-        color: "#b71c1c",
+        color: "#b91c1c",
         border: "1px solid #f5c6cb",
         padding: "6px 10px",
         borderRadius: 8,
@@ -163,7 +163,7 @@ function ErrorBanner({ error, onClose }) {
         }}
         style={{
           border: "none",
-          background: "#b71c1c",
+          background: "#b91c1c",
           color: "white",
           borderRadius: 6,
           padding: "4px 8px",
@@ -201,13 +201,31 @@ function CardKV({ k, v }) {
 }
 
 /* ---------- Styles ---------- */
-const th = {
-  textAlign: "left",
-  padding: 8,
-  borderBottom: "1px solid #e0e0e0",
+/* ✅ EXACTEMENT comme tu voulais (Page Projets) */
+const thCenter = {
+  textAlign: "center",
+  padding: "6px 8px", // ✅ header plus petit
+  borderBottom: "1px solid #d1d5db",
   whiteSpace: "nowrap",
+  fontWeight: 700,
+  fontSize: 18,
+  lineHeight: 1.3, // ✅ compact
+  color: "#111827",
 };
-const td = { padding: 8, borderBottom: "1px solid #eee" };
+
+const tdCenter = {
+  textAlign: "center",
+  padding: "4px 8px", // ✅ lignes plus basses (avant 7px)
+  borderBottom: "1px solid #eee",
+  verticalAlign: "middle",
+  fontSize: 17,
+  lineHeight: 1.15, // ✅ compact
+};
+
+/* ✅ Nom complètement à gauche */
+const thLeft = { ...thCenter, textAlign: "left", paddingLeft: 60 };
+const tdLeft = { ...tdCenter, textAlign: "left", paddingLeft: 50 };
+
 const input = {
   width: "100%",
   padding: "8px 10px",
@@ -529,6 +547,15 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
 
   if (!open || !projet) return null;
 
+  // (Historique modal inchangé — tu peux aussi le compacter si tu veux)
+  const th = {
+    textAlign: "left",
+    padding: 8,
+    borderBottom: "1px solid #e0e0e0",
+    whiteSpace: "nowrap",
+  };
+  const td = { padding: 8, borderBottom: "1px solid #eee" };
+
   return (
     <div
       role="dialog"
@@ -623,13 +650,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
         </div>
 
         {/* Résumé */}
-        <div
-          style={{
-            fontWeight: 800,
-            margin: "2px 0 6px",
-            fontSize: 11,
-          }}
-        >
+        <div style={{ fontWeight: 800, margin: "2px 0 6px", fontSize: 11 }}>
           Résumé
         </div>
         <div
@@ -645,13 +666,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
         </div>
 
         {/* Historique */}
-        <div
-          style={{
-            fontWeight: 800,
-            margin: "4px 0 6px",
-            fontSize: 12,
-          }}
-        >
+        <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>
           Historique — tout
         </div>
         <table
@@ -713,6 +728,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
 /* ---------- Ligne du tableau ---------- */
 function RowAutreProjet({
   p,
+  idx = 0,
   onRename,
   onDelete,
   onShowDetails,
@@ -727,18 +743,24 @@ function RowAutreProjet({
     color: hasOpen ? "#166534" : "#6b7280",
   };
 
+  const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff"; // ✅ blanc / gris très pâle
+
   return (
-    <tr>
-      {/* Nom */}
-      <td style={td}>{p.nom || "—"}</td>
+    <tr
+      style={{ background: rowBg }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = rowBg)}
+    >
+      {/* Nom ✅ gauche complètement */}
+      <td style={tdLeft}>{p.nom || "—"}</td>
 
       {/* Statut */}
-      <td style={td}>
+      <td style={tdCenter}>
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
       {/* Actions alignées complètement à droite */}
-      <td style={{ ...td, textAlign: "right" }}>
+      <td style={{ ...tdCenter, textAlign: "right", paddingRight: 80 }}>
         <div
           style={{
             display: "inline-flex",
@@ -754,6 +776,7 @@ function RowAutreProjet({
           >
             Historique
           </button>
+
           {allowEdit && (
             <>
               <button onClick={() => onRename?.(p)} style={btnSecondary}>
@@ -799,9 +822,7 @@ export default function AutresProjetsSection({
           const data = d.data();
           list.push({ id: d.id, ...data });
         });
-        list.sort((a, b) =>
-          (a.nom || "").localeCompare(b.nom || "", "fr-CA")
-        );
+        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
         setRows(list);
       },
       (err) => setError(err?.message || String(err))
@@ -870,45 +891,53 @@ export default function AutresProjetsSection({
         </div>
       )}
 
-      {/* Tableau */}
+      {/* Tableau ✅ arrondis coins comme PageProjets (wrapper + overflow hidden) */}
       <div style={{ overflowX: "auto" }}>
-        <table
+        <div
           style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            background: "#fff",
             border: "1px solid #eee",
             borderRadius: 12,
+            overflow: "hidden", // ✅ coupe les coins du header + lignes
+            background: "#fff",
           }}
         >
-          <thead>
-            <tr style={{ background: "#f6f7f8" }}>
-              <th style={th}>Nom</th>
-              <th style={th}>Statut</th>
-              <th style={{ ...th, textAlign: "right" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((p) => (
-              <RowAutreProjet
-                key={p.id}
-                p={p}
-                onRename={openRename}
-                onDelete={handleDelete}
-                onShowDetails={handleShowDetails}
-                allowEdit={allowEdit}
-                setError={setError}
-              />
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
-                  Aucun autre projet pour l’instant.
-                </td>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              background: "#fff",
+            }}
+          >
+            <thead>
+              <tr style={{ background: "#e5e7eb" }}>
+                <th style={thLeft}>Nom</th>
+                <th style={thCenter}>Statut</th>
+                <th style={{ ...thCenter, textAlign: "right", paddingRight: 100 }}>Actions</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((p, idx) => (
+                <RowAutreProjet
+                  key={p.id}
+                  p={p}
+                  idx={idx}
+                  onRename={openRename}
+                  onDelete={handleDelete}
+                  onShowDetails={handleShowDetails}
+                  allowEdit={allowEdit}
+                  setError={setError}
+                />
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={3} style={{ padding: 12, color: "#666" }}>
+                    Aucun autre projet pour l’instant.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Popup créer/renommer */}
