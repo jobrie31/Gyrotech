@@ -48,7 +48,7 @@ import { CloseProjectWizard } from "./PageProjetsFermes";
 import AutresProjetsSection from "./AutresProjetsSection";
 
 /* ---------------------- Utils ---------------------- */
-const MONTHS_FR_ABBR = ["janv","févr","mars","avr","mai","juin","juil","août","sept","oct","nov","déc"];
+const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
 
 function pad2(n) { return String(n).padStart(2, "0"); }
 function dayKey(d) {
@@ -128,7 +128,7 @@ async function getEmpFromAuth() {
         return { empId: d.id, empName: data.nom || null };
       }
     }
-  } catch {}
+  } catch { }
 
   try {
     if (email) {
@@ -140,7 +140,7 @@ async function getEmpFromAuth() {
         return { empId: d.id, empName: data.nom || null };
       }
     }
-  } catch {}
+  } catch { }
 
   return null;
 }
@@ -299,7 +299,7 @@ async function deleteProjectDeep(projId) {
   // Facture (Storage: factures/{projId}.pdf) — ok si n'existe pas
   try {
     await deleteObject(storageRef(storage, `factures/${projId}.pdf`));
-  } catch {}
+  } catch { }
 
   // timecards + segments
   try {
@@ -313,11 +313,11 @@ async function deleteProjectDeep(projId) {
         const segDel = [];
         segSnap.forEach((d) => segDel.push(deleteDoc(d.ref)));
         if (segDel.length) await Promise.all(segDel);
-      } catch {}
+      } catch { }
 
       try {
         await deleteDoc(doc(db, "projets", projId, "timecards", key));
-      } catch {}
+      } catch { }
     }
   } catch (e) {
     console.error("delete timecards error", e);
@@ -717,7 +717,7 @@ function PopupPDFManager({ open, onClose, projet }) {
         <div style={{ fontWeight: 800, margin: "6px 0 8px" }}>Fichiers du projet</div>
         <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 12 }}>
           <thead>
-            <tr style={{ background: "#e5e7eb"}}>
+            <tr style={{ background: "#e5e7eb" }}>
               <th style={th}>Nom</th>
               <th style={th}>Actions</th>
             </tr>
@@ -917,7 +917,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       try {
         const pending = Number(window.sessionStorage?.getItem("pendingNewProjStartMs") || "");
         if (Number.isFinite(pending) && pending > 0) startMs = pending;
-      } catch {}
+      } catch { }
       createStartMsRef.current = startMs;
     }
   }, [open, mode, projet]);
@@ -1023,7 +1023,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         try {
           pendingEmpId = window.sessionStorage?.getItem("pendingNewProjEmpId") || null;
           pendingEmpName = window.sessionStorage?.getItem("pendingNewProjEmpName") || null;
-        } catch {}
+        } catch { }
 
         if (pendingEmpId) {
           creator = { empId: pendingEmpId, empName: pendingEmpName || null };
@@ -1067,7 +1067,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                 lastProjectName: cleanNom,
                 lastProjectUpdatedAt: new Date(),
               });
-            } catch {}
+            } catch { }
           }
         }
 
@@ -1076,7 +1076,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
           window.sessionStorage?.removeItem("pendingNewProjEmpName");
           window.sessionStorage?.removeItem("pendingNewProjStartMs");
           window.sessionStorage?.removeItem("openCreateProjet");
-        } catch {}
+        } catch { }
       }
 
       onSaved?.();
@@ -1302,6 +1302,23 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onRequestCloseBT, 
   const [tick, setTick] = useState(0);
   const RECENT_DAYS_WINDOW = 90;
 
+  // ✅ UI BIG (popup détails seulement)
+  const POPUP_W = "min(1400px, 98vw)";
+  const BASE_FONT = 16;
+
+  const thBig = { ...th, padding: 12, fontSize: 15 };
+  const tdBig = { ...td, padding: 12, fontSize: 15 };
+
+  const btnTabBig = { ...btnTab, padding: "8px 16px", fontSize: 15 };
+  const btnTabActiveBig = { ...btnTabBig, borderColor: "#2563eb", background: "#eff6ff" };
+
+  const btnSecondaryBig = { ...btnSecondary, padding: "10px 14px", fontSize: 15 };
+  const btnPrimaryBig = { ...btnPrimary, padding: "10px 16px", fontSize: 15 };
+  const btnCloseBTBig = { ...btnCloseBT, padding: "10px 14px", fontSize: 15 };
+  const btnTinyDangerBig = { ...btnTinyDanger, padding: "8px 10px", fontSize: 13 };
+
+  const inputBig = { ...input, padding: "12px 14px", fontSize: 16, borderRadius: 10 };
+
   useEffect(() => { if (!open) return; setTab(initialTab); }, [open, initialTab]);
 
   useEffect(() => {
@@ -1474,7 +1491,6 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onRequestCloseBT, 
 
   const onDeleteHistRow = async (row) => {
     if (!projet?.id) return;
-    const labelEmp = row.empName || "cet employé";
     const ok = window.confirm("Êtes-vous sûr de vouloir supprimer ce projet définitivement ?");
     if (!ok) return;
 
@@ -1556,7 +1572,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onRequestCloseBT, 
         position: "fixed",
         inset: 0,
         zIndex: 10000,
-        background: "rgba(0,0,0,0.5)",
+        background: "rgba(0,0,0,0.55)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -1568,52 +1584,52 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onRequestCloseBT, 
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
-          width: "min(950px, 96vw)",
-          maxHeight: "92vh",
+          width: POPUP_W,
+          maxHeight: "94vh",
           overflow: "auto",
-          borderRadius: 16,
-          padding: 16,
+          borderRadius: 20,
+          padding: 22,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-          fontSize: 13,
+          fontSize: BASE_FONT,
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontWeight: 900, fontSize: 17 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10 }}>
+          <div style={{ fontWeight: 900, fontSize: 22 }}>
             Détails du projet — {projet.clientNom || projet.nom || "—"}
           </div>
 
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button onClick={() => setTab("historique")} style={tab === "historique" ? btnTabActive : btnTab}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button onClick={() => setTab("historique")} style={tab === "historique" ? btnTabActiveBig : btnTabBig}>
               Historique
             </button>
-            <button onClick={() => setTab("materiel")} style={tab === "materiel" ? btnTabActive : btnTab}>
+            <button onClick={() => setTab("materiel")} style={tab === "materiel" ? btnTabActiveBig : btnTabBig}>
               Matériel
             </button>
 
             <button
               onClick={() => onRequestCloseBT?.(projet)}
-              style={btnCloseBT}
+              style={btnCloseBTBig}
               title="Fermer le BT"
             >
               Fermer le BT
             </button>
 
             {!editing ? (
-              <button onClick={() => setEditing(true)} style={btnSecondary}>Modifier</button>
+              <button onClick={() => setEditing(true)} style={btnSecondaryBig}>Modifier</button>
             ) : (
               <>
-                <button onClick={handleDeleteProjet} style={btnTinyDanger} title="Supprimer ce projet">
+                <button onClick={handleDeleteProjet} style={btnTinyDangerBig} title="Supprimer ce projet">
                   Supprimer
                 </button>
                 <button onClick={() => setEditing(false)} style={btnGhost}>Annuler</button>
-                <button onClick={save} style={btnPrimary}>Enregistrer</button>
+                <button onClick={save} style={btnPrimaryBig}>Enregistrer</button>
               </>
             )}
 
             <button
               onClick={(e) => { e.stopPropagation(); onClose?.(); }}
               title="Fermer"
-              style={{ border: "none", background: "transparent", fontSize: 22, cursor: "pointer", lineHeight: 1 }}
+              style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}
             >
               ×
             </button>
@@ -1623,83 +1639,83 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onRequestCloseBT, 
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
         {!editing ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, rowGap: 6, alignItems: "center", marginBottom: 8 }}>
-            <KVInline k="Client" v={projet.clientNom || "—"} />
-            <KVInline k="Téléphone client" v={projet.clientTelephone || "—"} />
-            <KVInline k="Unité" v={projet.numeroUnite || "—"} />
-            <KVInline k="Modèle" v={projet.modele || "—"} />
-            <KVInline k="Marque" v={projet.marque || "—"} />
-            <KVInline k="Année" v={projet.annee ?? "—"} />
-            <KVInline k="Situation" v={projet.ouvert ? "Ouvert" : "Fermé"} success={!!projet.ouvert} danger={!projet.ouvert} />
-            <KVInline k="Plaque" v={projet.plaque || "—"} />
-            <KVInline k="Odomètre" v={typeof projet.odometre === "number" ? projet.odometre.toLocaleString("fr-CA") : projet.odometre || "—"} />
-            <KVInline k="VIN" v={projet.vin || "—"} />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, rowGap: 10, alignItems: "center", marginBottom: 14 }}>
+            <KVInline big k="Client" v={projet.clientNom || "—"} />
+            <KVInline big k="Téléphone client" v={projet.clientTelephone || "—"} />
+            <KVInline big k="Unité" v={projet.numeroUnite || "—"} />
+            <KVInline big k="Modèle" v={projet.modele || "—"} />
+            <KVInline big k="Marque" v={projet.marque || "—"} />
+            <KVInline big k="Année" v={projet.annee ?? "—"} />
+            <KVInline big k="Situation" v={projet.ouvert ? "Ouvert" : "Fermé"} success={!!projet.ouvert} danger={!projet.ouvert} />
+            <KVInline big k="Plaque" v={projet.plaque || "—"} />
+            <KVInline big k="Odomètre" v={typeof projet.odometre === "number" ? projet.odometre.toLocaleString("fr-CA") : projet.odometre || "—"} />
+            <KVInline big k="VIN" v={projet.vin || "—"} />
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8, marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 14 }}>
             <FieldV label="Nom du client / Entreprise">
-              <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={input} />
+              <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={inputBig} />
             </FieldV>
             <FieldV label="Téléphone du client">
-              <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={input} />
+              <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={inputBig} />
             </FieldV>
             <FieldV label="Numéro d’unité">
-              <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={input} />
+              <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={inputBig} />
             </FieldV>
             <FieldV label="Année">
-              <input value={annee} onChange={(e) => setAnnee(e.target.value)} placeholder="AAAA" inputMode="numeric" style={input} />
+              <input value={annee} onChange={(e) => setAnnee(e.target.value)} placeholder="AAAA" inputMode="numeric" style={inputBig} />
             </FieldV>
             <FieldV label="Marque">
-              <input value={marque} onChange={(e) => setMarque(e.target.value)} style={input} />
+              <input value={marque} onChange={(e) => setMarque(e.target.value)} style={inputBig} />
             </FieldV>
             <FieldV label="Modèle">
-              <input value={modele} onChange={(e) => setModele(e.target.value)} style={input} />
+              <input value={modele} onChange={(e) => setModele(e.target.value)} style={inputBig} />
             </FieldV>
             <FieldV label="Plaque">
-              <input value={plaque} onChange={(e) => setPlaque(e.target.value)} style={input} />
+              <input value={plaque} onChange={(e) => setPlaque(e.target.value)} style={inputBig} />
             </FieldV>
             <FieldV label="Odomètre">
-              <input value={odometre} onChange={(e) => setOdometre(e.target.value)} inputMode="numeric" style={input} />
+              <input value={odometre} onChange={(e) => setOdometre(e.target.value)} inputMode="numeric" style={inputBig} />
             </FieldV>
             <FieldV label="VIN">
-              <input value={vin} onChange={(e) => setVin(e.target.value)} style={input} />
+              <input value={vin} onChange={(e) => setVin(e.target.value)} style={inputBig} />
             </FieldV>
           </div>
         )}
 
-        <div style={{ fontWeight: 800, margin: "2px 0 6px", fontSize: 11 }}>Résumé du projet</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 8 }}>
-          <CardKV k="Date d’ouverture" v={fmtDate(projet?.createdAt)} />
-          <CardKV k="Temps compilé" v={fmtHM(totalMsAll)} />
-          <CardKV k="Temps estimé" v={fmtHours(projet?.tempsEstimeHeures)} />
+        <div style={{ fontWeight: 900, margin: "10px 0 8px", fontSize: 16 }}>Résumé du projet</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 14 }}>
+          <CardKV big k="Date d’ouverture" v={fmtDate(projet?.createdAt)} />
+          <CardKV big k="Temps compilé" v={fmtHM(totalMsAll)} />
+          <CardKV big k="Temps estimé" v={fmtHours(projet?.tempsEstimeHeures)} />
         </div>
 
         {tab === "historique" ? (
           <>
-            <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>Historique — tout</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 12, fontSize: 12 }}>
+            <div style={{ fontWeight: 900, margin: "8px 0 10px", fontSize: 16 }}>Historique — tout</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14 }}>
               <thead>
                 <tr style={{ background: "#e5e7eb" }}>
-                  <th style={th}>Jour</th>
-                  <th style={th}>Heures</th>
-                  <th style={th}>Employé</th>
-                  <th style={th}>Actions</th>
+                  <th style={thBig}>Jour</th>
+                  <th style={thBig}>Heures</th>
+                  <th style={thBig}>Employé</th>
+                  <th style={thBig}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {histLoading && (
                   <tr>
-                    <td colSpan={4} style={{ padding: 12, color: "#666", textAlign: "center" }}>Chargement…</td>
+                    <td colSpan={4} style={{ padding: 16, color: "#666", textAlign: "center", fontSize: 15 }}>Chargement…</td>
                   </tr>
                 )}
                 {!histLoading &&
                   histRows.map((r, i) => (
                     <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
-                      <td style={td}>{fmtDate(r.date)}</td>
-                      <td style={td}>{fmtHM(r.totalMs)}</td>
-                      <td style={td}>{r.empName || "—"}</td>
-                      <td style={td}>
-                        <button onClick={() => onDeleteHistRow(r)} style={btnTinyDanger} title="Supprimer cette journée pour cet employé">
+                      <td style={tdBig}>{fmtDate(r.date)}</td>
+                      <td style={tdBig}>{fmtHM(r.totalMs)}</td>
+                      <td style={tdBig}>{r.empName || "—"}</td>
+                      <td style={tdBig}>
+                        <button onClick={() => onDeleteHistRow(r)} style={btnTinyDangerBig} title="Supprimer cette journée pour cet employé">
                           🗑
                         </button>
                       </td>
@@ -1707,7 +1723,7 @@ function PopupDetailsProjet({ open, onClose, projet, onSaved, onRequestCloseBT, 
                   ))}
                 {!histLoading && histRows.length === 0 && (
                   <tr>
-                    <td colSpan={4} style={{ padding: 12, color: "#666", textAlign: "center" }}>Aucun historique.</td>
+                    <td colSpan={4} style={{ padding: 16, color: "#666", textAlign: "center", fontSize: 15 }}>Aucun historique.</td>
                   </tr>
                 )}
               </tbody>
@@ -1756,7 +1772,6 @@ function RowProjet({ p, onClickRow, onOpenDetailsMaterial, onOpenPDF, onCloseBT 
   );
 }
 
-
 /* ---------------------- Page ---------------------- */
 export default function PageListeProjet() {
   const [error, setError] = useState(null);
@@ -1781,7 +1796,7 @@ export default function PageListeProjet() {
         setCreateProjet(null);
         setCreateOpen(true);
       }
-    } catch {}
+    } catch { }
   }, []);
 
   useEffect(() => {
@@ -1906,7 +1921,7 @@ export default function PageListeProjet() {
         onError={setError}
         mode={createProjet ? "edit" : "create"}
         projet={createProjet}
-        onSaved={() => {}}
+        onSaved={() => { }}
       />
 
       <PopupDetailsProjet
@@ -1914,7 +1929,7 @@ export default function PageListeProjet() {
         onClose={closeDetails}
         projet={details.projet}
         initialTab={details.tab}
-        onSaved={() => {}}
+        onSaved={() => { }}
         onRequestCloseBT={(proj) => openCloseBT(proj)}
       />
 
@@ -1960,32 +1975,34 @@ function FieldV({ label, children }) {
     </div>
   );
 }
-function CardKV({ k, v }) {
+
+function CardKV({ k, v, big }) {
   return (
-    <div style={{ border: "1px solid #eee", borderRadius: 10, padding: "6px 8px" }}>
-      <div style={{ fontSize: 10, color: "#666" }}>{k}</div>
-      <div style={{ fontSize: 13, fontWeight: 700 }}>{v}</div>
+    <div style={{ border: "1px solid #eee", borderRadius: 14, padding: big ? "12px 14px" : "6px 8px" }}>
+      <div style={{ fontSize: big ? 13 : 10, color: "#666", fontWeight: 800 }}>{k}</div>
+      <div style={{ fontSize: big ? 20 : 13, fontWeight: 900 }}>{v}</div>
     </div>
   );
 }
-function KVInline({ k, v, danger, success }) {
+
+function KVInline({ k, v, danger, success, big }) {
   return (
     <div
       style={{
         display: "inline-flex",
         alignItems: "baseline",
-        gap: 6,
-        padding: "2px 8px",
+        gap: big ? 10 : 6,
+        padding: big ? "8px 14px" : "2px 8px",
         border: "1px solid #e5e7eb",
         borderRadius: 999,
         whiteSpace: "nowrap",
-        fontSize: 12,
+        fontSize: big ? 15 : 12,
         lineHeight: 1.2,
         background: "#fff",
       }}
     >
-      <span style={{ color: "#6b7280" }}>{k}:</span>
-      <strong style={{ color: danger ? "#b91c1c" : success ? "#166534" : "#111827", fontWeight: 700 }}>{v}</strong>
+      <span style={{ color: "#6b7280", fontWeight: 800 }}>{k}:</span>
+      <strong style={{ color: danger ? "#b91c1c" : success ? "#166534" : "#111827", fontWeight: 900 }}>{v}</strong>
     </div>
   );
 }
@@ -2048,7 +2065,7 @@ const btnBlue = {
   cursor: "pointer",
   fontWeight: 800,
 };
-const btnPDF = { ...btnBlue, background: "#2563eb" };
+const btnPDF = { ...btnBlue, background: "#faa72bff" };
 
 const btnDanger = {
   border: "1px solid #ef4444",

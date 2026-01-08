@@ -1,20 +1,23 @@
 // App.jsx
 import React, { useEffect, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { auth } from "./firebaseConfig";
+import { auth, db } from "./firebaseConfig";
 
-import Login from "./Login"; // ✅ ton Login.jsx
+import Login from "./Login";
 
 import BurgerMenu from "./BurgerMenu";
 import PageAccueil from "./pageAccueil";
 import PageListeProjet from "./PageListeProjet";
 import PageMateriels from "./PageMateriels";
 import PageReglages from "./PageReglages";
-import PageProjetsFermes from "./PageProjetsFermes"; // ✅ AJOUT (route cachée)
+import PageReglagesAdmin from "./PageReglagesAdmin";
+import HistoriqueEmploye from "./HistoriqueEmploye";
 
-// ➜ Supporte aussi les sous-chemins (#/projets/xxx, #/materiels/yyy, etc.)
+import { collection, getDocs, limit, onSnapshot, query, where, doc } from "firebase/firestore";
+
+// ➜ Supporte aussi les sous-chemins (#/historique/<empId>, etc.)
 function getRouteFromHash() {
-  const raw = window.location.hash.replace(/^#\//, "");
+  const raw = window.location.hash.replace(/^#\//, ""); // ex: "historique/abc"
   const first = raw.split("/")[0];
   return first || "accueil";
 }
@@ -23,9 +26,13 @@ export default function App() {
   const [route, setRoute] = useState(getRouteFromHash());
 
   // 🔐 état d’auth
-  const [user, setUser] = useState(undefined); // undefined = on ne sait pas encore
+  const [user, setUser] = useState(undefined);
 
-  // écoute des changements d’URL (router)
+  // ✅ Profil employé (pour savoir admin)
+  const [me, setMe] = useState(null);
+  const [meLoading, setMeLoading] = useState(true);
+
+  // router
   useEffect(() => {
     const onHash = () => setRoute(getRouteFromHash());
     window.addEventListener("hashchange", onHash);
@@ -33,7 +40,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // écoute de l’état Firebase Auth
+  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u || null);
@@ -41,31 +48,92 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // load "me" employe doc
+  useEffect(() => {
+    let unsub = null;
+
+    (async () => {
+      setMeLoading(true);
+      try {
+        if (!user) {
+          setMe(null);
+          return;
+        }
+
+        const uid = user.uid;
+        const emailLower = String(user.email || "").trim().toLowerCase();
+
+        let q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
+        let snap = await getDocs(q1);
+
+        if (snap.empty && emailLower) {
+          q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
+          snap = await getDocs(q1);
+        }
+
+        if (snap.empty) {
+          setMe(null);
+          return;
+        }
+
+        const empDoc = snap.docs[0];
+        unsub = onSnapshot(
+          doc(db, "employes", empDoc.id),
+          (s) => setMe(s.exists() ? { id: s.id, ...s.data() } : null),
+          () => setMe(null)
+        );
+      } catch (e) {
+        console.error(e);
+        setMe(null);
+      } finally {
+        setMeLoading(false);
+      }
+    })();
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [user?.uid, user?.email]);
+
+  const isAdmin = me?.isAdmin === true;
+
+  // 🔒 redirects si non-admin tente d'aller sur pages admin
+  useEffect(() => {
+    if (meLoading) return;
+
+    if (route === "reglages-admin" && !isAdmin) {
+      window.location.hash = "#/reglages";
+    }
+
+    if (route === "historique" && !isAdmin) {
+      window.location.hash = "#/accueil";
+    }
+  }, [route, meLoading, isAdmin]);
+
   const handleLogout = async () => {
     await signOut(auth);
     window.location.hash = "#/accueil";
   };
 
-  // ⏳ Pendant qu’on ne sait pas encore si quelqu’un est loggé
   if (user === undefined) {
     return <div style={{ padding: 24 }}>Chargement...</div>;
   }
 
-  // 🔐 Pas connecté → on affiche TON Login.jsx
   if (!user) {
     return <Login />;
   }
 
-  // ✅ Ici l’utilisateur est connecté → request.auth ≠ null dans Firestore
-  // ❌ ON NE MET PAS "projets-fermes" DANS LE MENU
+  // Menu (Historique visible SEULEMENT admin)
   const pages = [
     { key: "accueil", label: "PageAccueil" },
     { key: "projets", label: "Projets" },
     { key: "materiels", label: "Matériels" },
     { key: "reglages", label: "Réglages" },
+    ...(isAdmin ? [{ key: "historique", label: "Historique" }] : []),
+    ...(isAdmin ? [{ key: "reglages-admin", label: "Réglages Admin" }] : []),
   ];
 
-  const validRoutes = ["accueil", "projets", "projets-fermes", "materiels", "reglages"];
+  const validRoutes = ["accueil", "projets", "materiels", "reglages", "historique", "reglages-admin"];
 
   return (
     <div>
@@ -80,7 +148,7 @@ export default function App() {
           background: "#fff",
         }}
       >
-        <div /> {/* spacer gauche */}
+        <div />
 
         <div
           style={{
@@ -89,9 +157,10 @@ export default function App() {
             fontSize: 12,
             color: "#64748b",
             lineHeight: 1.2,
-                  }}
+          }}
         >
           Connecté comme : {user.email}
+          {isAdmin ? " — Admin" : ""}
         </div>
 
         <div style={{ justifySelf: "end" }}>
@@ -103,9 +172,10 @@ export default function App() {
 
       {route === "accueil" && <PageAccueil />}
       {route === "projets" && <PageListeProjet />}
-      {route === "projets-fermes" && <PageProjetsFermes />} {/* ✅ route cachée */}
       {route === "materiels" && <PageMateriels />}
       {route === "reglages" && <PageReglages />}
+      {route === "historique" && <HistoriqueEmploye />}
+      {route === "reglages-admin" && <PageReglagesAdmin />}
 
       {!validRoutes.includes(route) && <PageAccueil />}
     </div>

@@ -3,6 +3,10 @@
 //
 // ✅ Admin: voit tous les employés
 // ✅ Non-admin: voit seulement son propre nom
+//
+// ✅ MODIF:
+// - CLIQUER sur un travailleur NE DOIT PLUS ouvrir l’Excel / Horaire
+// - L’Excel / Horaire est une PAGE (#/historique) via le bouton "Horaire (Vue)"
 
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -23,11 +27,9 @@ import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "./firebaseConfig";
 
 import PageProjets from "./PageProjets";
-import PageListeProjet from "./PageListeProjet";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
-import HistoriqueEmploye from "./HistoriqueEmploye";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -323,11 +325,11 @@ function computeTotalMs(sessions) {
 
 function usePresenceToday(empId, setError) {
   const key = todayKey();
-  const card = useDay(empId, key, setError);
+  useDay(empId, key, setError); // garde ton listener day
   const sessions = useSessions(empId, key, setError);
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
   const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
-  return { key, card, sessions, totalMs, hasOpen };
+  return { key, sessions, totalMs, hasOpen };
 }
 
 /* ---------------------- Punch / Dépunch ---------------------- */
@@ -409,15 +411,11 @@ async function doDepunchWithProject(emp) {
   );
 
   await Promise.all(
-    jobTokens
-      .filter((t) => t.startsWith("proj:"))
-      .map(async (t) => closeProjSessionsForEmp(t.slice(5), emp.id, key))
+    jobTokens.filter((t) => t.startsWith("proj:")).map(async (t) => closeProjSessionsForEmp(t.slice(5), emp.id, key))
   );
 
   await Promise.all(
-    jobTokens
-      .filter((t) => t.startsWith("other:"))
-      .map(async (t) => closeOtherSessionsForEmp(t.slice(6), emp.id, key))
+    jobTokens.filter((t) => t.startsWith("other:")).map(async (t) => closeOtherSessionsForEmp(t.slice(6), emp.id, key))
   );
 
   await closeAllOpenSessions(emp.id, key);
@@ -742,17 +740,7 @@ function ClockBadge({ now }) {
   );
 }
 
-/**
- * ✅ BAR "EDGE" (pas de bloc blanc)
- * - Fixe à gauche/droite du viewport
- * - Fond TRANSPARENT (donc plus de “zone blanche”)
- * - Petit spacer transparent pour que le premier Card ne soit pas sous le header
- *
- * IMPORTANT:
- * - Si ton "Connecté comme... / Se déconnecter" (dans App.jsx) est fixed en haut,
- *   ajuste APP_TOP (ex: 34 / 38 / 44) pour descendre légèrement ce header.
- */
-const APP_TOP = 38; // mets 38 si ton bandeau App.jsx te cache le header Styro/horloge
+const APP_TOP = 38;
 const EDGE_HEADER_H = 30;
 
 function EdgeHeader({ left, right }) {
@@ -774,8 +762,8 @@ function EdgeHeader({ left, right }) {
           justifyContent: "space-between",
           gap: 12,
           padding: "10px 18px",
-          paddingLeft: 72, // laisse la place au burger
-          background: "transparent", // ✅ plus de bloc blanc
+          paddingLeft: 72,
+          background: "transparent",
           pointerEvents: "auto",
         }}
       >
@@ -787,7 +775,7 @@ function EdgeHeader({ left, right }) {
 }
 
 /* ---------------------- Lignes / Tableau ---------------------- */
-function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, autresProjetsCode }) {
+function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode }) {
   const { sessions, totalMs, hasOpen } = usePresenceToday(emp.id, setError);
   const present = hasOpen;
 
@@ -882,19 +870,22 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
     await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
   };
 
-  const punchBtnBg = present ? "#fbbf24" : "#2563eb";
-  const punchBtnHover = present ? "#f59e0b" : "#1d4ed8";
+  const punchBtnBg = present ? "#fbbf24" : "#002f94ff";
+  const punchBtnHover = present ? "#f59e0b" : "#002f94ff";
 
   return (
     <>
       <tr
-        onClick={() => onOpenHistory(emp)}
-        style={{ ...styles.row, background: rowBg, transition: "background 0.25s ease-out" }}
+        style={{
+          ...styles.row,
+          background: rowBg,
+          transition: "background 0.25s ease-out",
+          cursor: "default",
+        }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{emp.nom || "—"}</td>
-
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
 
         <td style={{ ...styles.td }} onClick={(e) => e.stopPropagation()}>
@@ -955,8 +946,6 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
               variant="neutral"
               onClick={() => setAutresOpen(true)}
               disabled={present}
-              title="Choisir un projet depuis la liste « Autres projets »"
-              aria-label="Autres projets"
               style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
             >
               Autres projets
@@ -967,8 +956,6 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
               variant="neutral"
               onClick={() => setNewProjModalOpen(true)}
               disabled={present}
-              title="Créer un nouveau projet à partir de ce punch"
-              aria-label="Nouveau projet"
               style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
             >
               Nouveau projet
@@ -978,7 +965,6 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
               type="button"
               onClick={handlePunchClick}
               disabled={pending}
-              aria-label={present ? "Dépuncher" : "Puncher"}
               variant="neutral"
               style={{
                 width: 220,
@@ -1082,13 +1068,6 @@ function LigneEmploye({ emp, onOpenHistory, setError, projets, autresProjets, au
   );
 }
 
-/* ---------------------- Routing helper ---------------------- */
-function getRouteFromHash() {
-  const h = window.location.hash || "";
-  const m = h.match(/^#\/(.+)/);
-  return m ? m[1] : "accueil";
-}
-
 /* ---------------------- Page ---------------------- */
 export default function PageAccueil() {
   const [error, setError] = useState(null);
@@ -1128,77 +1107,24 @@ export default function PageAccueil() {
     return () => clearInterval(t);
   }, []);
 
-  const [route, setRoute] = useState(getRouteFromHash());
-  useEffect(() => {
-    const onHash = () => setRoute(getRouteFromHash());
-    window.addEventListener("hashchange", onHash);
-    onHash();
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
   const [materialProjId, setMaterialProjId] = useState(null);
-
-  const [histOpen, setHistOpen] = useState(false);
-  const [histEmpId, setHistEmpId] = useState("");
-
-  if (route === "projets") {
-    return (
-      <>
-        <EdgeHeader
-          left={<h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>Projets</h1>}
-          right={<ClockBadge now={now} />}
-        />
-        <PageContainer>
-          {/* spacer transparent (pas de blanc) */}
-          <div style={{ height: EDGE_HEADER_H }} />
-          <Card>
-            <PageListeProjet />
-          </Card>
-        </PageContainer>
-      </>
-    );
-  }
 
   return (
     <>
-      {/* ✅ Header fixé gauche/droite sans “bloc blanc” */}
       <EdgeHeader
         left={<h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>Styro</h1>}
         right={<ClockBadge now={now} />}
       />
 
       <PageContainer>
-        {/* spacer transparent (pas de blanc) */}
         <div style={{ height: EDGE_HEADER_H }} />
-
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
-        {/* ✅ Travailleurs le plus haut possible (on enlève un peu le gap du container) */}
         <div style={{ display: "flex", flexDirection: "column", gap: 26, marginTop: -10 }}>
           <Card
             title="👥 Travailleurs"
             right={
               <div style={{ display: "flex", gap: 22, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <Button
-                  variant="neutral"
-                  onClick={() => {
-                    setHistEmpId("");
-                    setHistOpen(true);
-                  }}
-                  aria-label="Voir l’horaire (dans une modale)"
-                >
-                  Horaire (Vue)
-                </Button>
-
-                {isAdmin && (
-                  <Button
-                    variant="neutral"
-                    onClick={() => (window.location.hash = "#/reglages")}
-                    aria-label="Aller aux réglages"
-                  >
-                    Réglages (admin)
-                  </Button>
-                )}
               </div>
             }
           >
@@ -1207,14 +1133,7 @@ export default function PageAccueil() {
                 <thead>
                   <tr>
                     {["Nom", "Total (jour)", "Projet"].map((h, i) => (
-                      <th
-                        key={i}
-                        style={{
-                          ...styles.th,
-                          background: "#e5e7eb",
-                          color: "#111827",
-                        }}
-                      >
+                      <th key={i} style={{ ...styles.th, background: "#e5e7eb", color: "#111827" }}>
                         {h}
                       </th>
                     ))}
@@ -1226,10 +1145,6 @@ export default function PageAccueil() {
                     <LigneEmploye
                       key={e.id}
                       emp={e}
-                      onOpenHistory={(emp) => {
-                        setHistEmpId(emp?.id || "");
-                        setHistOpen(true);
-                      }}
                       setError={setError}
                       projets={projetsOuverts}
                       autresProjets={autresProjets}
@@ -1263,6 +1178,8 @@ export default function PageAccueil() {
                   fontWeight: 800,
                   borderRadius: 10,
                   lineHeight: 1,
+                  background: "#36ad5eff",
+                  borderColor: "#36ad5eff",
                 }}
               >
                 projet
@@ -1281,14 +1198,6 @@ export default function PageAccueil() {
       {materialProjId && (
         <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />
       )}
-
-      <HistoriqueEmploye
-        open={histOpen}
-        onClose={() => setHistOpen(false)}
-        employes={visibleEmployes}
-        initialEmpId={histEmpId}
-        onError={setError}
-      />
     </>
   );
 }

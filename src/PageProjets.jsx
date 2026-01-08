@@ -1,5 +1,4 @@
 // src/PageProjets.jsx — Tableau Projets (miroir, sans punch)
-// Historique ≡ même logique que PageListeProjet (agrégé tout le projet)
 // ✅ AJOUT: colonne "Temps estimé" entre Jour et Actions
 // ✅ UI: centres les noms de colonnes ET les valeurs (table principale)
 // ✅ MODIF: Colonnes miroir = Client, Unité, Modèle (❌ enlève Situation)
@@ -7,6 +6,7 @@
 // ✅ MODIF: Header plus foncé
 // ✅ MODIF: Grossit l’écriture
 // ✅ MODIF: Le tableau utilise toute la largeur disponible (pas de largeurs fixes par colonne)
+// ✅ MODIF (demande): ✅ Bouton "Historique" retiré
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -289,177 +289,8 @@ function ErrorBanner({ error, onClose }) {
   );
 }
 
-/* ---------------------- Historique (modal) — SANS supprimer ---------------------- */
-function HistoriqueProjet({ proj, open, onClose }) {
-  const [error, setError] = useState(null);
-  const [histRows, setHistRows] = useState([]);
-  const [histLoading, setHistLoading] = useState(false);
-  const [totalMsAll, setTotalMsAll] = useState(0);
-
-  useEffect(() => {
-    if (!open || !proj?.id) return;
-    (async () => {
-      setHistLoading(true);
-      try {
-        const daysSnap = await getDocs(collection(db, "projets", proj.id, "timecards"));
-        const days = [];
-        daysSnap.forEach((d) => days.push(d.id));
-        days.sort((a, b) => b.localeCompare(a));
-
-        const map = new Map();
-        let sumAllMs = 0;
-        for (const key of days) {
-          const segSnap = await getDocs(collection(db, "projets", proj.id, "timecards", key, "segments"));
-          segSnap.forEach((sdoc) => {
-            const s = sdoc.data();
-            const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
-            const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
-            if (!st) return;
-            const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
-            sumAllMs += ms;
-
-            const empName = s.empName || "—";
-            const empKey = s.empId || empName;
-            const k = `${key}__${empKey}`;
-            const prev = map.get(k) || { date: key, empName, empId: s.empId || null, totalMs: 0 };
-            prev.totalMs += ms;
-            map.set(k, prev);
-          });
-        }
-        const rows = Array.from(map.values()).sort((a, b) => {
-          if (a.date !== b.date) return b.date.localeCompare(a.date);
-          return (a.empName || "").localeCompare(b.empName || "");
-        });
-        setHistRows(rows);
-        setTotalMsAll(sumAllMs);
-      } catch (e) {
-        console.error(e);
-        setError(e?.message || String(e));
-      } finally {
-        setHistLoading(false);
-      }
-    })();
-  }, [open, proj?.id]);
-
-  if (!open || !proj) return null;
-
-  const th = { textAlign: "left", padding: 12, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap", fontSize: 14, fontWeight: 900 };
-  const td = { padding: 12, borderBottom: "1px solid #eee", fontSize: 14, fontWeight: 700 };
-
-  const tempsOuvertureMinutes = Number(proj?.tempsOuvertureMinutes || 0) || 0;
-  const totalMsWithOpen = totalMsAll + tempsOuvertureMinutes * 60 * 1000;
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.35)",
-        display: open ? "flex" : "none",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 9999,
-      }}
-      onClick={(e) => e.stopPropagation()}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          width: "min(950px, 95vw)",
-          maxHeight: "92vh",
-          overflow: "auto",
-          borderRadius: 12,
-          padding: 16,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-          fontSize: 14,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 18 }}>Historique — {proj?.nom}</h3>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose?.();
-            }}
-            style={{
-              border: "1px solid #ddd",
-              background: "#fff",
-              borderRadius: 10,
-              padding: "8px 12px",
-              cursor: "pointer",
-              fontWeight: 800,
-            }}
-            title="Fermer"
-          >
-            Fermer
-          </button>
-        </div>
-
-        <ErrorBanner error={error} onClose={() => setError(null)} />
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 12 }}>
-          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666", fontWeight: 800 }}>Total</div>
-            <div style={{ fontSize: 20, fontWeight: 900 }}>{fmtHM(totalMsWithOpen)}</div>
-          </div>
-          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#666", fontWeight: 800 }}>Ouverture</div>
-            <div style={{ fontSize: 20, fontWeight: 900 }}>{fmtDate(proj?.createdAt)}</div>
-          </div>
-        </div>
-
-        <div style={{ fontWeight: 900, margin: "4px 0 8px", fontSize: 13 }}>Historique — tout</div>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            border: "1px solid #eee",
-            borderRadius: 12,
-            fontSize: 14,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "#eef2f7" }}>
-              <th style={th}>Jour</th>
-              <th style={th}>Heures</th>
-              <th style={th}>Employé</th>
-            </tr>
-          </thead>
-          <tbody>
-            {histLoading && (
-              <tr>
-                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
-                  Chargement…
-                </td>
-              </tr>
-            )}
-            {!histLoading &&
-              histRows.map((r, i) => (
-                <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
-                  <td style={td}>{fmtDate(r.date)}</td>
-                  <td style={td}>{fmtHM(r.totalMs)}</td>
-                  <td style={td}>{r.empName || "—"}</td>
-                </tr>
-              ))}
-            {!histLoading && histRows.length === 0 && (
-              <tr>
-                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
-                  Aucun historique.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 /* ---------------------- Lignes / Tableau ---------------------- */
-function LigneProjet({ proj, idx = 0, tick, onOpenHistory, onOpenMaterial, setError }) {
+function LigneProjet({ proj, idx = 0, tick, onOpenMaterial, setError }) {
   const { totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
   const { firstEverStart, totalClosedMs, openStarts } = useProjectLifetimeStats(proj.id, setError);
 
@@ -515,8 +346,8 @@ function LigneProjet({ proj, idx = 0, tick, onOpenHistory, onOpenMaterial, setEr
 
       <td style={tdCenter}>
         <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-          {btn("Matériel", () => onOpenMaterial(proj.id), "#2563eb")}
-          {btn("Historique", () => onOpenHistory(proj), "#6b7280")}
+          {btn("Matériel", () => onOpenMaterial(proj.id), "#0CA4E8")}
+          {/* ✅ Bouton Historique retiré */}
         </div>
       </td>
     </tr>
@@ -533,18 +364,6 @@ export default function PageProjets({ onOpenMaterial }) {
     const t = setInterval(() => setTick((x) => x + 1), 15000);
     return () => clearInterval(t);
   }, []);
-
-  const [openHist, setOpenHist] = useState(false);
-  const [projSel, setProjSel] = useState(null);
-
-  const openHistory = (proj) => {
-    setProjSel(proj);
-    setOpenHist(true);
-  };
-  const closeHistory = () => {
-    setOpenHist(false);
-    setProjSel(null);
-  };
 
   return (
     <div style={{ padding: 0, width: "100%" }}>
@@ -585,7 +404,6 @@ export default function PageProjets({ onOpenMaterial }) {
                 proj={p}
                 idx={idx}
                 tick={tick}
-                onOpenHistory={openHistory}
                 onOpenMaterial={onOpenMaterial}
                 setError={setError}
               />
@@ -593,7 +411,10 @@ export default function PageProjets({ onOpenMaterial }) {
 
             {projets.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16, fontWeight: 800 }}>
+                <td
+                  colSpan={9}
+                  style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16, fontWeight: 800 }}
+                >
                   Aucun projet pour l’instant.
                 </td>
               </tr>
@@ -601,30 +422,28 @@ export default function PageProjets({ onOpenMaterial }) {
           </tbody>
         </table>
       </div>
-
-      <HistoriqueProjet proj={projSel} open={openHist} onClose={closeHistory} />
     </div>
   );
 }
 
-/* ---------------------- Styles (centrés + texte plus gros) ---------------------- */ 
-/* ---------------------- FACILE JOUER DANS TABLEAU PROJET DE PAGEACCUEIL LA GROSSEUR ---------------------- */ 
+/* ---------------------- Styles (centrés + texte plus gros) ---------------------- */
+/* ---------------------- FACILE JOUER DANS TABLEAU PROJET DE PAGEACCUEIL LA GROSSEUR ---------------------- */
 const thCenter = {
   textAlign: "center",
-  padding: "6px 8px",        // ✅ header plus petit
+  padding: "6px 8px", // ✅ header plus petit
   borderBottom: "1px solid #d1d5db",
   whiteSpace: "nowrap",
   fontWeight: 700,
   fontSize: 18,
-  lineHeight: 1.3,           // ✅ compact
+  lineHeight: 1.3, // ✅ compact
   color: "#111827",
 };
 
 const tdCenter = {
   textAlign: "center",
-  padding: "4px 8px",        // ✅ lignes plus basses (avant 7px)
+  padding: "4px 8px", // ✅ lignes plus basses (avant 7px)
   borderBottom: "1px solid #eee",
   verticalAlign: "middle",
   fontSize: 17,
-  lineHeight: 1.3,          // ✅ compact
+  lineHeight: 1.3, // ✅ compact
 };

@@ -1,7 +1,15 @@
-// src/HistoriqueEmploye.jsx
+// src/HistoriqueEmploye.jsx — PAGE (liée aux travailleurs)
+// - Admin: peut choisir n'importe quel employé
+// - Non-admin: accès refusé (et pas visible au menu)
+// Route supportée:
+//   #/historique            -> ouvre sur moi (ou 1er visible)
+//   #/historique/<empId>    -> ouvre sur l'employé (si permis)
+
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
-import { db } from "./firebaseConfig";
+import { onAuthStateChanged } from "firebase/auth";
+import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query } from "firebase/firestore";
+import { auth, db } from "./firebaseConfig";
+import { Card, Button, PageContainer } from "./UIPro";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -24,10 +32,9 @@ function startOfSunday(d) {
   return x;
 }
 function formatDateFR(d) {
-  return d.toLocaleDateString("fr-CA", { day: "2-digit", month: "2-digit", year: "numeric" });
+  return d?.toLocaleDateString?.("fr-CA", { day: "2-digit", month: "2-digit", year: "numeric" }) || "";
 }
 function weekdayFR(d) {
-  // "dimanche", "lundi", ...
   const s = d.toLocaleDateString("fr-CA", { weekday: "long" });
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -55,10 +62,6 @@ function fmtHoursComma(hours) {
   return round2(hours).toFixed(2).replace(".", ",");
 }
 
-// Logique “AM/PM” basée sur tes segments Firestore:
-// - AM = 1er segment (start/end)
-// - PM = 2e segment start -> dernier end (si 3+ segments)
-// - Total = somme des durées
 function dayToAMPM(segments) {
   const rows = (segments || [])
     .map((s) => ({
@@ -66,6 +69,7 @@ function dayToAMPM(segments) {
       end: toJSDateMaybe(s.end),
     }))
     .filter((x) => x.start);
+
   rows.sort((a, b) => a.start - b.start);
 
   const now = new Date();
@@ -112,9 +116,7 @@ function build14Days(sundayStart) {
 function isoInputValue(date) {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 }
-
 function parseISOInput(v) {
-  // "YYYY-MM-DD" -> Date local 00:00
   if (!v) return null;
   const [y, m, d] = v.split("-").map((x) => Number(x));
   if (!y || !m || !d) return null;
@@ -122,73 +124,199 @@ function parseISOInput(v) {
   dt.setHours(0, 0, 0, 0);
   return dt;
 }
-
 function sumHours(arr) {
   return round2((arr || []).reduce((acc, x) => acc + (Number(x?.totalHours) || 0), 0));
 }
 
-/* ---------------------- Component ---------------------- */
-export default function HistoriqueEmploye({
-  open,
-  onClose,
-  employes = [],
-  initialEmpId = "",
-  onError,
-}) {
-  if (!open) return null;
+// #/historique/<empId> -> empId (ou "")
+function getEmpIdFromHash() {
+  const raw = (window.location.hash || "").replace(/^#\//, ""); // ex: "historique/abc"
+  const parts = raw.split("/");
+  if (parts[0] !== "historique") return "";
+  return parts[1] || "";
+}
 
-  const sortedEmployes = useMemo(() => {
-    const list = [...(employes || [])];
-    list.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
-    return list;
-  }, [employes]);
+/* ---------------------- Page ---------------------- */
+export default function HistoriqueEmploye() {
+  const [error, setError] = useState(null);
 
-  const defaultEmpId = initialEmpId || sortedEmployes?.[0]?.id || "";
+  // user auth
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u || null));
+    return () => unsub();
+  }, []);
 
-  const [empId, setEmpId] = useState(defaultEmpId);
+  // employés (source de vérité)
+  const [employes, setEmployes] = useState([]);
+  useEffect(() => {
+    const c = collection(db, "employes");
+    const unsub = onSnapshot(
+      c,
+      (snap) => {
+        const list = [];
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
+        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
+        setEmployes(list);
+      },
+      (err) => setError(err?.message || String(err))
+    );
+    return () => unsub();
+  }, []);
 
-  // Période: on choisit une date (n’importe laquelle), on l’aligne au dimanche
-  const [anchorDate, setAnchorDate] = useState(() => new Date());
+  // mon employé + admin
+  const myEmploye = useMemo(() => {
+    if (!user) return null;
+    const uid = user.uid || "";
+    const emailLower = (user.email || "").toLowerCase();
+    return employes.find((e) => e.uid === uid) || employes.find((e) => (e.emailLower || "") === emailLower) || null;
+  }, [user, employes]);
 
-  // Champs “entête” (facultatif, comme ton modèle)
-  const [responsable, setResponsable] = useState("");
-  const [pp, setPp] = useState("");
+  const isAdmin = !!myEmploye?.isAdmin;
+
+  /* ===================== 🔒 CODE HISTORIQUE (ADMIN) ===================== */
+  const [expectedCode, setExpectedCode] = useState("");
+  const [codeLoading, setCodeLoading] = useState(true);
+  const [codeInput, setCodeInput] = useState("");
+  const [codeErr, setCodeErr] = useState("");
+
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      return window.sessionStorage?.getItem("historiqueUnlocked") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  // Charge le code attendu depuis Firestore (ADMIN seulement)
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setCodeLoading(true);
+        setCodeErr("");
+
+        if (!isAdmin) {
+          setExpectedCode("");
+          return;
+        }
+
+        const ref = doc(db, "config", "adminAccess");
+        const snap = await getDoc(ref);
+        const data = snap.exists() ? snap.data() || {} : {};
+
+        const v = String(data.historiqueCode || "").trim();
+        if (!cancelled) setExpectedCode(v);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setCodeErr(e?.message || String(e));
+      } finally {
+        if (!cancelled) setCodeLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  const tryUnlock = () => {
+    const entered = String(codeInput || "").trim();
+    const expected = String(expectedCode || "").trim();
+
+    if (!expected) {
+      setCodeErr("Code historique non configuré dans Firestore (config/adminAccess.historiqueCode).");
+      return;
+    }
+    if (entered !== expected) {
+      setCodeErr("Code invalide.");
+      return;
+    }
+
+    setCodeErr("");
+    setUnlocked(true);
+    try {
+      window.sessionStorage?.setItem("historiqueUnlocked", "1");
+    } catch {}
+  };
+
+  // ✅ Re-barre automatiquement quand on quitte la page
+  useEffect(() => {
+    return () => {
+      try {
+        window.sessionStorage?.removeItem("historiqueUnlocked");
+      } catch {}
+    };
+  }, []);
+
+  // employés visibles (admin seulement — sinon vide)
+  const visibleEmployes = useMemo(() => {
+    if (!isAdmin) return [];
+    return employes;
+  }, [employes, isAdmin]);
+
+  // empId venant du hash (optionnel)
+  const [routeEmpId, setRouteEmpId] = useState(getEmpIdFromHash());
+  useEffect(() => {
+    const onHash = () => setRouteEmpId(getEmpIdFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // sélection employé (admin)
+  const fallbackEmpId = useMemo(() => {
+    if (routeEmpId) return routeEmpId;
+    return visibleEmployes?.[0]?.id || "";
+  }, [routeEmpId, visibleEmployes]);
+
+  const [empId, setEmpId] = useState(fallbackEmpId);
 
   useEffect(() => {
-    // Quand la modale ouvre / change d’employé initial
-    setEmpId(defaultEmpId);
-  }, [defaultEmpId, open]);
+    if (!fallbackEmpId) return;
+    setEmpId((cur) => {
+      const wanted = fallbackEmpId;
+      if (visibleEmployes.some((e) => e.id === wanted)) return wanted;
+      const first = visibleEmployes?.[0]?.id || "";
+      return first || cur;
+    });
+  }, [fallbackEmpId, visibleEmployes]);
 
+  const empObj = useMemo(() => visibleEmployes.find((e) => e.id === empId) || null, [visibleEmployes, empId]);
+
+  // période / données
+  const [anchorDate, setAnchorDate] = useState(() => new Date());
   const sundayStart = useMemo(() => startOfSunday(anchorDate), [anchorDate]);
   const days14 = useMemo(() => build14Days(sundayStart), [sundayStart]);
 
   const startDate = days14[0]?.date;
   const endDate = days14[13]?.date;
   const payableDate = useMemo(() => {
-    // “Payable” = fin + 5 jours (comme ton exemple: 19 -> 24)
     const x = new Date(endDate);
     x.setDate(x.getDate() + 5);
     return x;
   }, [endDate]);
 
-  const empObj = useMemo(() => sortedEmployes.find((e) => e.id === empId) || null, [sortedEmployes, empId]);
+  const [responsable, setResponsable] = useState("");
+  const [pp, setPp] = useState("");
 
   const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState([]); // 14 rows with AM/PM/total
-  const [notes, setNotes] = useState({}); // key -> text
+  const [rows, setRows] = useState([]);
+  const [notes, setNotes] = useState({}); // local only
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
+        if (!isAdmin || !unlocked) return;
+
         if (!empId) {
           setRows([]);
           return;
         }
         setLoading(true);
 
-        // 14 requêtes (une par jour) – simple et fiable
         const results = await Promise.all(
           days14.map(async (d) => {
             const qSeg = query(segCol(empId, d.key), orderBy("start", "asc"));
@@ -199,12 +327,10 @@ export default function HistoriqueEmploye({
           })
         );
 
-        if (!cancelled) {
-          setRows(results);
-        }
+        if (!cancelled) setRows(results);
       } catch (e) {
         console.error(e);
-        onError?.(e?.message || String(e));
+        setError(e?.message || String(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -214,15 +340,15 @@ export default function HistoriqueEmploye({
     return () => {
       cancelled = true;
     };
-  }, [empId, days14, onError]);
+  }, [isAdmin, unlocked, empId, days14]);
 
   const week1 = rows.slice(0, 7);
   const week2 = rows.slice(7, 14);
-
   const totalWeek1 = useMemo(() => sumHours(week1), [week1]);
   const totalWeek2 = useMemo(() => sumHours(week2), [week2]);
   const total2Weeks = useMemo(() => round2(totalWeek1 + totalWeek2), [totalWeek1, totalWeek2]);
 
+  /* ---------------------- Styles ---------------------- */
   const headerStyle = {
     display: "grid",
     gridTemplateColumns: "1fr auto",
@@ -230,17 +356,6 @@ export default function HistoriqueEmploye({
     alignItems: "start",
     marginBottom: 12,
   };
-
-  const cardStyle = {
-    background: "#fff",
-    width: "min(1100px, 98vw)",
-    maxHeight: "92vh",
-    overflow: "auto",
-    borderRadius: 12,
-    padding: 16,
-    boxShadow: "0 18px 50px rgba(0,0,0,0.25)",
-  };
-
   const labelBox = {
     border: "1px solid #cbd5e1",
     borderRadius: 8,
@@ -248,7 +363,6 @@ export default function HistoriqueEmploye({
     background: "#f8fafc",
     fontSize: 13,
   };
-
   const smallInput = {
     width: "100%",
     border: "1px solid #cbd5e1",
@@ -257,13 +371,7 @@ export default function HistoriqueEmploye({
     fontSize: 14,
     background: "#fff",
   };
-
-  const table = {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: 13,
-  };
-
+  const table = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
   const th = {
     border: "1px solid #cbd5e1",
     padding: "6px 8px",
@@ -272,22 +380,9 @@ export default function HistoriqueEmploye({
     fontWeight: 900,
     whiteSpace: "nowrap",
   };
-
-  const td = {
-    border: "1px solid #cbd5e1",
-    padding: "6px 8px",
-    whiteSpace: "nowrap",
-    textAlign: "center",
-  };
-
+  const td = { border: "1px solid #cbd5e1", padding: "6px 8px", whiteSpace: "nowrap", textAlign: "center" };
   const tdLeft = { ...td, textAlign: "left" };
-
-  const totalCell = {
-    ...td,
-    background: "#dbeafe",
-    fontWeight: 900,
-  };
-
+  const totalCell = { ...td, background: "#dbeafe", fontWeight: 900 };
   const totalBox = {
     border: "1px solid #cbd5e1",
     borderRadius: 8,
@@ -299,55 +394,138 @@ export default function HistoriqueEmploye({
     textAlign: "right",
   };
 
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.35)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 9999,
-        padding: 10,
-      }}
-    >
-      <div onClick={(e) => e.stopPropagation()} style={cardStyle}>
-        {/* Top bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
-          <div style={{ fontSize: 18, fontWeight: 1000 }}>
-            Feuille d’heures (affichage) — {empObj?.nom || "—"}
+  /* ===================== UI ===================== */
+  if (!isAdmin) {
+    return (
+      <PageContainer>
+        <Card>
+          <div style={{ fontSize: 20, fontWeight: 1000, marginBottom: 6 }}>Accès refusé</div>
+          <div style={{ color: "#64748b", fontWeight: 800 }}>
+            Cette page Historique est réservée aux administrateurs.
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              border: "1px solid #ddd",
-              background: "#fff",
-              borderRadius: 8,
-              padding: "8px 12px",
-              cursor: "pointer",
-              fontWeight: 800,
-            }}
-          >
-            Fermer
-          </button>
+          <div style={{ marginTop: 12 }}>
+            <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
+              Retour
+            </Button>
+          </div>
+        </Card>
+      </PageContainer>
+    );
+  }
+
+  if (!unlocked) {
+    return (
+      <PageContainer>
+        <Card>
+          <div style={{ fontSize: 22, fontWeight: 1000, marginBottom: 8 }}>🔒 Historique — Code requis</div>
+
+          {codeErr && (
+            <div
+              style={{
+                background: "#fdecea",
+                color: "#7f1d1d",
+                border: "1px solid #f5c6cb",
+                padding: "10px 14px",
+                borderRadius: 10,
+                marginBottom: 12,
+                fontSize: 14,
+                fontWeight: 800,
+              }}
+            >
+              {codeErr}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>Code</div>
+              <input
+                type="password"
+                value={codeInput}
+                onChange={(e) => setCodeInput(e.target.value)}
+                style={smallInput}
+                disabled={codeLoading}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") tryUnlock();
+                }}
+              />
+            </div>
+
+            <Button
+              onClick={tryUnlock}
+              disabled={codeLoading}
+              variant="primary"
+            >
+              {codeLoading ? "Chargement…" : "Déverrouiller"}
+            </Button>
+
+            <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
+              Retour
+            </Button>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+            Code lu depuis <strong>config/adminAccess.historiqueCode</strong>.
+          </div>
+        </Card>
+      </PageContainer>
+    );
+  }
+
+  return (
+    <PageContainer>
+      {/* Header page */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+        <div style={{ fontSize: 22, fontWeight: 1000 }}>📄 Historique — Feuille d’heures</div>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
+            Retour
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <div
+          style={{
+            background: "#fdecea",
+            color: "#7f1d1d",
+            border: "1px solid #f5c6cb",
+            padding: "10px 14px",
+            borderRadius: 10,
+            marginBottom: 12,
+            fontSize: 14,
+            fontWeight: 800,
+          }}
+        >
+          Erreur: {error}
+        </div>
+      )}
+
+      <Card>
+        {/* top bar */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <div style={{ fontSize: 18, fontWeight: 1000 }}>Employé: {empObj?.nom || "—"}</div>
+          <div style={{ color: "#64748b", fontSize: 13, fontWeight: 800 }}>{loading ? "Chargement…" : ""}</div>
         </div>
 
-        {/* Header blocks (comme ton modèle) */}
+        {/* Head blocks */}
         <div style={headerStyle}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div style={labelBox}>
               <div style={{ fontWeight: 900, marginBottom: 6 }}>Nom de l’employé(e)</div>
+
               <select
                 value={empId}
-                onChange={(e) => setEmpId(e.target.value)}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setEmpId(id);
+                  window.location.hash = id ? `#/historique/${id}` : "#/historique";
+                }}
                 style={smallInput}
               >
-                {sortedEmployes.length === 0 && <option value="">(Aucun employé)</option>}
-                {sortedEmployes.map((e) => (
+                {visibleEmployes.length === 0 && <option value="">(Aucun employé)</option>}
+                {visibleEmployes.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.nom || "(sans nom)"}
                   </option>
@@ -357,12 +535,7 @@ export default function HistoriqueEmploye({
 
             <div style={labelBox}>
               <div style={{ fontWeight: 900, marginBottom: 6 }}>Nom du responsable</div>
-              <input
-                value={responsable}
-                onChange={(e) => setResponsable(e.target.value)}
-                placeholder=""
-                style={smallInput}
-              />
+              <input value={responsable} onChange={(e) => setResponsable(e.target.value)} style={smallInput} />
             </div>
 
             <div style={labelBox}>
@@ -377,15 +550,13 @@ export default function HistoriqueEmploye({
                   }}
                   style={{ ...smallInput, width: 190 }}
                 />
-                <div style={{ color: "#475569", fontWeight: 800 }}>
-                  (Affiche 2 semaines, alignées au dimanche)
-                </div>
+                <div style={{ color: "#475569", fontWeight: 800 }}>(2 semaines, alignées au dimanche)</div>
               </div>
             </div>
 
             <div style={labelBox}>
               <div style={{ fontWeight: 900, marginBottom: 6 }}>PP</div>
-              <input value={pp} onChange={(e) => setPp(e.target.value)} placeholder="Ex: PP9" style={smallInput} />
+              <input value={pp} onChange={(e) => setPp(e.target.value)} style={smallInput} />
             </div>
           </div>
 
@@ -400,14 +571,10 @@ export default function HistoriqueEmploye({
                 <div style={{ fontWeight: 800 }}>{formatDateFR(payableDate)}</div>
               </div>
             </div>
-
-            <div style={{ color: "#64748b", fontSize: 13 }}>
-              {loading ? "Chargement des segments…" : " "}
-            </div>
           </div>
         </div>
 
-        {/* TABLE WEEK 1 */}
+        {/* WEEK 1 */}
         <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1</div>
           <table style={table}>
@@ -433,7 +600,7 @@ export default function HistoriqueEmploye({
             </thead>
 
             <tbody>
-              {week1.map((r) => (
+              {rows.slice(0, 7).map((r) => (
                 <tr key={r.key}>
                   <td style={tdLeft}>{r.weekday}</td>
                   <td style={td}>{r.dateStr}</td>
@@ -457,14 +624,15 @@ export default function HistoriqueEmploye({
                         padding: "6px 8px",
                         fontSize: 13,
                       }}
-                      placeholder=""
                     />
                   </td>
                 </tr>
               ))}
 
               <tr>
-                <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={6}>Total semaine 1</td>
+                <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={6}>
+                  Total semaine 1
+                </td>
                 <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek1)}</td>
                 <td style={td}></td>
               </tr>
@@ -472,7 +640,7 @@ export default function HistoriqueEmploye({
           </table>
         </div>
 
-        {/* TABLE WEEK 2 */}
+        {/* WEEK 2 */}
         <div style={{ marginTop: 14 }}>
           <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 2</div>
           <table style={table}>
@@ -498,7 +666,7 @@ export default function HistoriqueEmploye({
             </thead>
 
             <tbody>
-              {week2.map((r) => (
+              {rows.slice(7, 14).map((r) => (
                 <tr key={r.key}>
                   <td style={tdLeft}>{r.weekday}</td>
                   <td style={td}>{r.dateStr}</td>
@@ -522,14 +690,15 @@ export default function HistoriqueEmploye({
                         padding: "6px 8px",
                         fontSize: 13,
                       }}
-                      placeholder=""
                     />
                   </td>
                 </tr>
               ))}
 
               <tr>
-                <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={6}>Total semaine 2</td>
+                <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={6}>
+                  Total semaine 2
+                </td>
                 <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek2)}</td>
                 <td style={td}></td>
               </tr>
@@ -542,7 +711,7 @@ export default function HistoriqueEmploye({
           <div style={{ fontWeight: 1000 }}>Total heures travaillées :</div>
           <div style={totalBox}>{fmtHoursComma(total2Weeks)}</div>
         </div>
-      </div>
-    </div>
+      </Card>
+    </PageContainer>
   );
 }

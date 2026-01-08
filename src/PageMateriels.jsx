@@ -227,7 +227,7 @@ function CategoryHeaderRow({ cat }) {
             ...styles.th,
             textAlign: "left",
             padding: "4px 12px",
-            background: isNone ? "#0f172a" : "#1e3a8a",
+            background: isNone ? "#0f172a" : "#c56a6aff",
             color: "white",
             fontSize: 14, // ✅ titre plus gros
             fontWeight: 900,

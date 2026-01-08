@@ -1,14 +1,15 @@
 // BurgerMenu.jsx — Bouton 3 lignes + tiroir gauche (pages)
-// Navigue via window.location.hash => '#/accueil', '#/projets', '#/materiels', '#/reglages'
+// Navigue via window.location.hash => '#/accueil', '#/projets', '#/historique', '#/materiels', '#/reglages'
 
 import React, { useEffect, useState } from "react";
 
 // ✅ Le menu ne rend pas les pages. Il ne fait que naviguer par hash.
 const defaultPages = [
-  { key: "accueil",   label: "PageAccueil" },
-  { key: "projets",   label: "Projets" },
+  { key: "accueil", label: "PageAccueil" },
+  { key: "projets", label: "Projets" },
+  { key: "historique", label: "Historique" }, // ✅ Historique employés
   { key: "materiels", label: "Matériels" },
-  { key: "reglages",  label: "Réglages" },
+  { key: "reglages", label: "Réglages" },
 ];
 
 export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
@@ -16,8 +17,11 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
 
   // ESC pour fermer + blocage du scroll quand ouvert
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     document.addEventListener("keydown", onKey);
+
     if (open) {
       const prev = document.body.style.overflow;
       document.body.style.overflow = "hidden";
@@ -26,14 +30,15 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
         document.removeEventListener("keydown", onKey);
       };
     }
+
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
   const handleItem = (p) => {
     setOpen(false);
     if (p.onClick) return p.onClick();
-    if (onNavigate) return onNavigate(p.key); // navigation gérée par le parent
-    window.location.hash = `#/${p.key}`;      // fallback hash
+    if (onNavigate) return onNavigate(p.key);
+    window.location.hash = `#/${p.key}`;
   };
 
   return (
@@ -57,7 +62,6 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
           alignItems: "center",
           justifyContent: "center",
           cursor: "pointer",
-          // ⬇️ Cache le bouton quand le menu est ouvert (il ne recouvre plus le header)
           opacity: open ? 0 : 1,
           pointerEvents: open ? "none" : "auto",
           transition: "opacity 150ms ease",
@@ -79,7 +83,7 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
           position: "fixed",
           inset: 0,
           pointerEvents: open ? "auto" : "none",
-          zIndex: 20000, // ⬅️ au-dessus du bouton (12000)
+          zIndex: 20000,
         }}
       >
         {/* Overlay assombri */}
