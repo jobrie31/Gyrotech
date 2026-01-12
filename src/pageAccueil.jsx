@@ -7,8 +7,12 @@
 // ✅ MODIF:
 // - CLIQUER sur un travailleur NE DOIT PLUS ouvrir l’Excel / Horaire
 // - L’Excel / Horaire est une PAGE (#/historique) via le bouton "Horaire (Vue)"
+//
+// ✅ AJOUT (2026-01-12):
+// - Si un employé est punché sur un projet et que ce projet se ferme (ou disparaît de la liste des projets ouverts),
+//   on le DÉPUNCH automatiquement + on clear lastProjectId/Name pour éviter un "retour auto" quand on réouvre.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
 import {
   collection,
@@ -814,6 +818,44 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
     if (present && currentIsProj && currentProjId) setProjSel(currentProjId);
   }, [present, currentIsProj, currentProjId]);
 
+  // ✅ AUTO-DÉPUNCH si le projet actif se ferme (ou n'est plus dans projets ouverts)
+  const autoDepunchRef = useRef(false);
+  useEffect(() => {
+    if (!present || !currentIsProj || !currentProjId) {
+      autoDepunchRef.current = false;
+      return;
+    }
+    const stillOpen = projets.some((p) => p.id === currentProjId);
+    if (stillOpen) {
+      autoDepunchRef.current = false;
+      return;
+    }
+    if (autoDepunchRef.current) return;
+    autoDepunchRef.current = true;
+
+    (async () => {
+      try {
+        setPending(true);
+        await doDepunchWithProject(emp);
+
+        // ✅ on clear lastProject pour éviter qu'au réopen ça revienne "par défaut"
+        try {
+          await updateDoc(doc(db, "employes", emp.id), {
+            lastProjectId: null,
+            lastProjectName: null,
+            lastProjectUpdatedAt: new Date(),
+          });
+        } catch {}
+      } catch (e) {
+        console.error(e);
+        setError?.(e?.message || String(e));
+      } finally {
+        setPending(false);
+        autoDepunchRef.current = false;
+      }
+    })();
+  }, [present, currentIsProj, currentProjId, projets, emp, setError]);
+
   const handlePunchClick = async (e) => {
     e.stopPropagation();
     if (present) {
@@ -1121,13 +1163,7 @@ export default function PageAccueil() {
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
         <div style={{ display: "flex", flexDirection: "column", gap: 26, marginTop: -10 }}>
-          <Card
-            title="👥 Travailleurs"
-            right={
-              <div style={{ display: "flex", gap: 22, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-              </div>
-            }
-          >
+          <Card title="👥 Travailleurs" right={<div style={{ display: "flex", gap: 22, alignItems: "center" }} />}>
             <div style={styles.tableWrap}>
               <table style={styles.table}>
                 <thead>

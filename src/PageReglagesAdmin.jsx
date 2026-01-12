@@ -1,8 +1,11 @@
 // src/PageReglagesAdmin.jsx — Réglages ADMIN
 // ✅ UI: tableaux encadrés noir + titres en gras
-// ✅ Ordre: Gestion du temps → Facturation → Travailleurs → Code — Autres projets
+// ✅ Ordre: Gestion du temps → Facturation → Travailleurs → Code — Autres projets → Autres projets
 // ✅ Accès: admin + code (config/adminAccess.reglagesAdminCode)
 // ✅ Rebarre automatiquement dès qu'on quitte la page (hash change) + au refresh
+//
+// ✅ DEMANDE (toi): pour "Autre projet" dans Gestion du temps, on enlève l'action poubelle (Supprimer).
+// => Le bouton "Supprimer" n'apparait QUE quand Type = "Projet".
 
 import React, { useMemo, useState, useEffect } from "react";
 import { db, auth } from "./firebaseConfig";
@@ -23,6 +26,8 @@ import {
   addDoc,
   limit,
 } from "firebase/firestore";
+
+import AutresProjetsSection from "./AutresProjetsSection";
 
 export default function PageReglagesAdmin() {
   /* ============================================================
@@ -52,20 +57,12 @@ export default function PageReglagesAdmin() {
         const emailLower = String(authUser.email || "").trim().toLowerCase();
 
         // 1) uid
-        let q1 = query(
-          collection(db, "employes"),
-          where("uid", "==", uid),
-          limit(1)
-        );
+        let q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
         let snap = await getDocs(q1);
 
         // 2) fallback emailLower
         if (snap.empty && emailLower) {
-          q1 = query(
-            collection(db, "employes"),
-            where("emailLower", "==", emailLower),
-            limit(1)
-          );
+          q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
           snap = await getDocs(q1);
         }
 
@@ -151,7 +148,6 @@ export default function PageReglagesAdmin() {
   useEffect(() => {
     const lockIfLeft = () => {
       const h = String(window.location.hash || "").toLowerCase();
-      // si on n'est plus dans une route contenant "reglagesadmin", on lock
       if (!h.includes("reglagesadmin")) {
         setAdminAccessGranted(false);
         setAdminCodeInput("");
@@ -166,7 +162,6 @@ export default function PageReglagesAdmin() {
   const tryUnlockAdmin = () => {
     setAdminCodeError("");
 
-    // Si tu veux un code obligatoire, même si vide en DB:
     if (!expectedAdminCode) {
       setAdminCodeError("Code admin manquant dans config/adminAccess.");
       return;
@@ -187,9 +182,7 @@ export default function PageReglagesAdmin() {
 
   /* ================== ⚙️ Facture ================== */
   const [factureNom, setFactureNom] = useState("Gyrotech");
-  const [factureSousTitre, setFactureSousTitre] = useState(
-    "Service mobile – Diagnostic & réparation"
-  );
+  const [factureSousTitre, setFactureSousTitre] = useState("Service mobile – Diagnostic & réparation");
   const [factureTel, setFactureTel] = useState("");
   const [factureCourriel, setFactureCourriel] = useState("");
   const [factureTauxHoraire, setFactureTauxHoraire] = useState("");
@@ -222,8 +215,7 @@ export default function PageReglagesAdmin() {
           if (data.companySubtitle) setFactureSousTitre(data.companySubtitle);
           if (data.companyPhone) setFactureTel(data.companyPhone);
           if (data.companyEmail) setFactureCourriel(data.companyEmail);
-          if (data.tauxHoraire != null)
-            setFactureTauxHoraire(String(data.tauxHoraire));
+          if (data.tauxHoraire != null) setFactureTauxHoraire(String(data.tauxHoraire));
         }
       } catch (e) {
         console.error(e);
@@ -293,11 +285,7 @@ export default function PageReglagesAdmin() {
       setAutresCodeError(null);
       setAutresCodeSaved(false);
       const ref = doc(db, "config", "punchCodes");
-      await setDoc(
-        ref,
-        { autresProjetsCode: (autresCode || "").trim() },
-        { merge: true }
-      );
+      await setDoc(ref, { autresProjetsCode: (autresCode || "").trim() }, { merge: true });
       setAutresCodeSaved(true);
     } catch (e) {
       console.error(e);
@@ -355,9 +343,7 @@ export default function PageReglagesAdmin() {
     if (!nom) return alert("Nom requis.");
     if (!isValidEmail(emailLower)) return alert("Email invalide.");
 
-    if (
-      employes.some((e) => (e.emailLower || "").toLowerCase() === emailLower)
-    ) {
+    if (employes.some((e) => (e.emailLower || "").toLowerCase() === emailLower)) {
       return alert("Cet email existe déjà dans la liste des travailleurs.");
     }
 
@@ -370,13 +356,10 @@ export default function PageReglagesAdmin() {
         nom,
         email,
         emailLower,
-
         isAdmin: !!employeIsAdminInput,
-
         activationCode: code,
         activatedAt: null,
         uid: null,
-
         createdAt: serverTimestamp(),
       });
 
@@ -429,9 +412,12 @@ export default function PageReglagesAdmin() {
 
   /* ================== GESTION DU TEMPS (ADMIN) ================== */
   const [timeDate, setTimeDate] = useState("");
+  const [timeJobType, setTimeJobType] = useState("projet"); // ✅ "projet" | "autre"
   const [timeProjId, setTimeProjId] = useState("");
+  const [timeOtherId, setTimeOtherId] = useState(""); // ✅ autre projet
   const [timeEmpId, setTimeEmpId] = useState("");
   const [timeProjets, setTimeProjets] = useState([]);
+  const [timeAutresProjets, setTimeAutresProjets] = useState([]); // ✅ liste autres projets
   const [timeEmployes, setTimeEmployes] = useState([]);
   const [timeSegments, setTimeSegments] = useState([]);
   const [timeLoading, setTimeLoading] = useState(false);
@@ -442,20 +428,66 @@ export default function PageReglagesAdmin() {
   const [massDepunchMsg, setMassDepunchMsg] = useState("");
 
   // Projets (liste simple) — ADMIN ONLY
+  // ✅ On veut seulement les projets OUVERTS dans Gestion du temps
   useEffect(() => {
     if (!canUseAdminPage) {
       setTimeProjets([]);
       return;
     }
+
     (async () => {
       try {
         const snap = await getDocs(collection(db, "projets"));
         const rows = [];
-        snap.forEach((d) =>
-          rows.push({ id: d.id, nom: d.data().nom || "(sans nom)" })
-        );
+
+        snap.forEach((d) => {
+          const data = d.data() || {};
+
+          const nom = data.nom || "(sans nom)";
+
+          // 🔎 Détection "fermé" robuste (supporte plusieurs anciens formats)
+          const isClosed =
+            data.isClosed === true ||
+            !!data.closedAt ||
+            String(data.statut || data.status || data.etat || "")
+              .toLowerCase()
+              .includes("ferm"); // "ferme", "fermé", "fermée"
+
+          // ✅ On garde seulement ceux qui ne sont PAS fermés
+          if (!isClosed) {
+            rows.push({ id: d.id, nom });
+          }
+        });
+
         rows.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
         setTimeProjets(rows);
+      } catch (e) {
+        console.error(e);
+        setTimeError(e?.message || String(e));
+      }
+    })();
+  }, [canUseAdminPage]);
+
+  // ✅ Autres projets (liste simple) — ADMIN ONLY
+  useEffect(() => {
+    if (!canUseAdminPage) {
+      setTimeAutresProjets([]);
+      return;
+    }
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "autresProjets"));
+        const rows = [];
+        snap.forEach((d) => rows.push({ id: d.id, nom: d.data().nom || "(sans nom)", ordre: d.data().ordre ?? null }));
+        rows.sort((a, b) => {
+          // tri ordre puis nom
+          if (a.ordre == null && b.ordre == null) return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+          if (a.ordre == null) return 1;
+          if (b.ordre == null) return -1;
+          if (a.ordre !== b.ordre) return a.ordre - b.ordre;
+          return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+        });
+        setTimeAutresProjets(rows);
       } catch (e) {
         console.error(e);
         setTimeError(e?.message || String(e));
@@ -473,9 +505,7 @@ export default function PageReglagesAdmin() {
       try {
         const snap = await getDocs(collection(db, "employes"));
         const rows = [];
-        snap.forEach((d) =>
-          rows.push({ id: d.id, nom: d.data().nom || "(sans nom)" })
-        );
+        snap.forEach((d) => rows.push({ id: d.id, nom: d.data().nom || "(sans nom)" }));
         rows.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
         setTimeEmployes(rows);
       } catch (e) {
@@ -485,14 +515,16 @@ export default function PageReglagesAdmin() {
     })();
   }, [canUseAdminPage]);
 
-  // Charger les segments du projet + date (ADMIN ONLY)
+  // Charger les segments du job + date (ADMIN ONLY)
   useEffect(() => {
     if (!canUseAdminPage) {
       setTimeSegments([]);
       return;
     }
 
-    if (!timeDate || !timeProjId) {
+    const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
+
+    if (!timeDate || !jobId) {
       setTimeSegments([]);
       return;
     }
@@ -500,14 +532,10 @@ export default function PageReglagesAdmin() {
     setTimeLoading(true);
     setTimeError(null);
 
-    const segCol = collection(
-      db,
-      "projets",
-      timeProjId,
-      "timecards",
-      timeDate,
-      "segments"
-    );
+    const segCol =
+      timeJobType === "projet"
+        ? collection(db, "projets", jobId, "timecards", timeDate, "segments")
+        : collection(db, "autresProjets", jobId, "timecards", timeDate, "segments");
 
     const unsub = onSnapshot(
       segCol,
@@ -529,7 +557,7 @@ export default function PageReglagesAdmin() {
       }
     );
     return () => unsub();
-  }, [canUseAdminPage, timeDate, timeProjId]);
+  }, [canUseAdminPage, timeDate, timeJobType, timeProjId, timeOtherId]);
 
   // Initialiser les valeurs HH:MM quand les segments changent
   useEffect(() => {
@@ -544,8 +572,7 @@ export default function PageReglagesAdmin() {
   }, [timeSegments]);
 
   const displayedSegments = useMemo(
-    () =>
-      timeEmpId ? timeSegments.filter((s) => s.empId === timeEmpId) : timeSegments,
+    () => (timeEmpId ? timeSegments.filter((s) => s.empId === timeEmpId) : timeSegments),
     [timeSegments, timeEmpId]
   );
 
@@ -556,35 +583,55 @@ export default function PageReglagesAdmin() {
     }));
   };
 
-  async function findEmployeeSegmentForProject(seg, dateKey, projId) {
-    if (!seg.empId || !projId || !dateKey) return null;
+  function normalizeJobIdForEmpMatch(jobType, id) {
+    const s = String(id || "").trim();
+    if (!s) return [];
+    if (jobType === "projet") {
+      return [s, `proj:${s}`];
+    }
+    // autres projets: on accepte plusieurs variantes au cas où ton app a déjà évolué
+    return [s, `other:${s}`, `autre:${s}`, `autres:${s}`];
+  }
 
-    const empSegCol = collection(
-      db,
-      "employes",
-      seg.empId,
-      "timecards",
-      dateKey,
-      "segments"
-    );
+  async function findEmployeeSegmentForJob(seg, dateKey, jobType, jobId) {
+    // ✅ On cherche le segment employé correspondant (même empId, même job, start le plus proche)
+    if (!seg.empId || !jobId || !dateKey) return null;
 
-    const qEmp = query(empSegCol, where("jobId", "==", projId));
-    const snap = await getDocs(qEmp);
+    const empSegCol = collection(db, "employes", seg.empId, "timecards", dateKey, "segments");
+
+    // 🔍 On lit tous les segments du jour pour cet employé (plus robuste que where(jobId==...))
+    const snap = await getDocs(empSegCol);
     if (snap.empty) return null;
 
-    const projStartMs = toMillis(seg.start);
-    let bestDoc = null;
-    let bestDiff = Infinity;
+    const targetStartMs = toMillis(seg.start);
+    const allowed = new Set(normalizeJobIdForEmpMatch(jobType, jobId));
+
+    // 1) on filtre sur jobId si possible
+    let candidates = [];
     snap.forEach((d) => {
-      const data = d.data();
-      const ms = toMillis(data.start);
-      const diff = Math.abs(ms - projStartMs);
+      const data = d.data() || {};
+      const jid = String(data.jobId || "").trim();
+      if (allowed.has(jid)) candidates.push({ ref: d.ref, startMs: toMillis(data.start) });
+    });
+
+    // 2) fallback si on n’a rien trouvé → on prend tous les segments (on matchera au start)
+    if (candidates.length === 0) {
+      snap.forEach((d) => {
+        const data = d.data() || {};
+        candidates.push({ ref: d.ref, startMs: toMillis(data.start) });
+      });
+    }
+
+    let bestRef = null;
+    let bestDiff = Infinity;
+    for (const c of candidates) {
+      const diff = Math.abs((c.startMs || 0) - (targetStartMs || 0));
       if (diff < bestDiff) {
         bestDiff = diff;
-        bestDoc = d;
+        bestRef = c.ref;
       }
-    });
-    return bestDoc ? bestDoc.ref : null;
+    }
+    return bestRef;
   }
 
   const saveSegment = async (seg) => {
@@ -611,15 +658,13 @@ export default function PageReglagesAdmin() {
     setTimeError(null);
 
     try {
-      const projSegRef = doc(
-        db,
-        "projets",
-        timeProjId,
-        "timecards",
-        timeDate,
-        "segments",
-        seg.id
-      );
+      const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
+      if (!jobId) throw new Error("Choisis un projet / autre projet.");
+
+      const segRef =
+        timeJobType === "projet"
+          ? doc(db, "projets", jobId, "timecards", timeDate, "segments", seg.id)
+          : doc(db, "autresProjets", jobId, "timecards", timeDate, "segments", seg.id);
 
       const updates = {
         start: newStart,
@@ -627,9 +672,9 @@ export default function PageReglagesAdmin() {
         updatedAt: serverTimestamp(),
       };
 
-      const promises = [updateDoc(projSegRef, updates)];
+      const promises = [updateDoc(segRef, updates)];
 
-      const empRef = await findEmployeeSegmentForProject(seg, timeDate, timeProjId);
+      const empRef = await findEmployeeSegmentForJob(seg, timeDate, timeJobType, jobId);
       if (empRef) promises.push(updateDoc(empRef, updates));
 
       await Promise.all(promises);
@@ -648,18 +693,17 @@ export default function PageReglagesAdmin() {
     setTimeLoading(true);
     setTimeError(null);
     try {
-      const projSegRef = doc(
-        db,
-        "projets",
-        timeProjId,
-        "timecards",
-        timeDate,
-        "segments",
-        seg.id
-      );
-      const ops = [deleteDoc(projSegRef)];
+      const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
+      if (!jobId) throw new Error("Choisis un projet / autre projet.");
 
-      const empRef = await findEmployeeSegmentForProject(seg, timeDate, timeProjId);
+      const segRef =
+        timeJobType === "projet"
+          ? doc(db, "projets", jobId, "timecards", timeDate, "segments", seg.id)
+          : doc(db, "autresProjets", jobId, "timecards", timeDate, "segments", seg.id);
+
+      const ops = [deleteDoc(segRef)];
+
+      const empRef = await findEmployeeSegmentForJob(seg, timeDate, timeJobType, jobId);
       if (empRef) ops.push(deleteDoc(empRef));
 
       await Promise.all(ops);
@@ -678,6 +722,17 @@ export default function PageReglagesAdmin() {
     let timerId;
     let running = false;
 
+    const parseJobKind = (jobIdRaw) => {
+      const s = String(jobIdRaw || "").trim();
+      if (!s) return { kind: "", id: "" };
+      if (s.startsWith("proj:")) return { kind: "projet", id: s.slice(5) };
+      if (s.startsWith("other:")) return { kind: "autre", id: s.slice(6) };
+      if (s.startsWith("autre:")) return { kind: "autre", id: s.slice(6) };
+      if (s.startsWith("autres:")) return { kind: "autre", id: s.slice(7) };
+      // compat: si pas de préfixe → on assume projet (comme ton ancien code)
+      return { kind: "projet", id: s };
+    };
+
     const checkAndDepunch = async () => {
       try {
         if (running) return;
@@ -686,12 +741,9 @@ export default function PageReglagesAdmin() {
         const hours = now.getHours();
 
         const y = now.getFullYear();
-        const dKey = `${y}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
-          now.getDate()
-        ).padStart(2, "0")}`;
+        const dKey = `${y}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
-        const lastDone =
-          window.localStorage?.getItem("massDepunchLastDate") || null;
+        const lastDone = window.localStorage?.getItem("massDepunchLastDate") || null;
 
         if (hours >= 17 && lastDone !== dKey) {
           running = true;
@@ -699,15 +751,7 @@ export default function PageReglagesAdmin() {
           setMassDepunchMsg("");
           setTimeError(null);
 
-          const endTime = new Date(
-            y,
-            now.getMonth(),
-            now.getDate(),
-            17,
-            0,
-            0,
-            0
-          );
+          const endTime = new Date(y, now.getMonth(), now.getDate(), 17, 0, 0, 0);
 
           let countSegs = 0;
 
@@ -716,49 +760,36 @@ export default function PageReglagesAdmin() {
           for (const empDoc of empSnap.docs) {
             const empId = empDoc.id;
 
-            const segCol = collection(
-              db,
-              "employes",
-              empId,
-              "timecards",
-              dKey,
-              "segments"
-            );
+            const segCol = collection(db, "employes", empId, "timecards", dKey, "segments");
             const segSnap = await getDocs(segCol);
 
             for (const segDoc of segSnap.docs) {
               const segData = segDoc.data();
               if (segData.end) continue;
 
-              const jobId = segData.jobId;
+              const jobIdRaw = segData.jobId;
               const startTs = segData.start;
 
-              await updateDoc(segDoc.ref, {
-                end: endTime,
-                updatedAt: serverTimestamp(),
-              });
+              await updateDoc(segDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
               countSegs++;
 
-              if (jobId && startTs) {
-                const projSegCol = collection(
-                  db,
-                  "projets",
-                  jobId,
-                  "timecards",
-                  dKey,
-                  "segments"
-                );
-                const qProj = query(
-                  projSegCol,
-                  where("empId", "==", empId),
-                  where("start", "==", startTs)
-                );
-                const projSnap = await getDocs(qProj);
-                for (const pDoc of projSnap.docs) {
-                  await updateDoc(pDoc.ref, {
-                    end: endTime,
-                    updatedAt: serverTimestamp(),
-                  });
+              if (jobIdRaw && startTs) {
+                const parsed = parseJobKind(jobIdRaw);
+
+                if (parsed.kind === "projet") {
+                  const projSegCol = collection(db, "projets", parsed.id, "timecards", dKey, "segments");
+                  const qProj = query(projSegCol, where("empId", "==", empId), where("start", "==", startTs));
+                  const projSnap = await getDocs(qProj);
+                  for (const pDoc of projSnap.docs) {
+                    await updateDoc(pDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
+                  }
+                } else if (parsed.kind === "autre") {
+                  const otherSegCol = collection(db, "autresProjets", parsed.id, "timecards", dKey, "segments");
+                  const qOther = query(otherSegCol, where("empId", "==", empId), where("start", "==", startTs));
+                  const otherSnap = await getDocs(qOther);
+                  for (const oDoc of otherSnap.docs) {
+                    await updateDoc(oDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
+                  }
                 }
               }
             }
@@ -797,14 +828,8 @@ export default function PageReglagesAdmin() {
     return (
       <div style={{ padding: 24, fontFamily: "Arial, system-ui, -apple-system" }}>
         <h2 style={{ marginTop: 0, fontWeight: 900 }}>Accès refusé</h2>
-        <div style={{ color: "#6b7280" }}>
-          Cette page est réservée aux administrateurs.
-        </div>
-        <button
-          type="button"
-          onClick={() => (window.location.hash = "#/reglages")}
-          style={{ ...btnSecondary, marginTop: 14 }}
-        >
+        <div style={{ color: "#6b7280" }}>Cette page est réservée aux administrateurs.</div>
+        <button type="button" onClick={() => (window.location.hash = "#/reglages")} style={{ ...btnSecondary, marginTop: 14 }}>
           Retour Réglages
         </button>
       </div>
@@ -816,9 +841,7 @@ export default function PageReglagesAdmin() {
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
         <div style={{ maxWidth: 520, margin: "0 auto" }}>
-          <h1 style={{ margin: "0 0 10px 0", fontSize: 28, fontWeight: 900 }}>
-            🛠️ Réglages Admin
-          </h1>
+          <h1 style={{ margin: "0 0 10px 0", fontSize: 28, fontWeight: 900 }}>🛠️ Réglages Admin</h1>
           <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
             Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — (Admin)
           </div>
@@ -826,11 +849,7 @@ export default function PageReglagesAdmin() {
           <section style={section}>
             <h3 style={h3Bold}>Code d’accès</h3>
 
-            {adminCodeLoading && (
-              <div style={{ fontSize: 12, color: "#6b7280" }}>
-                Chargement du code…
-              </div>
-            )}
+            {adminCodeLoading && <div style={{ fontSize: 12, color: "#6b7280" }}>Chargement du code…</div>}
 
             {adminCodeError && <div style={alertErr}>{adminCodeError}</div>}
 
@@ -849,22 +868,13 @@ export default function PageReglagesAdmin() {
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={tryUnlockAdmin}
-                disabled={adminCodeLoading}
-                style={btnPrimary}
-              >
+              <button type="button" onClick={tryUnlockAdmin} disabled={adminCodeLoading} style={btnPrimary}>
                 Déverrouiller
               </button>
             </div>
 
             <div style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                onClick={() => (window.location.hash = "#/reglages")}
-                style={btnSecondary}
-              >
+              <button type="button" onClick={() => (window.location.hash = "#/reglages")} style={btnSecondary}>
                 Retour Réglages
               </button>
             </div>
@@ -877,35 +887,11 @@ export default function PageReglagesAdmin() {
   /* ================== PAGE DÉVERROUILLÉE ================== */
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 8,
-          marginBottom: 16,
-        }}
-      >
-        <h1
-          style={{
-            margin: 0,
-            fontSize: 32,
-            lineHeight: 1.15,
-            fontWeight: 900,
-            textAlign: "center",
-          }}
-        >
-          🛠️ Réglages Admin
-        </h1>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginBottom: 16 }}>
+        <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.15, fontWeight: 900, textAlign: "center" }}>🛠️ Réglages Admin</h1>
 
         {hasDraftProjet && (
-          <button
-            type="button"
-            onClick={() => {
-              window.location.hash = "#/projets";
-            }}
-            style={btnSecondary}
-          >
+          <button type="button" onClick={() => (window.location.hash = "#/projets")} style={btnSecondary}>
             ⬅️ Retour au projet en cours
           </button>
         )}
@@ -919,9 +905,10 @@ export default function PageReglagesAdmin() {
       <section style={section}>
         <h3 style={h3Bold}>Gestion du temps (admin)</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Choisis une date, un projet et (optionnel) un employé pour voir les blocs
-          de temps, puis les modifier ou les supprimer. Les changements sont appliqués
-          au projet et à l&apos;employé.
+          Choisis une date, un type (Projet / Autre projet) et (optionnel) un employé pour voir les blocs de temps, puis les modifier.
+          Les changements sont appliqués au job (projet/autre projet) et à l&apos;employé.
+          <br />
+          <strong>Note:</strong> le bouton poubelle (Supprimer) est disponible seulement pour <strong>Projet</strong>.
         </div>
 
         {massDepunchMsg && (
@@ -946,37 +933,58 @@ export default function PageReglagesAdmin() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
           <div>
             <label style={label}>Date</label>
-            <input
-              type="date"
-              value={timeDate}
-              onChange={(e) => setTimeDate(e.target.value)}
-              style={input}
-            />
+            <input type="date" value={timeDate} onChange={(e) => setTimeDate(e.target.value)} style={input} />
           </div>
 
+          {/* ✅ Type */}
           <div>
-            <label style={label}>Projet</label>
+            <label style={label}>Type</label>
             <select
-              value={timeProjId}
-              onChange={(e) => setTimeProjId(e.target.value)}
+              value={timeJobType}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTimeJobType(v);
+                // reset sélection pour éviter incohérence
+                setTimeProjId("");
+                setTimeOtherId("");
+              }}
               style={input}
             >
-              <option value="">Sélectionner…</option>
-              {timeProjets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nom}
-                </option>
-              ))}
+              <option value="projet">Projet</option>
+              <option value="autre">Autre projet</option>
             </select>
           </div>
 
+          {/* ✅ Projet OU Autre projet */}
+          {timeJobType === "projet" ? (
+            <div>
+              <label style={label}>Projet</label>
+              <select value={timeProjId} onChange={(e) => setTimeProjId(e.target.value)} style={input}>
+                <option value="">Sélectionner…</option>
+                {timeProjets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nom}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label style={label}>Autre projet</label>
+              <select value={timeOtherId} onChange={(e) => setTimeOtherId(e.target.value)} style={input}>
+                <option value="">Sélectionner…</option>
+                {timeAutresProjets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nom}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div>
             <label style={label}>Employé</label>
-            <select
-              value={timeEmpId}
-              onChange={(e) => setTimeEmpId(e.target.value)}
-              style={input}
-            >
+            <select value={timeEmpId} onChange={(e) => setTimeEmpId(e.target.value)} style={input}>
               <option value="">Tous</option>
               {timeEmployes.map((e) => (
                 <option key={e.id} value={e.id}>
@@ -987,157 +995,113 @@ export default function PageReglagesAdmin() {
           </div>
         </div>
 
-        {!timeDate || !timeProjId ? (
-          <div style={{ color: "#6b7280", fontSize: 12 }}>
-            Choisis au minimum une date et un projet.
-          </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            {timeLoading && (
-              <div style={{ color: "#6b7280", fontSize: 12 }}>
-                Chargement…
-              </div>
-            )}
+        {(() => {
+          const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
+          if (!timeDate || !jobId) {
+            return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre projet.</div>;
+          }
 
-            <div style={{ overflowX: "auto", marginTop: 4 }}>
-              <table style={tableBlack}>
-                <thead>
-                  <tr style={{ background: "#f9fafb" }}>
-                    <th style={thTimeBold}>Début</th>
-                    <th style={thTimeBold}>Fin</th>
-                    <th style={thTimeBold}>Employé</th>
-                    <th style={thTimeBold}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayedSegments.map((seg) => {
-                    const edit = timeRowEdits[seg.id] || {};
-                    const empName =
-                      seg.empName ||
-                      timeEmployes.find((e) => e.id === seg.empId)?.nom ||
-                      "—";
-                    return (
-                      <tr key={seg.id}>
-                        <td style={tdTime}>
-                          <input
-                            type="time"
-                            value={edit.startTime || ""}
-                            onChange={(e) =>
-                              updateRowEdit(seg.id, "startTime", e.target.value)
-                            }
-                            style={{ ...input, width: 110, padding: "4px 6px" }}
-                          />
-                        </td>
-                        <td style={tdTime}>
-                          <input
-                            type="time"
-                            value={edit.endTime || ""}
-                            onChange={(e) =>
-                              updateRowEdit(seg.id, "endTime", e.target.value)
-                            }
-                            style={{ ...input, width: 110, padding: "4px 6px" }}
-                          />
-                        </td>
-                        <td style={tdTime}>{empName}</td>
-                        <td style={tdTime}>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                            <button
-                              type="button"
-                              onClick={() => saveSegment(seg)}
-                              disabled={timeLoading}
-                              style={btnPrimarySmall}
-                            >
-                              Enregistrer
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteSegment(seg)}
-                              disabled={timeLoading}
-                              style={btnDangerSmall}
-                            >
-                              Supprimer
-                            </button>
-                          </div>
+          return (
+            <div style={{ marginTop: 8 }}>
+              {timeLoading && <div style={{ color: "#6b7280", fontSize: 12 }}>Chargement…</div>}
+
+              <div style={{ overflowX: "auto", marginTop: 4 }}>
+                <table style={tableBlack}>
+                  <thead>
+                    <tr style={{ background: "#f9fafb" }}>
+                      <th style={thTimeBold}>Début</th>
+                      <th style={thTimeBold}>Fin</th>
+                      <th style={thTimeBold}>Employé</th>
+                      <th style={thTimeBold}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedSegments.map((seg) => {
+                      const edit = timeRowEdits[seg.id] || {};
+                      const empName = seg.empName || timeEmployes.find((e) => e.id === seg.empId)?.nom || "—";
+                      return (
+                        <tr key={seg.id}>
+                          <td style={tdTime}>
+                            <input
+                              type="time"
+                              value={edit.startTime || ""}
+                              onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)}
+                              style={{ ...input, width: 110, padding: "4px 6px" }}
+                            />
+                          </td>
+                          <td style={tdTime}>
+                            <input
+                              type="time"
+                              value={edit.endTime || ""}
+                              onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)}
+                              style={{ ...input, width: 110, padding: "4px 6px" }}
+                            />
+                          </td>
+                          <td style={tdTime}>{empName}</td>
+                          <td style={tdTime}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <button type="button" onClick={() => saveSegment(seg)} disabled={timeLoading} style={btnPrimarySmall}>
+                                Enregistrer
+                              </button>
+
+                              {/* ✅ SUPPRIMER (poubelle) seulement pour Projet */}
+                              {timeJobType === "projet" && (
+                                <button type="button" onClick={() => deleteSegment(seg)} disabled={timeLoading} style={btnDangerSmall}>
+                                  Supprimer
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!timeLoading && displayedSegments.length === 0 && (
+                      <tr>
+                        <td colSpan={4} style={{ padding: 8, color: "#6b7280", textAlign: "center" }}>
+                          Aucun bloc de temps pour ces critères.
                         </td>
                       </tr>
-                    );
-                  })}
-                  {!timeLoading && displayedSegments.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={4}
-                        style={{
-                          padding: 8,
-                          color: "#6b7280",
-                          textAlign: "center",
-                        }}
-                      >
-                        Aucun bloc de temps pour ces critères.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {massDepunchLoading && (
-              <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-                Dé-punch auto en cours…
+                    )}
+                  </tbody>
+                </table>
               </div>
-            )}
-          </div>
-        )}
+
+              {massDepunchLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Dé-punch auto en cours…</div>}
+            </div>
+          );
+        })()}
       </section>
 
       {/* ===================== 2) FACTURATION ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Facturation</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ces informations sont utilisées en haut de la facture et pour le prix
-          unitaire de la main-d&apos;œuvre.
+          Ces informations sont utilisées en haut de la facture et pour le prix unitaire de la main-d&apos;œuvre.
         </div>
 
         {factureError && <div style={alertErr}>{factureError}</div>}
-        {factureSaved && !factureError && (
-          <div style={alertOk}>Réglages de facturation enregistrés.</div>
-        )}
+        {factureSaved && !factureError && <div style={alertOk}>Réglages de facturation enregistrés.</div>}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 220 }}>
               <label style={label}>Nom de l&apos;entreprise</label>
-              <input
-                value={factureNom}
-                onChange={(e) => setFactureNom(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
+              <input value={factureNom} onChange={(e) => setFactureNom(e.target.value)} style={{ ...input, width: "100%" }} />
             </div>
             <div style={{ flex: 1, minWidth: 220 }}>
               <label style={label}>Sous-titre / description</label>
-              <input
-                value={factureSousTitre}
-                onChange={(e) => setFactureSousTitre(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
+              <input value={factureSousTitre} onChange={(e) => setFactureSousTitre(e.target.value)} style={{ ...input, width: "100%" }} />
             </div>
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 220 }}>
               <label style={label}>Téléphone</label>
-              <input
-                value={factureTel}
-                onChange={(e) => setFactureTel(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
+              <input value={factureTel} onChange={(e) => setFactureTel(e.target.value)} style={{ ...input, width: "100%" }} />
             </div>
             <div style={{ flex: 1, minWidth: 220 }}>
               <label style={label}>Courriel</label>
-              <input
-                value={factureCourriel}
-                onChange={(e) => setFactureCourriel(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
+              <input value={factureCourriel} onChange={(e) => setFactureCourriel(e.target.value)} style={{ ...input, width: "100%" }} />
             </div>
           </div>
 
@@ -1152,11 +1116,7 @@ export default function PageReglagesAdmin() {
           </div>
 
           <div style={{ marginTop: 4 }}>
-            <button
-              onClick={saveFacture}
-              disabled={factureLoading}
-              style={btnPrimary}
-            >
+            <button onClick={saveFacture} disabled={factureLoading} style={btnPrimary}>
               {factureLoading ? "Chargement..." : "Enregistrer la facture"}
             </button>
           </div>
@@ -1167,19 +1127,10 @@ export default function PageReglagesAdmin() {
       <section style={section}>
         <h3 style={h3Bold}>Travailleurs</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ajoute un travailleur avec son email + un code d’activation (utilisé
-          dans “Activer mon compte”).
+          Ajoute un travailleur avec son email + un code d’activation (utilisé dans “Activer mon compte”).
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            marginBottom: 8,
-            flexWrap: "wrap",
-            alignItems: "end",
-          }}
-        >
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "end" }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <label style={label}>Nom</label>
             <input
@@ -1192,12 +1143,7 @@ export default function PageReglagesAdmin() {
 
           <div style={{ flex: 1, minWidth: 260 }}>
             <label style={label}>Email</label>
-            <input
-              value={employeEmailInput}
-              onChange={(e) => setEmployeEmailInput(e.target.value)}
-              placeholder="Email"
-              style={{ ...input, width: "100%" }}
-            />
+            <input value={employeEmailInput} onChange={(e) => setEmployeEmailInput(e.target.value)} placeholder="Email" style={{ ...input, width: "100%" }} />
           </div>
 
           <div style={{ flex: 1, minWidth: 240 }}>
@@ -1211,12 +1157,7 @@ export default function PageReglagesAdmin() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input
-              id="empIsAdmin"
-              type="checkbox"
-              checked={!!employeIsAdminInput}
-              onChange={(e) => setEmployeIsAdminInput(e.target.checked)}
-            />
+            <input id="empIsAdmin" type="checkbox" checked={!!employeIsAdminInput} onChange={(e) => setEmployeIsAdminInput(e.target.checked)} />
             <label htmlFor="empIsAdmin" style={{ fontWeight: 900 }}>
               Admin
             </label>
@@ -1248,42 +1189,20 @@ export default function PageReglagesAdmin() {
                     </td>
                     <td style={tdTime}>{emp.email || "—"}</td>
                     <td style={tdTime}>
-                      <span
-                        style={{
-                          fontWeight: 900,
-                          color: activated ? "#166534" : "#b45309",
-                        }}
-                      >
-                        {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
-                      </span>
-                      {!activated && (
-                        <span style={{ color: "#6b7280" }}>
-                          {" "}
-                          — Code: {emp.activationCode || "—"}
-                        </span>
-                      )}
+                      <span style={{ fontWeight: 900, color: activated ? "#166534" : "#b45309" }}>{activated ? "ACTIVÉ" : "NON ACTIVÉ"}</span>
+                      {!activated && <span style={{ color: "#6b7280" }}> — Code: {emp.activationCode || "—"}</span>}
                     </td>
                     <td style={tdTime}>
-                      <span style={{ fontWeight: 900 }}>
-                        {emp.isAdmin ? "ADMIN" : "USER"}
-                      </span>
+                      <span style={{ fontWeight: 900 }}>{emp.isAdmin ? "ADMIN" : "USER"}</span>
                     </td>
                     <td style={tdTime}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                         {!activated && (
-                          <button
-                            onClick={() => onResetActivationCode(emp.id)}
-                            style={btnSecondarySmall}
-                            title="Générer un nouveau code"
-                          >
+                          <button onClick={() => onResetActivationCode(emp.id)} style={btnSecondarySmall} title="Générer un nouveau code">
                             Nouveau code
                           </button>
                         )}
-                        <button
-                          onClick={() => onDelEmploye(emp.id, emp.nom)}
-                          style={btnDangerSmall}
-                          title="Supprimer ce travailleur"
-                        >
+                        <button onClick={() => onDelEmploye(emp.id, emp.nom)} style={btnDangerSmall} title="Supprimer ce travailleur">
                           Supprimer
                         </button>
                       </div>
@@ -1293,15 +1212,7 @@ export default function PageReglagesAdmin() {
               })}
               {employes.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={5}
-                    style={{
-                      padding: 10,
-                      textAlign: "center",
-                      color: "#6b7280",
-                      fontWeight: 800,
-                    }}
-                  >
+                  <td colSpan={5} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
                     Aucun travailleur pour l’instant.
                   </td>
                 </tr>
@@ -1315,16 +1226,13 @@ export default function PageReglagesAdmin() {
       <section style={section}>
         <h3 style={h3Bold}>Code — Autres projets</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ce code sera demandé quand quelqu&apos;un choisit un item dans
-          “Autres projets” avant de puncher.
+          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres projets” avant de puncher.
           <br />
           Laisse vide pour ne pas demander de code.
         </div>
 
         {autresCodeError && <div style={alertErr}>{autresCodeError}</div>}
-        {autresCodeSaved && !autresCodeError && (
-          <div style={alertOk}>Code “Autres projets” enregistré.</div>
-        )}
+        {autresCodeSaved && !autresCodeError && <div style={alertOk}>Code “Autres projets” enregistré.</div>}
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
@@ -1342,6 +1250,16 @@ export default function PageReglagesAdmin() {
             {autresCodeLoading ? "Chargement..." : "Enregistrer le code"}
           </button>
         </div>
+      </section>
+
+      {/* ===================== 5) AUTRES PROJETS (ADMIN) ===================== */}
+      <section style={section}>
+        <h3 style={h3Bold}>Autres projets (admin)</h3>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          Gestion de la banque “Autres projets”. Ici tu peux ajouter / modifier / supprimer.
+        </div>
+
+        <AutresProjetsSection allowEdit={true} />
       </section>
     </div>
   );

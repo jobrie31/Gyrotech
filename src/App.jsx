@@ -125,12 +125,13 @@ export default function App() {
 
   // Menu (Historique visible SEULEMENT admin)
   const pages = [
-    { key: "accueil", label: "PageAccueil" },
+    { key: "accueil", label: "Accueil" },
     { key: "projets", label: "Projets" },
     { key: "materiels", label: "Matériels" },
     { key: "reglages", label: "Réglages" },
-    ...(isAdmin ? [{ key: "historique", label: "Historique" }] : []),
     ...(isAdmin ? [{ key: "reglages-admin", label: "Réglages Admin" }] : []),
+    ...(isAdmin ? [{ key: "historique", label: "Historique" }] : []),
+    
   ];
 
   const validRoutes = ["accueil", "projets", "materiels", "reglages", "historique", "reglages-admin"];
@@ -174,8 +175,9 @@ export default function App() {
       {route === "projets" && <PageListeProjet />}
       {route === "materiels" && <PageMateriels />}
       {route === "reglages" && <PageReglages />}
-      {route === "historique" && <HistoriqueEmploye />}
       {route === "reglages-admin" && <PageReglagesAdmin />}
+      {route === "historique" && <HistoriqueEmploye />}
+      
 
       {!validRoutes.includes(route) && <PageAccueil />}
     </div>

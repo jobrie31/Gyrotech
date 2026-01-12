@@ -683,7 +683,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
               <th style={th}>Jour</th>
               <th style={th}>Heures</th>
               <th style={th}>Employé</th>
-              <th style={th}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -701,19 +700,12 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
                   <td style={td}>{fmtHM(r.totalMs)}</td>
                   <td style={td}>{r.empName || "—"}</td>
                   <td style={td}>
-                    <button
-                      onClick={() => onDeleteHistRow(r)}
-                      style={btnTinyDanger}
-                      title="Supprimer cette journée pour cet employé"
-                    >
-                      🗑
-                    </button>
                   </td>
                 </tr>
               ))}
             {!histLoading && histRows.length === 0 && (
               <tr>
-                <td colSpan={4} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
                   Aucun historique.
                 </td>
               </tr>

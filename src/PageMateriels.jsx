@@ -15,6 +15,8 @@ import {
   deleteDoc,
   orderBy,
   query,
+  where,
+  getDocs,
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 import { styles, Card, Button, PageContainer, TopBar } from "./UIPro";
@@ -57,10 +59,7 @@ function useMateriels(setError) {
 function useCategories(setError) {
   const [cats, setCats] = useState([]);
   useEffect(() => {
-    const q = query(
-      collection(db, "categoriesMateriels"),
-      orderBy("nom", "asc")
-    );
+    const q = query(collection(db, "categoriesMateriels"), orderBy("nom", "asc"));
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -209,13 +208,12 @@ function MaterielRow({ row, onOpen }) {
   );
 }
 
-/* ---------- En-tête de catégorie (GROS + COULEUR + SÉPARATION FORTE) ---------- */
-function CategoryHeaderRow({ cat }) {
+/* ---------- En-tête de catégorie (CLIC -> MODALE CAT) ---------- */
+function CategoryHeaderRow({ cat, onOpenCategory }) {
   const isNone = !cat;
 
   return (
     <>
-      {/* ✅ grosse délimitation entre catégories */}
       <tr aria-hidden="true">
         <td colSpan={3} style={{ padding: 0, height: 6, background: "transparent" }} />
       </tr>
@@ -223,17 +221,23 @@ function CategoryHeaderRow({ cat }) {
       <tr>
         <th
           colSpan={3}
+          onClick={() => {
+            if (!isNone) onOpenCategory?.(cat);
+          }}
+          title={isNone ? "" : "Cliquer pour modifier / supprimer la catégorie"}
           style={{
             ...styles.th,
             textAlign: "left",
             padding: "4px 12px",
             background: isNone ? "#0f172a" : "#c56a6aff",
             color: "white",
-            fontSize: 14, // ✅ titre plus gros
+            fontSize: 14,
             fontWeight: 900,
             letterSpacing: 0.3,
             borderTop: "1px solid rgba(255,255,255,0.10)",
             borderBottom: "3px solid rgba(0,0,0,0.10)",
+            cursor: isNone ? "default" : "pointer",
+            userSelect: "none",
           }}
         >
           {isNone ? "— Aucune catégorie —" : cat.nom || "—"}
@@ -268,6 +272,12 @@ export default function PageMateriels() {
   const [ePrix, setEPrix] = useState("");
   const [eCatId, setECatId] = useState("");
   const [busyEdit, setBusyEdit] = useState(false);
+
+  // ✅ Modale "modifier catégorie" (sur clic du header)
+  const [openEditCat, setOpenEditCat] = useState(false);
+  const [editCat, setEditCat] = useState(null);
+  const [catNom, setCatNom] = useState("");
+  const [busyEditCat, setBusyEditCat] = useState(false);
 
   const rows = useMateriels(setError);
   const categories = useCategories(setError);
@@ -311,7 +321,6 @@ export default function PageMateriels() {
 
     if (none.length > 0) out.push({ cat: null, items: none });
 
-    // ✅ Quand on cherche: cacher les catégories vides
     if (term) out = out.filter((g) => g.items.length > 0);
 
     return out;
@@ -325,9 +334,7 @@ export default function PageMateriels() {
   const openEditFor = (row) => {
     setEditRow(row);
     setENom(row?.nom || "");
-    setEPrix(
-      row?.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : ""
-    );
+    setEPrix(row?.prix != null && isFinite(Number(row.prix)) ? String(row.prix) : "");
     setECatId(row?.categorie ? nameToId.get(row.categorie) || "" : "");
     setOpenEdit(true);
   };
@@ -338,6 +345,20 @@ export default function PageMateriels() {
     setENom("");
     setEPrix("");
     setECatId("");
+  };
+
+  /* --- ouvrir modale édition catégorie --- */
+  const openEditForCategory = (cat) => {
+    if (!cat?.id) return;
+    setEditCat(cat);
+    setCatNom(cat.nom || "");
+    setOpenEditCat(true);
+  };
+
+  const closeEditCat = () => {
+    setOpenEditCat(false);
+    setEditCat(null);
+    setCatNom("");
   };
 
   /* --- actions modales --- */
@@ -369,6 +390,11 @@ export default function PageMateriels() {
   const submitAddCat = async () => {
     const clean = cNom.trim();
     if (!clean) return;
+
+    // petit guard anti doublons (case-insensitive)
+    const exists = categories.some((c) => String(c.nom || "").trim().toLowerCase() === clean.toLowerCase());
+    if (exists) return setError("Cette catégorie existe déjà.");
+
     try {
       setBusyCat(true);
       await addDoc(collection(db, "categoriesMateriels"), {
@@ -421,6 +447,87 @@ export default function PageMateriels() {
       setError(err?.message || String(err));
     } finally {
       setBusyEdit(false);
+    }
+  };
+
+  /* --- update all items for category rename/delete --- */
+  const updateItemsCategoryName = async ({ oldName, newNameOrNull }) => {
+    const old = String(oldName || "").trim();
+    if (!old) return;
+
+    const snap = await getDocs(
+      query(collection(db, "materiels"), where("categorie", "==", old))
+    );
+
+    const ops = [];
+    snap.forEach((d) => {
+      ops.push(
+        updateDoc(doc(db, "materiels", d.id), {
+          categorie: newNameOrNull ?? null,
+        })
+      );
+    });
+
+    await Promise.all(ops);
+  };
+
+  const saveEditCategory = async () => {
+    if (!editCat?.id) return;
+
+    const oldName = String(editCat.nom || "").trim();
+    const clean = String(catNom || "").trim();
+    if (!clean) return setError("Nom de catégorie requis.");
+
+    const exists = categories.some(
+      (c) =>
+        c.id !== editCat.id &&
+        String(c.nom || "").trim().toLowerCase() === clean.toLowerCase()
+    );
+    if (exists) return setError("Une autre catégorie porte déjà ce nom.");
+
+    // si aucun changement
+    if (clean === oldName) return closeEditCat();
+
+    try {
+      setBusyEditCat(true);
+
+      // 1) renommer la catégorie
+      await updateDoc(doc(db, "categoriesMateriels", editCat.id), { nom: clean });
+
+      // 2) migrer les items (car ils stockent le nom, pas l'id)
+      await updateItemsCategoryName({ oldName, newNameOrNull: clean });
+
+      closeEditCat();
+    } catch (err) {
+      setError(err?.message || String(err));
+    } finally {
+      setBusyEditCat(false);
+    }
+  };
+
+  const deleteCategory = async () => {
+    if (!editCat?.id) return;
+
+    const oldName = String(editCat.nom || "").trim();
+    const ok = window.confirm(
+      `Supprimer la catégorie "${oldName}" ?\n\nLes items seront déplacés dans "Aucune catégorie".`
+    );
+    if (!ok) return;
+
+    try {
+      setBusyEditCat(true);
+
+      // 1) mettre les items à null sinon ils disparaissent de l'affichage
+      await updateItemsCategoryName({ oldName, newNameOrNull: null });
+
+      // 2) supprimer la catégorie
+      await deleteDoc(doc(db, "categoriesMateriels", editCat.id));
+
+      closeEditCat();
+    } catch (err) {
+      setError(err?.message || String(err));
+    } finally {
+      setBusyEditCat(false);
     }
   };
 
@@ -484,7 +591,7 @@ export default function PageMateriels() {
 
                 return (
                   <React.Fragment key={key}>
-                    <CategoryHeaderRow cat={cat} />
+                    <CategoryHeaderRow cat={cat} onOpenCategory={openEditForCategory} />
 
                     {items.map((r) => (
                       <MaterielRow key={r.id} row={r} onOpen={openEditFor} />
@@ -626,10 +733,10 @@ export default function PageMateriels() {
 
           <label style={{ display: "grid", gap: 6 }}>
             <span>Prix (CAD)</span>
+            {/* ✅ ENLÈVE LES FLÈCHES: pas de type="number" */}
             <input
-              type="number"
-              step="0.01"
-              min="0"
+              type="text"
+              inputMode="decimal"
               value={ePrix}
               onChange={(e) => setEPrix(e.target.value)}
               placeholder="0.00"
@@ -677,6 +784,56 @@ export default function PageMateriels() {
                 Sauvegarder
               </Button>
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ✅ Modale: Modifier / Supprimer une catégorie (clic sur le header) */}
+      <Modal
+        open={openEditCat}
+        title={editCat?.nom ? `Catégorie — ${editCat.nom}` : "Modifier la catégorie"}
+        onClose={closeEditCat}
+      >
+        <div style={{ display: "grid", gap: 10 }}>
+          <label style={{ display: "grid", gap: 6 }}>
+            <span>Nom de la catégorie</span>
+            <input
+              value={catNom}
+              onChange={(e) => setCatNom(e.target.value)}
+              placeholder="Nom de la catégorie"
+              style={{ ...styles.input }}
+              autoFocus
+            />
+          </label>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              marginTop: 6,
+            }}
+          >
+            <Button variant="danger" onClick={deleteCategory} disabled={busyEditCat}>
+              Supprimer
+            </Button>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button variant="neutral" onClick={closeEditCat} disabled={busyEditCat}>
+                Annuler
+              </Button>
+              <Button
+                variant="primary"
+                onClick={saveEditCategory}
+                disabled={busyEditCat || !catNom.trim()}
+              >
+                Sauvegarder
+              </Button>
+            </div>
+          </div>
+
+          <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
+            Note: Renommer/Supprimer met à jour les items (car les items stockent le nom de catégorie).
           </div>
         </div>
       </Modal>

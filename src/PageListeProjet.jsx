@@ -9,6 +9,11 @@
 // ✅ DEMANDE: Enlever "Situation" du tableau + bouton "Fermer le BT" en fin de ligne
 // ✅ DEMANDE: Popup fermeture: gros bouton "Fermer le BT et créer une facture" + mini "Supprimer sans sauvegarder"
 // ✅ DEMANDE: Quand un projet se ferme (peu importe la façon), dépunch tous les travailleurs punchés dessus
+//
+// ✅ AJOUT (2026-01-12):
+// - DÉPUNCH "définitif": on ferme les segments ouverts côté EMPLOYÉ (toute la journée),
+//   on met day.end, et on clear lastProjectId/Name si ça pointe vers ce proj.
+// - Les boutons Détails / Matériel fonctionnent (Matériel => ProjectMaterielPanel).
 
 import React, { useEffect, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -38,19 +43,15 @@ import {
 } from "firebase/storage";
 
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
-import {
-  useAnnees,
-  useMarques,
-  useModeles,
-  useMarqueIdFromName,
-} from "./refData";
+import { useAnnees, useMarques, useModeles, useMarqueIdFromName } from "./refData";
 import { CloseProjectWizard } from "./PageProjetsFermes";
-import AutresProjetsSection from "./AutresProjetsSection";
 
 /* ---------------------- Utils ---------------------- */
 const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
 
-function pad2(n) { return String(n).padStart(2, "0"); }
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
 function dayKey(d) {
   const x = d instanceof Date ? d : new Date(d);
   return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
@@ -77,12 +78,6 @@ function fmtDate(ts) {
   const year = d.getFullYear();
   return `${day} ${mon} ${year}`;
 }
-function fmtHM(ms) {
-  const s = Math.max(0, Math.floor((ms || 0) / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return `${h}:${m.toString().padStart(2, "0")}`;
-}
 function minusDays(d, n) {
   const x = new Date(d);
   x.setDate(x.getDate() - n);
@@ -91,11 +86,6 @@ function minusDays(d, n) {
 function toNum(v) {
   const n = parseFloat(String(v ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : null;
-}
-function fmtHours(v) {
-  const n = typeof v === "number" ? v : toNum(v);
-  if (n == null) return "—";
-  return `${Math.round(n * 100) / 100} h`;
 }
 
 /* ---------------------- ✅ Dossier auto (5000, 5001, ...) ---------------------- */
@@ -128,7 +118,7 @@ async function getEmpFromAuth() {
         return { empId: d.id, empName: data.nom || null };
       }
     }
-  } catch { }
+  } catch {}
 
   try {
     if (email) {
@@ -140,14 +130,18 @@ async function getEmpFromAuth() {
         return { empId: d.id, empName: data.nom || null };
       }
     }
-  } catch { }
+  } catch {}
 
   return null;
 }
 
 /* ---------------------- ✅ Timecards helpers (Employés) ---------------------- */
-function empDayRef(empId, key) { return doc(db, "employes", empId, "timecards", key); }
-function empSegCol(empId, key) { return collection(db, "employes", empId, "timecards", key, "segments"); }
+function empDayRef(empId, key) {
+  return doc(db, "employes", empId, "timecards", key);
+}
+function empSegCol(empId, key) {
+  return collection(db, "employes", empId, "timecards", key, "segments");
+}
 async function ensureEmpDay(empId, key) {
   const ref = empDayRef(empId, key);
   const snap = await getDoc(ref);
@@ -189,8 +183,12 @@ async function openEmpSeg(empId, key, jobId, jobName, startDate) {
 }
 
 /* ---------------------- ✅ Timecards helpers (Projets) ---------------------- */
-function projDayRef(projId, key) { return doc(db, "projets", projId, "timecards", key); }
-function projSegCol(projId, key) { return collection(db, "projets", projId, "timecards", key, "segments"); }
+function projDayRef(projId, key) {
+  return doc(db, "projets", projId, "timecards", key);
+}
+function projSegCol(projId, key) {
+  return collection(db, "projets", projId, "timecards", key, "segments");
+}
 async function ensureProjDay(projId, key) {
   const ref = projDayRef(projId, key);
   const snap = await getDoc(ref);
@@ -219,11 +217,18 @@ async function openProjSeg(projId, empId, empName, key, startDate) {
 }
 
 /* ---------------------- ✅ DEPUNCH travailleurs (fermeture projet) ---------------------- */
+function parseEmpAndDayFromSegPath(path) {
+  // ex: "employes/{empId}/timecards/{key}/segments/{segId}"
+  const m = String(path || "").match(/^employes\/([^/]+)\/timecards\/([^/]+)\/segments\/[^/]+$/);
+  if (!m) return null;
+  return { empId: m[1], key: m[2] };
+}
+
 async function depunchWorkersOnProject(projId) {
   if (!projId) return;
   const now = new Date();
 
-  // 1) Fermer tous les segments ouverts côté PROJET
+  // 1) Fermer tous les segments ouverts côté PROJET (best-effort)
   try {
     const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
     const dayIds = [];
@@ -234,26 +239,65 @@ async function depunchWorkersOnProject(projId) {
         query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null))
       );
       const tasks = [];
-      segsOpenSnap.forEach((sdoc) => {
-        tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now }));
-      });
+      segsOpenSnap.forEach((sdoc) => tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now })));
       if (tasks.length) await Promise.all(tasks);
     }
   } catch (e) {
     console.error("depunch project segments error", e);
   }
 
-  // 2) Fermer tous les segments ouverts côté EMPLOYÉS (jobId = proj:{projId})
-  // ⚠️ On évite un index composite (jobId+end) : on filtre end==null en JS.
+  // 2) Trouver les segments côté EMPLOYÉS (jobId = proj:{projId}) et dépunch "définitif"
+  //    - fermer leurs segments ouverts (toute la journée)
+  //    - mettre day.end
+  //    - clear lastProjectId/Name si ça match ce proj
   try {
     const cg = query(collectionGroup(db, "segments"), where("jobId", "==", `proj:${projId}`));
     const snap = await getDocs(cg);
-    const tasks = [];
+
+    const pairs = new Map(); // key = `${empId}__${dayKey}`
     snap.forEach((d) => {
       const s = d.data() || {};
-      if (s.end == null) tasks.push(updateDoc(d.ref, { end: now, updatedAt: now }));
+      if (s.end != null) return;
+      const info = parseEmpAndDayFromSegPath(d.ref.path);
+      if (!info) return;
+      pairs.set(`${info.empId}__${info.key}`, info);
     });
-    if (tasks.length) await Promise.all(tasks);
+
+    for (const { empId, key } of pairs.values()) {
+      // a) fermer tous les segments ouverts de l'employé sur cette journée
+      try {
+        const openSnap = await getDocs(query(empSegCol(empId, key), where("end", "==", null)));
+        const tasks = [];
+        openSnap.forEach((sd) => tasks.push(updateDoc(sd.ref, { end: now, updatedAt: now })));
+        if (tasks.length) await Promise.all(tasks);
+      } catch (e) {
+        console.error("depunch employee open segs error", empId, key, e);
+      }
+
+      // b) mettre end sur la day card (timecards/{key})
+      try {
+        await ensureEmpDay(empId, key);
+        await updateDoc(empDayRef(empId, key), { end: now, updatedAt: now });
+      } catch (e) {
+        console.error("depunch employee day end error", empId, key, e);
+      }
+
+      // c) clear lastProject si ça pointe vers ce projet (évite "retour auto" au réopen)
+      try {
+        const eref = doc(db, "employes", empId);
+        const es = await getDoc(eref);
+        const ed = es.data() || {};
+        if (String(ed.lastProjectId || "") === String(projId)) {
+          await updateDoc(eref, {
+            lastProjectId: null,
+            lastProjectName: null,
+            lastProjectUpdatedAt: now,
+          });
+        }
+      } catch (e) {
+        console.error("clear lastProject error", empId, e);
+      }
+    }
   } catch (e) {
     console.error("depunch employee segments error", e);
   }
@@ -299,7 +343,7 @@ async function deleteProjectDeep(projId) {
   // Facture (Storage: factures/{projId}.pdf) — ok si n'existe pas
   try {
     await deleteObject(storageRef(storage, `factures/${projId}.pdf`));
-  } catch { }
+  } catch {}
 
   // timecards + segments
   try {
@@ -313,11 +357,11 @@ async function deleteProjectDeep(projId) {
         const segDel = [];
         segSnap.forEach((d) => segDel.push(deleteDoc(d.ref)));
         if (segDel.length) await Promise.all(segDel);
-      } catch { }
+      } catch {}
 
       try {
         await deleteDoc(doc(db, "projets", projId, "timecards", key));
-      } catch { }
+      } catch {}
     }
   } catch (e) {
     console.error("delete timecards error", e);
@@ -400,7 +444,6 @@ function ErrorBanner({ error, onClose }) {
 
 /* ---------------------- Popup projets fermés ---------------------- */
 function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete }) {
-
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -473,30 +516,15 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
           fontSize: 13,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 18 }}>
-            📁 Projets fermés (≤ 2 mois)
-          </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>📁 Projets fermés (≤ 2 mois)</div>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClose?.();
             }}
             title="Fermer"
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 24,
-              cursor: "pointer",
-              lineHeight: 1,
-            }}
+            style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -507,16 +535,7 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              background: "#fff",
-              border: "1px solid #eee",
-              borderRadius: 12,
-              fontSize: 13,
-            }}
-          >
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #eee", borderRadius: 12, fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#f6f7f8" }}>
                 <th style={th}>Client</th>
@@ -529,9 +548,7 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 10, color: "#666" }}>
-                    Chargement…
-                  </td>
+                  <td colSpan={5} style={{ padding: 10, color: "#666" }}>Chargement…</td>
                 </tr>
               )}
               {!loading &&
@@ -540,37 +557,22 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
                     <td style={td}>{p.clientNom || p.nom || "—"}</td>
                     <td style={td}>{p.numeroUnite || "—"}</td>
                     <td style={td}>{fmtDate(p.fermeCompletAt)}</td>
-                    <td style={{ ...td, color: "#6b7280" }}>
-                      Projet archivé (sera supprimé après 2 mois).
-                    </td>
+                    <td style={{ ...td, color: "#6b7280" }}>Projet archivé (sera supprimé après 2 mois).</td>
                     <td style={td} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
-                        <button
-                          type="button"
-                          onClick={() => onReopen?.(p)}
-                          style={btnBlue}
-                        >
+                        <button type="button" onClick={() => onReopen?.(p)} style={btnBlue}>
                           Réouvrir
                         </button>
-
-                        <button
-                          type="button"
-                          title="Supprimer définitivement"
-                          onClick={() => onDelete?.(p)}
-                          style={btnTrash}
-                        >
+                        <button type="button" title="Supprimer définitivement" onClick={() => onDelete?.(p)} style={btnTrash}>
                           🗑️
                         </button>
                       </div>
                     </td>
-
                   </tr>
                 ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 10, color: "#666" }}>
-                    Aucun projet fermé récemment.
-                  </td>
+                  <td colSpan={5} style={{ padding: 10, color: "#666" }}>Aucun projet fermé récemment.</td>
                 </tr>
               )}
             </tbody>
@@ -612,7 +614,9 @@ function PopupPDFManager({ open, onClose, projet }) {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, projet?.id]);
 
   const pickFile = () => inputRef.current?.click();
@@ -633,9 +637,7 @@ function PopupPDFManager({ open, onClose, projet }) {
       const dest = storageRef(storage, path);
       await uploadBytes(dest, file, { contentType: "application/pdf" });
       const url = await getDownloadURL(dest);
-      setFiles((prev) =>
-        [...prev, { name: `${stamp}_${safeName}`, url }].sort((a, b) => a.name.localeCompare(b.name))
-      );
+      setFiles((prev) => [...prev, { name: `${stamp}_${safeName}`, url }].sort((a, b) => a.name.localeCompare(b.name)));
     } catch (e) {
       console.error(e);
       setError(e?.message || String(e));
@@ -666,41 +668,11 @@ function PopupPDFManager({ open, onClose, projet }) {
   const title = projet.clientNom || projet.nom || "(projet)";
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "rgba(0,0,0,0.55)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          width: "min(720px, 96vw)",
-          maxHeight: "92vh",
-          overflow: "auto",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-          fontSize: 14,
-        }}
-      >
+    <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(720px, 96vw)", maxHeight: "92vh", overflow: "auto", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)", fontSize: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 900, fontSize: 18 }}>PDF – {title}</div>
-          <button
-            onClick={(e) => { e.stopPropagation(); onClose?.(); }}
-            title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}
-          >
+          <button onClick={(e) => { e.stopPropagation(); onClose?.(); }} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>
             ×
           </button>
         </div>
@@ -728,7 +700,9 @@ function PopupPDFManager({ open, onClose, projet }) {
                 <td style={{ ...td, wordBreak: "break-word" }}>{f.name}</td>
                 <td style={td}>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>Ouvrir</a>
+                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
+                      Ouvrir
+                    </a>
                     <button onClick={() => navigator.clipboard?.writeText(f.url)} style={btnSecondary} title="Copier l’URL">
                       Copier l’URL
                     </button>
@@ -751,7 +725,7 @@ function PopupPDFManager({ open, onClose, projet }) {
   );
 }
 
-/* ---------------------- Popup fermeture BT (NOUVEAU) ---------------------- */
+/* ---------------------- Popup fermeture BT ---------------------- */
 function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject }) {
   if (!open || !projet) return null;
 
@@ -760,41 +734,11 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
   const modele = projet.modele || "—";
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "rgba(0,0,0,0.60)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          width: "min(560px, 96vw)",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-        }}
-      >
+    <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.60)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(560px, 96vw)", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ fontWeight: 900, fontSize: 18 }}>Fermer le BT</div>
-          <button
-            onClick={onClose}
-            title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}
-          >
-            ×
-          </button>
+          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
 
         <div style={{ fontSize: 13, color: "#111827", marginBottom: 10 }}>
@@ -802,59 +746,147 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
           <div style={{ color: "#6b7280" }}>Unité: {unite} • Modèle: {modele}</div>
         </div>
 
-        <div
-          style={{
-            background: "#f8fafc",
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 10,
-            fontSize: 12,
-            color: "#334155",
-            marginBottom: 12,
-          }}
-        >
+        <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: 10, fontSize: 12, color: "#334155", marginBottom: 12 }}>
           Le bouton ci-dessous va ouvrir la facture (PDF) et envoyer l’email, puis fermer le projet.
           <br />
           <strong>Note:</strong> tous les travailleurs encore punchés sur ce projet seront automatiquement dépunchés.
         </div>
 
-        <button
-          type="button"
-          onClick={onCreateInvoice}
-          style={{
-            ...btnPrimary,
-            width: "100%",
-            padding: "12px 14px",
-            fontSize: 15,
-            fontWeight: 900,
-            borderRadius: 14,
-          }}
-        >
+        <button type="button" onClick={onCreateInvoice} style={{ ...btnPrimary, width: "100%", padding: "12px 14px", fontSize: 15, fontWeight: 900, borderRadius: 14 }}>
           Fermer le BT et créer une facture
         </button>
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
-          <button type="button" onClick={onClose} style={btnGhost}>
-            Annuler
-          </button>
+          <button type="button" onClick={onClose} style={btnGhost}>Annuler</button>
 
-          <button
-            type="button"
-            onClick={onDeleteProject}
-            style={{
-              ...btnTinyDanger,
-              padding: "8px 10px",
-              borderRadius: 10,
-              fontSize: 12,
-              fontWeight: 900,
-            }}
-            title="Supprimer le projet définitivement"
-          >
+          <button type="button" onClick={onDeleteProject} style={{ ...btnTinyDanger, padding: "8px 10px", borderRadius: 10, fontSize: 12, fontWeight: 900 }} title="Supprimer le projet définitivement">
             Supprimer sans sauvegarder
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+/* ---------------------- Popup Détails (simple mais fonctionnel) ---------------------- */
+function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, onOpenMateriel, onCloseBT }) {
+  if (!open || !projet) return null;
+
+  const title = projet.clientNom || projet.nom || "—";
+
+  return (
+    <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 12000, background: "rgba(0,0,0,0.60)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(820px, 96vw)", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>Détails – {title}</div>
+          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 26, cursor: "pointer", lineHeight: 1 }}>
+            ×
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 13 }}>
+          <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Infos</div>
+            <div><strong>Client:</strong> {projet.clientNom || "—"}</div>
+            <div><strong>Unité:</strong> {projet.numeroUnite || "—"}</div>
+            <div><strong>Modèle:</strong> {projet.modele || "—"}</div>
+            <div><strong>Année:</strong> {projet.annee ?? "—"}</div>
+            <div><strong>Marque:</strong> {projet.marque || "—"}</div>
+            <div><strong>Plaque:</strong> {projet.plaque || "—"}</div>
+            <div><strong>VIN:</strong> {projet.vin || "—"}</div>
+          </div>
+
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Actions</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={onEdit} style={btnSecondary}>Modifier</button>
+              <button onClick={onOpenMateriel} style={btnBlue}>Matériel</button>
+              <button onClick={onOpenPDF} style={btnPDF}>PDF</button>
+              <button onClick={onCloseBT} style={btnCloseBT}>Fermer le BT</button>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
+              (Popup simple) — si tu veux, on peut remettre ton gros PopupDetailsProjet plus tard.
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+          <button onClick={onClose} style={btnGhost}>Fermer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------- Ligne ---------------------- */
+function RowProjet({ p, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT }) {
+  const cell = (content) => <td style={td}>{content}</td>;
+
+  return (
+    <tr
+      onClick={() => onOpenDetails?.(p)}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      style={{ cursor: "pointer", transition: "background 120ms ease" }}
+    >
+      {cell(p.clientNom || p.nom || "—")}
+      {cell(p.numeroUnite || "—")}
+      {cell(p.modele || "—")}
+      {cell(p.clientTelephone || "—")}
+      {cell(typeof p.annee === "number" ? p.annee : p.annee || "—")}
+      {cell(p.marque || "—")}
+      {cell(p.plaque || "—")}
+      {cell(typeof p.odometre === "number" ? p.odometre.toLocaleString("fr-CA") : p.odometre || "—")}
+      {cell(p.vin || "—")}
+
+      <td style={td} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenDetails?.(p);
+            }}
+            style={btnSecondary}
+            title="Ouvrir les détails"
+          >
+            Détails
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenMaterial?.(p);
+            }}
+            style={btnBlue}
+            title="Voir le matériel"
+          >
+            Matériel
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenPDF?.(p);
+            }}
+            style={btnPDF}
+            title="PDF du projet"
+          >
+            PDF
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onCloseBT?.(p);
+            }}
+            style={btnCloseBT}
+            title="Fermer le BT"
+          >
+            Fermer le BT
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -917,12 +949,14 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       try {
         const pending = Number(window.sessionStorage?.getItem("pendingNewProjStartMs") || "");
         if (Number.isFinite(pending) && pending > 0) startMs = pending;
-      } catch { }
+      } catch {}
       createStartMsRef.current = startMs;
     }
   }, [open, mode, projet]);
 
-  useEffect(() => { setModele(""); }, [marqueId]);
+  useEffect(() => {
+    setModele("");
+  }, [marqueId]);
 
   useEffect(() => {
     if (!open || mode !== "create") return;
@@ -935,7 +969,9 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         console.error(e);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, mode]);
 
   useEffect(() => {
@@ -1023,7 +1059,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         try {
           pendingEmpId = window.sessionStorage?.getItem("pendingNewProjEmpId") || null;
           pendingEmpName = window.sessionStorage?.getItem("pendingNewProjEmpName") || null;
-        } catch { }
+        } catch {}
 
         if (pendingEmpId) {
           creator = { empId: pendingEmpId, empName: pendingEmpName || null };
@@ -1039,7 +1075,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
           dossierNo,
           ouvert: true,
           createdAt: createdAtNow,
-
           createdByUid,
           createdByEmail,
           createdByEmpId: creator?.empId || null,
@@ -1067,7 +1102,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                 lastProjectName: cleanNom,
                 lastProjectUpdatedAt: new Date(),
               });
-            } catch { }
+            } catch {}
           }
         }
 
@@ -1076,7 +1111,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
           window.sessionStorage?.removeItem("pendingNewProjEmpName");
           window.sessionStorage?.removeItem("pendingNewProjStartMs");
           window.sessionStorage?.removeItem("openCreateProjet");
-        } catch { }
+        } catch {}
       }
 
       onSaved?.();
@@ -1092,18 +1127,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const goReglages = () => {
     if (mode === "create") {
       try {
-        const draft = {
-          clientNom,
-          clientTelephone,
-          numeroUnite,
-          annee,
-          marque,
-          modele,
-          plaque,
-          odometre,
-          vin,
-          tempsEstimeHeures,
-        };
+        const draft = { clientNom, clientTelephone, numeroUnite, annee, marque, modele, plaque, odometre, vin, tempsEstimeHeures };
         window.sessionStorage?.setItem("draftProjetFromReglages", JSON.stringify(draft));
         window.sessionStorage?.setItem("draftProjetOpen", "1");
       } catch (e) {
@@ -1116,72 +1140,23 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   if (!open) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "rgba(0,0,0,0.7)",
-        backdropFilter: "blur(3px)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          width: "min(640px, 96vw)",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-        }}
-      >
+    <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(640px, 96vw)", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 800, fontSize: 18 }}>
-            {mode === "edit" ? "Modifier le projet" : "Créer un nouveau projet"}
-          </div>
-          <button
-            onClick={(e) => { e.stopPropagation(); onClose?.(); }}
-            title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 26, cursor: "pointer", lineHeight: 1 }}
-          >
+          <div style={{ fontWeight: 800, fontSize: 18 }}>{mode === "edit" ? "Modifier le projet" : "Créer un nouveau projet"}</div>
+          <button onClick={(e) => { e.stopPropagation(); onClose?.(); }} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 26, cursor: "pointer", lineHeight: 1 }}>
             ×
           </button>
         </div>
 
         {msg && (
-          <div
-            style={{
-              color: "#b45309",
-              background: "#fffbeb",
-              border: "1px solid #fde68a",
-              padding: "8px 10px",
-              borderRadius: 8,
-              marginBottom: 10,
-            }}
-          >
+          <div style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "8px 10px", borderRadius: 8, marginBottom: 10 }}>
             {msg}
           </div>
         )}
 
         {mode === "create" && (
-          <div
-            style={{
-              marginBottom: 10,
-              padding: "8px 10px",
-              borderRadius: 10,
-              border: "1px solid #e5e7eb",
-              background: "#f8fafc",
-              fontSize: 12,
-              color: "#111827",
-            }}
-          >
+          <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 10, border: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 12, color: "#111827" }}>
             <strong>No de dossier :</strong> {nextDossierNo != null ? nextDossierNo : "…"}
           </div>
         )}
@@ -1200,13 +1175,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
           </FieldV>
 
           <FieldV label="Temps estimé (heures)">
-            <input
-              value={tempsEstimeHeures}
-              onChange={(e) => setTempsEstimeHeures(e.target.value)}
-              placeholder="Ex.: 12.5"
-              inputMode="decimal"
-              style={input}
-            />
+            <input value={tempsEstimeHeures} onChange={(e) => setTempsEstimeHeures(e.target.value)} placeholder="Ex.: 12.5" inputMode="decimal" style={input} />
           </FieldV>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -1218,9 +1187,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                     <option key={a.id} value={a.id}>{a.value}</option>
                   ))}
                 </select>
-                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les années">
-                  Réglages
-                </button>
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les années">Réglages</button>
               </div>
             </FieldV>
 
@@ -1232,9 +1199,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                     <option key={m.id} value={m.name}>{m.name}</option>
                   ))}
                 </select>
-                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Ajouter/supprimer des marques">
-                  Réglages
-                </button>
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Ajouter/supprimer des marques">Réglages</button>
               </div>
             </FieldV>
           </div>
@@ -1247,9 +1212,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                   <option key={mo.id} value={mo.name}>{mo.name}</option>
                 ))}
               </select>
-              <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les modèles">
-                Réglages
-              </button>
+              <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les modèles">Réglages</button>
             </div>
           </FieldV>
 
@@ -1275,503 +1238,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   );
 }
 
-/* ---------------------- Détails + Onglets ---------------------- */
-function PopupDetailsProjet({ open, onClose, projet, onSaved, onRequestCloseBT, initialTab = "historique" }) {
-  const [error, setError] = useState(null);
-  const [editing, setEditing] = useState(false);
-  const [tab, setTab] = useState(initialTab);
-
-  const [clientNom, setClientNom] = useState("");
-  const [clientTelephone, setClientTelephone] = useState("");
-  const [numeroUnite, setNumeroUnite] = useState("");
-  const [annee, setAnnee] = useState("");
-  const [marque, setMarque] = useState("");
-  const [modele, setModele] = useState("");
-  const [plaque, setPlaque] = useState("");
-  const [odometre, setOdometre] = useState("");
-  const [vin, setVin] = useState("");
-
-  const [histRows, setHistRows] = useState([]);
-  const [histLoading, setHistLoading] = useState(false);
-  const [totalMsAll, setTotalMsAll] = useState(0);
-
-  const [daysAll, setDaysAll] = useState([]);
-  const [recentSegsByDay, setRecentSegsByDay] = useState({});
-  const [olderAgg, setOlderAgg] = useState({ rows: [], totalMs: 0 });
-
-  const [tick, setTick] = useState(0);
-  const RECENT_DAYS_WINDOW = 90;
-
-  // ✅ UI BIG (popup détails seulement)
-  const POPUP_W = "min(1400px, 98vw)";
-  const BASE_FONT = 16;
-
-  const thBig = { ...th, padding: 12, fontSize: 15 };
-  const tdBig = { ...td, padding: 12, fontSize: 15 };
-
-  const btnTabBig = { ...btnTab, padding: "8px 16px", fontSize: 15 };
-  const btnTabActiveBig = { ...btnTabBig, borderColor: "#2563eb", background: "#eff6ff" };
-
-  const btnSecondaryBig = { ...btnSecondary, padding: "10px 14px", fontSize: 15 };
-  const btnPrimaryBig = { ...btnPrimary, padding: "10px 16px", fontSize: 15 };
-  const btnCloseBTBig = { ...btnCloseBT, padding: "10px 14px", fontSize: 15 };
-  const btnTinyDangerBig = { ...btnTinyDanger, padding: "8px 10px", fontSize: 13 };
-
-  const inputBig = { ...input, padding: "12px 14px", fontSize: 16, borderRadius: 10 };
-
-  useEffect(() => { if (!open) return; setTab(initialTab); }, [open, initialTab]);
-
-  useEffect(() => {
-    if (open && projet) {
-      setEditing(false);
-      setClientNom(projet.clientNom ?? "");
-      setClientTelephone(projet.clientTelephone ?? "");
-      setNumeroUnite(projet.numeroUnite ?? "");
-      setAnnee(projet.annee != null ? String(projet.annee) : "");
-      setMarque(projet.marque ?? "");
-      setModele(projet.modele ?? "");
-      setPlaque(projet.plaque ?? "");
-      setOdometre(projet.odometre != null ? String(projet.odometre) : "");
-      setVin(projet.vin ?? "");
-    }
-  }, [open, projet?.id, projet]);
-
-  useEffect(() => {
-    if (!open) return;
-    const t = setInterval(() => setTick((x) => x + 1), 10000);
-    return () => clearInterval(t);
-  }, [open]);
-
-  const isRecentDay = (dayKeyStr) => {
-    const d = toDateSafe(dayKeyStr);
-    if (!d) return true;
-    const cutoff = minusDays(new Date(), RECENT_DAYS_WINDOW);
-    return d >= cutoff;
-  };
-
-  useEffect(() => {
-    if (!open || !projet?.id) return;
-
-    let cancelled = false;
-    setHistLoading(true);
-    setError(null);
-
-    (async () => {
-      try {
-        const daysSnap = await getDocs(collection(db, "projets", projet.id, "timecards"));
-        const days = [];
-        daysSnap.forEach((d) => days.push(d.id));
-        days.sort((a, b) => b.localeCompare(a));
-        if (!cancelled) setDaysAll(days);
-      } catch (e) {
-        console.error(e);
-        if (!cancelled) setError(e?.message || String(e));
-      } finally {
-        if (!cancelled) setHistLoading(false);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [open, projet?.id]);
-
-  useEffect(() => {
-    if (!open || !projet?.id) return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const oldDays = (daysAll || []).filter((k) => !isRecentDay(k));
-        if (oldDays.length === 0) {
-          if (!cancelled) setOlderAgg({ rows: [], totalMs: 0 });
-          return;
-        }
-
-        let sumAllMs = 0;
-        const map = new Map();
-
-        for (const key of oldDays) {
-          const segSnap = await getDocs(collection(db, "projets", projet.id, "timecards", key, "segments"));
-          segSnap.forEach((sdoc) => {
-            const s = sdoc.data();
-            const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
-            const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
-            if (!st) return;
-
-            const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
-            sumAllMs += ms;
-
-            const empName = s.empName || "—";
-            const empKey = s.empId || empName;
-            const k = `${key}__${empKey}`;
-            const prev = map.get(k) || { date: key, empName, empId: s.empId || null, totalMs: 0 };
-            prev.totalMs += ms;
-            map.set(k, prev);
-          });
-        }
-
-        const rows = Array.from(map.values()).sort((a, b) => {
-          if (a.date !== b.date) return b.date.localeCompare(a.date);
-          return (a.empName || "").localeCompare(b.empName || "");
-        });
-
-        if (!cancelled) setOlderAgg({ rows, totalMs: sumAllMs });
-      } catch (e) {
-        console.error(e);
-        if (!cancelled) setError(e?.message || String(e));
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [open, projet?.id, daysAll]);
-
-  useEffect(() => {
-    if (!open || !projet?.id) return;
-
-    const recentDays = (daysAll || []).filter((k) => isRecentDay(k));
-    setRecentSegsByDay({});
-
-    const unsubs = recentDays.map((key) =>
-      onSnapshot(
-        collection(db, "projets", projet.id, "timecards", key, "segments"),
-        (snap) => {
-          const segs = [];
-          snap.forEach((d) => segs.push({ id: d.id, ...d.data() }));
-          setRecentSegsByDay((prev) => ({ ...prev, [key]: segs }));
-        },
-        (err) => setError(err?.message || String(err))
-      )
-    );
-
-    return () => { unsubs.forEach((u) => u && u()); };
-  }, [open, projet?.id, daysAll]);
-
-  useEffect(() => {
-    if (!open || !projet?.id) return;
-
-    const nowMs = Date.now();
-    const map = new Map();
-    let sumMs = 0;
-
-    for (const r of olderAgg.rows || []) {
-      const k = `${r.date}__${r.empId || r.empName || "—"}`;
-      map.set(k, { ...r });
-    }
-    sumMs += Number(olderAgg.totalMs || 0);
-
-    const recentDays = Object.keys(recentSegsByDay || {});
-    for (const dayK of recentDays) {
-      const segs = recentSegsByDay?.[dayK] || [];
-      for (const s of segs) {
-        const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
-        const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
-        if (!st) continue;
-
-        const ms = Math.max(0, (en ? en.getTime() : nowMs) - st.getTime());
-        sumMs += ms;
-
-        const empName = s.empName || "—";
-        const empKey = s.empId || empName;
-        const k = `${dayK}__${empKey}`;
-
-        const prev = map.get(k) || { date: dayK, empName, empId: s.empId || null, totalMs: 0 };
-        prev.totalMs += ms;
-        map.set(k, prev);
-      }
-    }
-
-    const rows = Array.from(map.values()).sort((a, b) => {
-      if (a.date !== b.date) return b.date.localeCompare(a.date);
-      return (a.empName || "").localeCompare(b.empName || "");
-    });
-
-    setHistRows(rows);
-    setTotalMsAll(sumMs);
-  }, [open, projet?.id, olderAgg, recentSegsByDay, tick]);
-
-  const onDeleteHistRow = async (row) => {
-    if (!projet?.id) return;
-    const ok = window.confirm("Êtes-vous sûr de vouloir supprimer ce projet définitivement ?");
-    if (!ok) return;
-
-    setHistLoading(true);
-    setError(null);
-    try {
-      const segSnap = await getDocs(collection(db, "projets", projet.id, "timecards", row.date, "segments"));
-      const deletions = [];
-      segSnap.forEach((sdoc) => {
-        const s = sdoc.data();
-        const match = row.empId ? s.empId === row.empId : (s.empName || "—") === (row.empName || "—");
-        if (match) deletions.push(deleteDoc(doc(db, "projets", projet.id, "timecards", row.date, "segments", sdoc.id)));
-      });
-      await Promise.all(deletions);
-
-      const ds = await getDocs(collection(db, "projets", projet.id, "timecards"));
-      const days = [];
-      ds.forEach((d) => days.push(d.id));
-      days.sort((a, b) => b.localeCompare(a));
-      setDaysAll(days);
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    } finally {
-      setHistLoading(false);
-    }
-  };
-
-  const save = async () => {
-    try {
-      const cleanClient = clientNom.trim();
-      if (!cleanClient) return setError("Client requis.");
-      if (annee && !/^\d{4}$/.test(annee.trim())) return setError("Année invalide (AAAA).");
-      if (odometre && isNaN(Number(odometre.trim()))) return setError("Odomètre doit être un nombre.");
-
-      const payload = {
-        nom: cleanClient,
-        clientNom: cleanClient,
-        clientTelephone: clientTelephone.trim() || null,
-        numeroUnite: numeroUnite.trim() || null,
-        annee: annee ? Number(annee.trim()) : null,
-        marque: marque.trim() || null,
-        modele: modele.trim() || null,
-        plaque: plaque.trim() || null,
-        odometre: odometre ? Number(odometre.trim()) : null,
-        vin: vin.trim().toUpperCase() || null,
-      };
-      await updateDoc(doc(db, "projets", projet.id), payload);
-      setEditing(false);
-      onSaved?.();
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    }
-  };
-
-  const handleDeleteProjet = async () => {
-    if (!projet?.id) return;
-    const ok = window.confirm("Supprimer ce projet définitivement ? (supprime aussi les timecards/matériel)");
-    if (!ok) return;
-
-    try {
-      await deleteProjectDeep(projet.id);
-      onSaved?.();
-      onClose?.();
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    }
-  };
-
-  if (!open || !projet) return null;
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "rgba(0,0,0,0.55)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          border: "1px solid #e5e7eb",
-          width: POPUP_W,
-          maxHeight: "94vh",
-          overflow: "auto",
-          borderRadius: 20,
-          padding: 22,
-          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-          fontSize: BASE_FONT,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10 }}>
-          <div style={{ fontWeight: 900, fontSize: 22 }}>
-            Détails du projet — {projet.clientNom || projet.nom || "—"}
-          </div>
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-            <button onClick={() => setTab("historique")} style={tab === "historique" ? btnTabActiveBig : btnTabBig}>
-              Historique
-            </button>
-            <button onClick={() => setTab("materiel")} style={tab === "materiel" ? btnTabActiveBig : btnTabBig}>
-              Matériel
-            </button>
-
-            <button
-              onClick={() => onRequestCloseBT?.(projet)}
-              style={btnCloseBTBig}
-              title="Fermer le BT"
-            >
-              Fermer le BT
-            </button>
-
-            {!editing ? (
-              <button onClick={() => setEditing(true)} style={btnSecondaryBig}>Modifier</button>
-            ) : (
-              <>
-                <button onClick={handleDeleteProjet} style={btnTinyDangerBig} title="Supprimer ce projet">
-                  Supprimer
-                </button>
-                <button onClick={() => setEditing(false)} style={btnGhost}>Annuler</button>
-                <button onClick={save} style={btnPrimaryBig}>Enregistrer</button>
-              </>
-            )}
-
-            <button
-              onClick={(e) => { e.stopPropagation(); onClose?.(); }}
-              title="Fermer"
-              style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}
-            >
-              ×
-            </button>
-          </div>
-        </div>
-
-        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
-
-        {!editing ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, rowGap: 10, alignItems: "center", marginBottom: 14 }}>
-            <KVInline big k="Client" v={projet.clientNom || "—"} />
-            <KVInline big k="Téléphone client" v={projet.clientTelephone || "—"} />
-            <KVInline big k="Unité" v={projet.numeroUnite || "—"} />
-            <KVInline big k="Modèle" v={projet.modele || "—"} />
-            <KVInline big k="Marque" v={projet.marque || "—"} />
-            <KVInline big k="Année" v={projet.annee ?? "—"} />
-            <KVInline big k="Situation" v={projet.ouvert ? "Ouvert" : "Fermé"} success={!!projet.ouvert} danger={!projet.ouvert} />
-            <KVInline big k="Plaque" v={projet.plaque || "—"} />
-            <KVInline big k="Odomètre" v={typeof projet.odometre === "number" ? projet.odometre.toLocaleString("fr-CA") : projet.odometre || "—"} />
-            <KVInline big k="VIN" v={projet.vin || "—"} />
-          </div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 14 }}>
-            <FieldV label="Nom du client / Entreprise">
-              <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={inputBig} />
-            </FieldV>
-            <FieldV label="Téléphone du client">
-              <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={inputBig} />
-            </FieldV>
-            <FieldV label="Numéro d’unité">
-              <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={inputBig} />
-            </FieldV>
-            <FieldV label="Année">
-              <input value={annee} onChange={(e) => setAnnee(e.target.value)} placeholder="AAAA" inputMode="numeric" style={inputBig} />
-            </FieldV>
-            <FieldV label="Marque">
-              <input value={marque} onChange={(e) => setMarque(e.target.value)} style={inputBig} />
-            </FieldV>
-            <FieldV label="Modèle">
-              <input value={modele} onChange={(e) => setModele(e.target.value)} style={inputBig} />
-            </FieldV>
-            <FieldV label="Plaque">
-              <input value={plaque} onChange={(e) => setPlaque(e.target.value)} style={inputBig} />
-            </FieldV>
-            <FieldV label="Odomètre">
-              <input value={odometre} onChange={(e) => setOdometre(e.target.value)} inputMode="numeric" style={inputBig} />
-            </FieldV>
-            <FieldV label="VIN">
-              <input value={vin} onChange={(e) => setVin(e.target.value)} style={inputBig} />
-            </FieldV>
-          </div>
-        )}
-
-        <div style={{ fontWeight: 900, margin: "10px 0 8px", fontSize: 16 }}>Résumé du projet</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 14 }}>
-          <CardKV big k="Date d’ouverture" v={fmtDate(projet?.createdAt)} />
-          <CardKV big k="Temps compilé" v={fmtHM(totalMsAll)} />
-          <CardKV big k="Temps estimé" v={fmtHours(projet?.tempsEstimeHeures)} />
-        </div>
-
-        {tab === "historique" ? (
-          <>
-            <div style={{ fontWeight: 900, margin: "8px 0 10px", fontSize: 16 }}>Historique — tout</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14 }}>
-              <thead>
-                <tr style={{ background: "#e5e7eb" }}>
-                  <th style={thBig}>Jour</th>
-                  <th style={thBig}>Heures</th>
-                  <th style={thBig}>Employé</th>
-                  <th style={thBig}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {histLoading && (
-                  <tr>
-                    <td colSpan={4} style={{ padding: 16, color: "#666", textAlign: "center", fontSize: 15 }}>Chargement…</td>
-                  </tr>
-                )}
-                {!histLoading &&
-                  histRows.map((r, i) => (
-                    <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
-                      <td style={tdBig}>{fmtDate(r.date)}</td>
-                      <td style={tdBig}>{fmtHM(r.totalMs)}</td>
-                      <td style={tdBig}>{r.empName || "—"}</td>
-                      <td style={tdBig}>
-                        <button onClick={() => onDeleteHistRow(r)} style={btnTinyDangerBig} title="Supprimer cette journée pour cet employé">
-                          🗑
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                {!histLoading && histRows.length === 0 && (
-                  <tr>
-                    <td colSpan={4} style={{ padding: 16, color: "#666", textAlign: "center", fontSize: 15 }}>Aucun historique.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </>
-        ) : (
-          <ProjectMaterielPanel projId={projet.id} inline onClose={() => setTab("historique")} setParentError={setError} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------- Ligne ---------------------- */
-function RowProjet({ p, onClickRow, onOpenDetailsMaterial, onOpenPDF, onCloseBT }) {
-  const cell = (content) => <td style={td}>{content}</td>;
-
-  return (
-    <tr
-      onClick={() => onClickRow?.(p)}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      style={{ cursor: "pointer", transition: "background 120ms ease" }}
-    >
-      {cell(p.clientNom || p.nom || "—")}
-      {cell(p.numeroUnite || "—")}
-      {cell(p.modele || "—")}
-      {cell(p.clientTelephone || "—")}
-      {cell(typeof p.annee === "number" ? p.annee : p.annee || "—")}
-      {cell(p.marque || "—")}
-      {cell(p.plaque || "—")}
-      {cell(typeof p.odometre === "number" ? p.odometre.toLocaleString("fr-CA") : p.odometre || "—")}
-      {cell(p.vin || "—")}
-
-      <td style={td} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-          <button onClick={() => onClickRow?.(p)} style={btnSecondary} title="Ouvrir les détails">Détails</button>
-          <button onClick={() => onOpenDetailsMaterial?.(p)} style={btnBlue} title="Voir le matériel (inline)">Matériel</button>
-          <button onClick={() => onOpenPDF?.(p)} style={btnPDF} title="PDF du projet">PDF</button>
-          <button onClick={() => onCloseBT?.(p)} style={btnCloseBT} title="Fermer le BT">
-            Fermer le BT
-          </button>
-        </div>
-      </td>
-    </tr>
-  );
-}
-
 /* ---------------------- Page ---------------------- */
 export default function PageListeProjet() {
   const [error, setError] = useState(null);
@@ -1780,13 +1246,15 @@ export default function PageListeProjet() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createProjet, setCreateProjet] = useState(null);
 
-  const [details, setDetails] = useState({ open: false, projet: null, tab: "historique" });
+  const [details, setDetails] = useState({ open: false, projet: null });
   const [pdfMgr, setPdfMgr] = useState({ open: false, projet: null });
 
   const [closeWizard, setCloseWizard] = useState({ open: false, projet: null, startAtSummary: false });
   const [closedPopupOpen, setClosedPopupOpen] = useState(false);
 
   const [closeBT, setCloseBT] = useState({ open: false, projet: null });
+
+  const [materialProjId, setMaterialProjId] = useState(null);
 
   useEffect(() => {
     try {
@@ -1796,7 +1264,7 @@ export default function PageListeProjet() {
         setCreateProjet(null);
         setCreateOpen(true);
       }
-    } catch { }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -1811,8 +1279,8 @@ export default function PageListeProjet() {
     }
   }, []);
 
-  const openDetails = (p, tab = "historique") => setDetails({ open: true, projet: p, tab });
-  const closeDetails = () => setDetails({ open: false, projet: null, tab: "historique" });
+  const openDetails = (p) => setDetails({ open: true, projet: p });
+  const closeDetails = () => setDetails({ open: false, projet: null });
 
   const openPDF = (p) => setPdfMgr({ open: true, projet: p });
   const closePDF = () => setPdfMgr({ open: false, projet: null });
@@ -1822,7 +1290,6 @@ export default function PageListeProjet() {
 
   const handleCreateInvoiceAndClose = (proj) => {
     if (!proj?.id) return;
-    // On ouvre DIRECT le wizard à l'étape facture (comme avant)
     setCloseWizard({ open: true, projet: proj, startAtSummary: true });
   };
 
@@ -1832,10 +1299,10 @@ export default function PageListeProjet() {
     if (!ok) return;
 
     try {
-      // fermer modales liées
       setCloseBT({ open: false, projet: null });
       if (details?.projet?.id === proj.id) closeDetails();
       if (pdfMgr?.projet?.id === proj.id) closePDF();
+      if (materialProjId === proj.id) setMaterialProjId(null);
 
       await deleteProjectDeep(proj.id);
     } catch (e) {
@@ -1845,7 +1312,19 @@ export default function PageListeProjet() {
   };
 
   const handleWizardCancel = () => setCloseWizard({ open: false, projet: null, startAtSummary: false });
-  const handleWizardClosed = () => setCloseWizard({ open: false, projet: null, startAtSummary: false });
+
+  // ✅ IMPORTANT: au moment où le wizard a fermé le projet, on dépunch les travailleurs punchés dessus.
+  const handleWizardClosed = async () => {
+    const proj = closeWizard?.projet;
+    setCloseWizard({ open: false, projet: null, startAtSummary: false });
+    if (!proj?.id) return;
+    try {
+      await depunchWorkersOnProject(proj.id);
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    }
+  };
 
   const handleReopenClosed = async (proj) => {
     if (!proj?.id) return;
@@ -1868,7 +1347,9 @@ export default function PageListeProjet() {
         <h1 style={{ margin: 0, textAlign: "center", fontSize: 32, fontWeight: 900, lineHeight: 1.2 }}>📁 Projets</h1>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <a href="#/reglages" style={btnSecondary}>Réglages</a>
-          <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>Projets fermés</button>
+          <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
+            Projets fermés
+          </button>
         </div>
       </div>
 
@@ -1893,8 +1374,8 @@ export default function PageListeProjet() {
               <RowProjet
                 key={p.id}
                 p={p}
-                onClickRow={(proj) => openDetails(proj, "historique")}
-                onOpenDetailsMaterial={(proj) => openDetails(proj, "materiel")}
+                onOpenDetails={(proj) => openDetails(proj)}
+                onOpenMaterial={(proj) => setMaterialProjId(proj.id)}
                 onOpenPDF={openPDF}
                 onCloseBT={(proj) => openCloseBT(proj)}
               />
@@ -1910,8 +1391,6 @@ export default function PageListeProjet() {
         </table>
       </div>
 
-      <AutresProjetsSection allowEdit={true} />
-
       <PopupCreateProjet
         open={createOpen}
         onClose={() => {
@@ -1921,19 +1400,41 @@ export default function PageListeProjet() {
         onError={setError}
         mode={createProjet ? "edit" : "create"}
         projet={createProjet}
-        onSaved={() => { }}
+        onSaved={() => {}}
       />
 
-      <PopupDetailsProjet
+      <PopupDetailsProjetSimple
         open={details.open}
-        onClose={closeDetails}
         projet={details.projet}
-        initialTab={details.tab}
-        onSaved={() => { }}
-        onRequestCloseBT={(proj) => openCloseBT(proj)}
+        onClose={closeDetails}
+        onEdit={() => {
+          if (!details.projet) return;
+          setCreateProjet(details.projet);
+          setCreateOpen(true);
+        }}
+        onOpenPDF={() => {
+          if (!details.projet) return;
+          openPDF(details.projet);
+        }}
+        onOpenMateriel={() => {
+          if (!details.projet?.id) return;
+          setMaterialProjId(details.projet.id);
+        }}
+        onCloseBT={() => {
+          if (!details.projet) return;
+          openCloseBT(details.projet);
+        }}
       />
 
       <PopupPDFManager open={pdfMgr.open} onClose={closePDF} projet={pdfMgr.projet} />
+
+      {materialProjId && (
+        <ProjectMaterielPanel
+          projId={materialProjId}
+          onClose={() => setMaterialProjId(null)}
+          setParentError={setError}
+        />
+      )}
 
       <PopupFermerBT
         open={closeBT.open}
@@ -1976,147 +1477,26 @@ function FieldV({ label, children }) {
   );
 }
 
-function CardKV({ k, v, big }) {
-  return (
-    <div style={{ border: "1px solid #eee", borderRadius: 14, padding: big ? "12px 14px" : "6px 8px" }}>
-      <div style={{ fontSize: big ? 13 : 10, color: "#666", fontWeight: 800 }}>{k}</div>
-      <div style={{ fontSize: big ? 20 : 13, fontWeight: 900 }}>{v}</div>
-    </div>
-  );
-}
-
-function KVInline({ k, v, danger, success, big }) {
-  return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "baseline",
-        gap: big ? 10 : 6,
-        padding: big ? "8px 14px" : "2px 8px",
-        border: "1px solid #e5e7eb",
-        borderRadius: 999,
-        whiteSpace: "nowrap",
-        fontSize: big ? 15 : 12,
-        lineHeight: 1.2,
-        background: "#fff",
-      }}
-    >
-      <span style={{ color: "#6b7280", fontWeight: 800 }}>{k}:</span>
-      <strong style={{ color: danger ? "#b91c1c" : success ? "#166534" : "#111827", fontWeight: 900 }}>{v}</strong>
-    </div>
-  );
-}
-
 /* ---------------------- Styles ---------------------- */
-const th = {
-  textAlign: "center",
-  padding: 8,
-  borderBottom: "1px solid #e0e0e0",
-  whiteSpace: "nowrap",
-};
+const th = { textAlign: "center", padding: 8, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap" };
 const td = { padding: 8, borderBottom: "1px solid #eee", textAlign: "center" };
 
-const input = {
-  width: "100%",
-  padding: "8px 10px",
-  border: "1px solid #ccc",
-  borderRadius: 8,
-  background: "#fff",
-};
+const input = { width: "100%", padding: "8px 10px", border: "1px solid #ccc", borderRadius: 8, background: "#fff" };
 const select = { ...input, paddingRight: 28 };
 
-const btnPrimary = {
-  border: "none",
-  background: "#2563eb",
-  color: "#fff",
-  borderRadius: 10,
-  padding: "8px 14px",
-  cursor: "pointer",
-  fontWeight: 800,
-  boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
-};
-const btnSecondary = {
-  border: "1px solid #cbd5e1",
-  background: "#f8fafc",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 700,
-  textDecoration: "none",
-  color: "#111",
-};
+const btnPrimary = { border: "none", background: "#2563eb", color: "#fff", borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontWeight: 800, boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)" };
+const btnSecondary = { border: "1px solid #cbd5e1", background: "#f8fafc", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 700, textDecoration: "none", color: "#111" };
 const btnSecondarySmall = { ...btnSecondary, padding: "4px 8px", fontSize: 12 };
 
-const btnGhost = {
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 700,
-};
+const btnGhost = { border: "1px solid #e5e7eb", background: "#fff", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 700 };
 
-const btnBlue = {
-  border: "none",
-  background: "#0ea5e9",
-  color: "#fff",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 800,
-};
+const btnBlue = { border: "none", background: "#0ea5e9", color: "#fff", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 800 };
 const btnPDF = { ...btnBlue, background: "#faa72bff" };
 
-const btnDanger = {
-  border: "1px solid #ef4444",
-  background: "#fee2e2",
-  color: "#b91c1c",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 800,
-};
+const btnDanger = { border: "1px solid #ef4444", background: "#fee2e2", color: "#b91c1c", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 800 };
 
-const btnTinyDanger = {
-  border: "1px solid #ef4444",
-  background: "#fff",
-  color: "#b91c1c",
-  borderRadius: 8,
-  padding: "4px 6px",
-  cursor: "pointer",
-  fontWeight: 800,
-  fontSize: 11,
-  lineHeight: 1,
-};
+const btnTinyDanger = { border: "1px solid #ef4444", background: "#fff", color: "#b91c1c", borderRadius: 8, padding: "4px 6px", cursor: "pointer", fontWeight: 800, fontSize: 11, lineHeight: 1 };
 
-const btnTab = {
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  borderRadius: 9999,
-  padding: "4px 10px",
-  cursor: "pointer",
-  fontWeight: 700,
-  fontSize: 12,
-};
-const btnTabActive = { ...btnTab, borderColor: "#2563eb", background: "#eff6ff" };
+const btnCloseBT = { border: "1px solid #16a34a", background: "#dcfce7", color: "#166534", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 900 };
 
-const btnCloseBT = {
-  border: "1px solid #16a34a",
-  background: "#dcfce7",
-  color: "#166534",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 900,
-};
-
-const btnTrash = {
-  border: "1px solid #ef4444",
-  background: "#fff",
-  color: "#b91c1c",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 900,
-  lineHeight: 1,
-};
+const btnTrash = { border: "1px solid #ef4444", background: "#fff", color: "#b91c1c", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 900, lineHeight: 1 };
