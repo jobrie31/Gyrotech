@@ -534,7 +534,7 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
         </div>
 
         <div style={{ fontSize: 18, marginBottom: 18 }}>
-          Voulez-vous créer un nouveau projet et commencer le temps pour <strong>{txtName}</strong> ?
+          Êtes vous sûr de vouloir créer un projet ?
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
@@ -1154,7 +1154,7 @@ export default function PageAccueil() {
   return (
     <>
       <EdgeHeader
-        left={<h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>Styro</h1>}
+        left={<h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>GyroTech</h1>}
         right={<ClockBadge now={now} />}
       />
 

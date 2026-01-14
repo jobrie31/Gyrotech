@@ -130,7 +130,7 @@ export default function App() {
     { key: "materiels", label: "Matériels" },
     { key: "reglages", label: "Réglages" },
     ...(isAdmin ? [{ key: "reglages-admin", label: "Réglages Admin" }] : []),
-    ...(isAdmin ? [{ key: "historique", label: "Historique" }] : []),
+    ...(isAdmin ? [{ key: "historique", label: "Heures de travail" }] : []),
     
   ];
 

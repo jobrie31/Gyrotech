@@ -14,8 +14,27 @@
 // - DÉPUNCH "définitif": on ferme les segments ouverts côté EMPLOYÉ (toute la journée),
 //   on met day.end, et on clear lastProjectId/Name si ça pointe vers ce proj.
 // - Les boutons Détails / Matériel fonctionnent (Matériel => ProjectMaterielPanel).
+//
+// ✅ FIX DEMANDES (2026-01-14):
+// - Popups: pas de superposition en background (zIndex uniformisé)
+// - Erreur "Qté ≥ 1" une seule fois (uniquement dans popup matériel)
+// - Ajouter Temps estimé au tableau + infos popup Détails
+// - Temps estimé non modifiable en edit
+//
+// ✅ FIX DEMANDES (2026-01-14 suite):
+// 1) Retire la phrase "(Popup simple)..."
+// 2) Tableau: lignes (projets) NON en gras
+// 3) Zebra striping: 1 projet sur 2 = ligne complète gris pâle
+//
+// ✅ AJOUT (2026-01-14): Badge "notif" sur bouton PDF (Option A)
+// - Stocke pdfCount dans Firestore (projets/{id}.pdfCount)
+// - Update pdfCount quand on ajoute/supprime un PDF
+// - Affiche un badge (ex: 1) sur le bouton PDF (table + popup détails)
+//
+// ✅ AJOUT (2026-01-14): Bouton Historique (comme AutresProjetsSection)
+// - Affiche les heures par jour + employé (agrégé) pour le projet (projets/{id}/timecards/*/segments)
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
 import {
   collection,
@@ -43,11 +62,29 @@ import {
 } from "firebase/storage";
 
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
-import { useAnnees, useMarques, useModeles, useMarqueIdFromName } from "./refData";
+import {
+  useAnnees,
+  useMarques,
+  useModeles,
+  useMarqueIdFromName,
+} from "./refData";
 import { CloseProjectWizard } from "./PageProjetsFermes";
 
 /* ---------------------- Utils ---------------------- */
-const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
+const MONTHS_FR_ABBR = [
+  "janv",
+  "févr",
+  "mars",
+  "avr",
+  "mai",
+  "juin",
+  "juil",
+  "août",
+  "sept",
+  "oct",
+  "nov",
+  "déc",
+];
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -87,10 +124,25 @@ function toNum(v) {
   const n = parseFloat(String(v ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : null;
 }
+function fmtHours(h) {
+  const n = Number(h);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString("fr-CA", { maximumFractionDigits: 2 });
+}
+function fmtHM(ms) {
+  const s = Math.max(0, Math.floor((ms || 0) / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}:${m.toString().padStart(2, "0")}`;
+}
 
 /* ---------------------- ✅ Dossier auto (5000, 5001, ...) ---------------------- */
 async function getNextDossierNo() {
-  const qMax = query(collection(db, "projets"), orderBy("dossierNo", "desc"), limit(1));
+  const qMax = query(
+    collection(db, "projets"),
+    orderBy("dossierNo", "desc"),
+    limit(1)
+  );
   const snap = await getDocs(qMax);
   if (snap.empty) return 5000;
 
@@ -110,7 +162,11 @@ async function getEmpFromAuth() {
 
   try {
     if (uid) {
-      const q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
+      const q1 = query(
+        collection(db, "employes"),
+        where("uid", "==", uid),
+        limit(1)
+      );
       const s1 = await getDocs(q1);
       if (!s1.empty) {
         const d = s1.docs[0];
@@ -122,7 +178,11 @@ async function getEmpFromAuth() {
 
   try {
     if (email) {
-      const q2 = query(collection(db, "employes"), where("email", "==", email), limit(1));
+      const q2 = query(
+        collection(db, "employes"),
+        where("email", "==", email),
+        limit(1)
+      );
       const s2 = await getDocs(q2);
       if (!s2.empty) {
         const d = s2.docs[0];
@@ -218,8 +278,9 @@ async function openProjSeg(projId, empId, empName, key, startDate) {
 
 /* ---------------------- ✅ DEPUNCH travailleurs (fermeture projet) ---------------------- */
 function parseEmpAndDayFromSegPath(path) {
-  // ex: "employes/{empId}/timecards/{key}/segments/{segId}"
-  const m = String(path || "").match(/^employes\/([^/]+)\/timecards\/([^/]+)\/segments\/[^/]+$/);
+  const m = String(path || "").match(
+    /^employes\/([^/]+)\/timecards\/([^/]+)\/segments\/[^/]+$/
+  );
   if (!m) return null;
   return { empId: m[1], key: m[2] };
 }
@@ -236,10 +297,15 @@ async function depunchWorkersOnProject(projId) {
 
     for (const key of dayIds) {
       const segsOpenSnap = await getDocs(
-        query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null))
+        query(
+          collection(db, "projets", projId, "timecards", key, "segments"),
+          where("end", "==", null)
+        )
       );
       const tasks = [];
-      segsOpenSnap.forEach((sdoc) => tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now })));
+      segsOpenSnap.forEach((sdoc) =>
+        tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now }))
+      );
       if (tasks.length) await Promise.all(tasks);
     }
   } catch (e) {
@@ -247,14 +313,14 @@ async function depunchWorkersOnProject(projId) {
   }
 
   // 2) Trouver les segments côté EMPLOYÉS (jobId = proj:{projId}) et dépunch "définitif"
-  //    - fermer leurs segments ouverts (toute la journée)
-  //    - mettre day.end
-  //    - clear lastProjectId/Name si ça match ce proj
   try {
-    const cg = query(collectionGroup(db, "segments"), where("jobId", "==", `proj:${projId}`));
+    const cg = query(
+      collectionGroup(db, "segments"),
+      where("jobId", "==", `proj:${projId}`)
+    );
     const snap = await getDocs(cg);
 
-    const pairs = new Map(); // key = `${empId}__${dayKey}`
+    const pairs = new Map();
     snap.forEach((d) => {
       const s = d.data() || {};
       if (s.end != null) return;
@@ -282,7 +348,7 @@ async function depunchWorkersOnProject(projId) {
         console.error("depunch employee day end error", empId, key, e);
       }
 
-      // c) clear lastProject si ça pointe vers ce projet (évite "retour auto" au réopen)
+      // c) clear lastProject si ça pointe vers ce projet
       try {
         const eref = doc(db, "employes", empId);
         const es = await getDoc(eref);
@@ -307,10 +373,8 @@ async function depunchWorkersOnProject(projId) {
 async function deleteProjectDeep(projId) {
   if (!projId) return;
 
-  // sécurité: dépunch d'abord
   await depunchWorkersOnProject(projId);
 
-  // usagesMateriels
   try {
     const usagesSnap = await getDocs(collection(db, "projets", projId, "usagesMateriels"));
     const del = [];
@@ -320,7 +384,6 @@ async function deleteProjectDeep(projId) {
     console.error("delete usagesMateriels error", e);
   }
 
-  // materiel
   try {
     const matsSnap = await getDocs(collection(db, "projets", projId, "materiel"));
     const del = [];
@@ -330,7 +393,6 @@ async function deleteProjectDeep(projId) {
     console.error("delete materiel error", e);
   }
 
-  // PDFs du projet (Storage: projets/{projId}/pdfs/*)
   try {
     const base = storageRef(storage, `projets/${projId}/pdfs`);
     const res = await listAll(base).catch(() => ({ items: [] }));
@@ -340,12 +402,10 @@ async function deleteProjectDeep(projId) {
     console.error("delete project pdfs error", e);
   }
 
-  // Facture (Storage: factures/{projId}.pdf) — ok si n'existe pas
   try {
     await deleteObject(storageRef(storage, `factures/${projId}.pdf`));
   } catch {}
 
-  // timecards + segments
   try {
     const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
     const dayIds = [];
@@ -367,7 +427,6 @@ async function deleteProjectDeep(projId) {
     console.error("delete timecards error", e);
   }
 
-  // doc projet
   await deleteDoc(doc(db, "projets", projId));
 }
 
@@ -411,17 +470,18 @@ function ErrorBanner({ error, onClose }) {
         background: "#fdecea",
         color: "#b71c1c",
         border: "1px solid #f5c6cb",
-        padding: "6px 10px",
-        borderRadius: 8,
-        marginBottom: 10,
+        padding: "10px 14px",
+        borderRadius: 12,
+        marginBottom: 12,
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        fontSize: 13,
+        gap: 12,
+        fontSize: 18,
+        fontWeight: 900,
       }}
     >
       <strong>Erreur :</strong>
-      <span style={{ flex: 1 }}>{error}</span>
+      <span style={{ flex: 1, fontWeight: 800 }}>{error}</span>
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -431,9 +491,11 @@ function ErrorBanner({ error, onClose }) {
           border: "none",
           background: "#b71c1c",
           color: "white",
-          borderRadius: 6,
-          padding: "4px 8px",
+          borderRadius: 10,
+          padding: "8px 14px",
           cursor: "pointer",
+          fontWeight: 900,
+          fontSize: 16,
         }}
       >
         OK
@@ -442,15 +504,257 @@ function ErrorBanner({ error, onClose }) {
   );
 }
 
+/* ---------------------- Badge PDF ---------------------- */
+function PDFButton({ count, onClick, title = "PDF du projet", style, children }) {
+  const c = Number(count || 0);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button onClick={onClick} style={style} title={title}>
+        {children}
+      </button>
+      {c > 0 && (
+        <span
+          style={{
+            position: "absolute",
+            top: -6,
+            right: -6,
+            minWidth: 18,
+            height: 18,
+            padding: "0 5px",
+            borderRadius: 999,
+            background: "#ef4444",
+            color: "#fff",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 12,
+            fontWeight: 1000,
+            border: "2px solid #fff",
+            lineHeight: 1,
+            boxShadow: "0 8px 18px rgba(0,0,0,0.18)",
+            pointerEvents: "none",
+          }}
+        >
+          {c}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------- ✅ Popup HISTORIQUE Projet ---------------------- */
+function PopupHistoriqueProjet({ open, onClose, projet }) {
+  const [error, setError] = useState(null);
+  const [histRows, setHistRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [totalMsAll, setTotalMsAll] = useState(0);
+
+  useEffect(() => {
+    if (!open || !projet?.id) return;
+
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const daysSnap = await getDocs(collection(db, "projets", projet.id, "timecards"));
+        const days = [];
+        daysSnap.forEach((d) => days.push(d.id));
+        days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD desc
+
+        const map = new Map();
+        let sumAllMs = 0;
+
+        for (const key of days) {
+          const segSnap = await getDocs(collection(db, "projets", projet.id, "timecards", key, "segments"));
+
+          segSnap.forEach((sdoc) => {
+            const s = sdoc.data() || {};
+            const st = toDateSafe(s.start);
+            const en = toDateSafe(s.end);
+            if (!st) return;
+
+            const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
+            sumAllMs += ms;
+
+            const empName = s.empName || "—";
+            const empKey = s.empId || empName;
+            const k = `${key}__${empKey}`;
+            const prev =
+              map.get(k) || {
+                date: key,
+                empName,
+                empId: s.empId || null,
+                totalMs: 0,
+              };
+            prev.totalMs += ms;
+            map.set(k, prev);
+          });
+        }
+
+        const rows = Array.from(map.values()).sort((a, b) => {
+          if (a.date !== b.date) return b.date.localeCompare(a.date);
+          return (a.empName || "").localeCompare(b.empName || "", "fr-CA");
+        });
+
+        if (!cancelled) {
+          setHistRows(rows);
+          setTotalMsAll(sumAllMs);
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setError(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projet?.id]);
+
+  if (!open || !projet) return null;
+
+  const title = projet.clientNom || projet.nom || "—";
+
+  const thH = {
+    textAlign: "left",
+    padding: 10,
+    borderBottom: "1px solid #e0e0e0",
+    whiteSpace: "nowrap",
+    fontWeight: 1000,
+  };
+  const tdH = { padding: 10, borderBottom: "1px solid #eee", fontSize: 16 };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.60)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(980px, 96vw)",
+          maxHeight: "92vh",
+          overflow: "auto",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>Historique – {title}</div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3,1fr)",
+            gap: 10,
+            marginBottom: 12,
+            fontSize: 16,
+          }}
+        >
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
+            <div style={{ color: "#64748b", fontWeight: 900 }}>Client</div>
+            <div style={{ fontWeight: 1000, fontSize: 18 }}>{projet.clientNom || "—"}</div>
+          </div>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
+            <div style={{ color: "#64748b", fontWeight: 900 }}>Unité</div>
+            <div style={{ fontWeight: 1000, fontSize: 18 }}>{projet.numeroUnite || "—"}</div>
+          </div>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
+            <div style={{ color: "#64748b", fontWeight: 900 }}>Total compilé</div>
+            <div style={{ fontWeight: 1000, fontSize: 18 }}>{fmtHM(totalMsAll)}</div>
+          </div>
+        </div>
+
+        <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 18 }}>Heures par jour & employé</div>
+
+        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 16 }}>
+          <thead>
+            <tr style={{ background: "#e5e7eb" }}>
+              <th style={thH}>Jour</th>
+              <th style={thH}>Heures</th>
+              <th style={thH}>Employé</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td colSpan={3} style={{ padding: 14, color: "#666" }}>
+                  Chargement…
+                </td>
+              </tr>
+            )}
+
+            {!loading &&
+              histRows.map((r, i) => (
+                <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
+                  <td style={tdH}>{fmtDate(r.date)}</td>
+                  <td style={tdH}>{fmtHM(r.totalMs)}</td>
+                  <td style={tdH}>{r.empName || "—"}</td>
+                </tr>
+              ))}
+
+            {!loading && histRows.length === 0 && (
+              <tr>
+                <td colSpan={3} style={{ padding: 14, color: "#666", textAlign: "center" }}>
+                  Aucun historique.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={btnGhost}>
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------------- Popup projets fermés ---------------------- */
-function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete }) {
+function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [localError, setLocalError] = useState(null);
 
   useEffect(() => {
     if (!open) return;
 
     setLoading(true);
+    setLocalError(null);
+
     const c = collection(db, "projets");
     const unsub = onSnapshot(
       c,
@@ -479,11 +783,11 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
       },
       (err) => {
         setLoading(false);
-        setParentError?.(err?.message || String(err));
+        setLocalError(err?.message || String(err));
       }
     );
     return () => unsub();
-  }, [open, setParentError]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -507,35 +811,45 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
-          width: "min(850px, 96vw)",
+          width: "min(950px, 96vw)",
           maxHeight: "92vh",
           overflow: "auto",
-          borderRadius: 16,
+          borderRadius: 18,
           padding: 18,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
-          fontSize: 13,
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>📁 Projets fermés (≤ 2 mois)</div>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>📁 Projets fermés (≤ 2 mois)</div>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClose?.();
             }}
             title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
         </div>
 
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+        <div style={{ fontSize: 16, color: "#6b7280", marginBottom: 12, fontWeight: 700 }}>
           Projets fermés complètement depuis moins de 2 mois. Tu peux les réouvrir au besoin.
         </div>
 
+        {localError && <ErrorBanner error={localError} onClose={() => setLocalError(null)} />}
+
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #eee", borderRadius: 12, fontSize: 13 }}>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              background: "#fff",
+              border: "1px solid #eee",
+              borderRadius: 14,
+              fontSize: 18,
+            }}
+          >
             <thead>
               <tr style={{ background: "#f6f7f8" }}>
                 <th style={th}>Client</th>
@@ -548,18 +862,20 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 10, color: "#666" }}>Chargement…</td>
+                  <td colSpan={5} style={{ padding: 12, color: "#666", fontSize: 18 }}>
+                    Chargement…
+                  </td>
                 </tr>
               )}
               {!loading &&
                 rows.map((p) => (
                   <tr key={p.id}>
-                    <td style={td}>{p.clientNom || p.nom || "—"}</td>
-                    <td style={td}>{p.numeroUnite || "—"}</td>
-                    <td style={td}>{fmtDate(p.fermeCompletAt)}</td>
-                    <td style={{ ...td, color: "#6b7280" }}>Projet archivé (sera supprimé après 2 mois).</td>
-                    <td style={td} onClick={(e) => e.stopPropagation()}>
-                      <div style={{ display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
+                    <td style={tdRow}>{p.clientNom || p.nom || "—"}</td>
+                    <td style={tdRow}>{p.numeroUnite || "—"}</td>
+                    <td style={tdRow}>{fmtDate(p.fermeCompletAt)}</td>
+                    <td style={{ ...tdRow, color: "#6b7280" }}>Projet archivé (sera supprimé après 2 mois).</td>
+                    <td style={tdRow} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "center" }}>
                         <button type="button" onClick={() => onReopen?.(p)} style={btnBlue}>
                           Réouvrir
                         </button>
@@ -572,7 +888,9 @@ function ClosedProjectsPopup({ open, onClose, setParentError, onReopen, onDelete
                 ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 10, color: "#666" }}>Aucun projet fermé récemment.</td>
+                  <td colSpan={5} style={{ padding: 12, color: "#666", fontSize: 18 }}>
+                    Aucun projet fermé récemment.
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -590,6 +908,15 @@ function PopupPDFManager({ open, onClose, projet }) {
   const [files, setFiles] = useState([]);
   const inputRef = useRef(null);
 
+  const syncPdfCountExact = async (count) => {
+    if (!projet?.id) return;
+    try {
+      await setDoc(doc(db, "projets", projet.id), { pdfCount: Number(count || 0) }, { merge: true });
+    } catch (e) {
+      console.error("syncPdfCountExact error", e);
+    }
+  };
+
   useEffect(() => {
     if (!open || !projet?.id) return;
     let cancelled = false;
@@ -605,7 +932,14 @@ function PopupPDFManager({ open, onClose, projet }) {
             return { name, url };
           })
         );
-        if (!cancelled) setFiles(entries.sort((a, b) => a.name.localeCompare(b.name)));
+
+        const sorted = entries.sort((a, b) => a.name.localeCompare(b.name));
+        if (!cancelled) setFiles(sorted);
+
+        const current = Number(projet?.pdfCount ?? 0);
+        if (!cancelled && sorted.length !== current) {
+          await syncPdfCountExact(sorted.length);
+        }
       } catch (e) {
         if (!cancelled) {
           console.error(e);
@@ -617,6 +951,7 @@ function PopupPDFManager({ open, onClose, projet }) {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, projet?.id]);
 
   const pickFile = () => inputRef.current?.click();
@@ -633,11 +968,18 @@ function PopupPDFManager({ open, onClose, projet }) {
     try {
       const safeName = file.name.replace(/[^\w.\-()]/g, "_");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const path = `projets/${projet.id}/pdfs/${stamp}_${safeName}`;
+      const name = `${stamp}_${safeName}`;
+      const path = `projets/${projet.id}/pdfs/${name}`;
       const dest = storageRef(storage, path);
+
       await uploadBytes(dest, file, { contentType: "application/pdf" });
       const url = await getDownloadURL(dest);
-      setFiles((prev) => [...prev, { name: `${stamp}_${safeName}`, url }].sort((a, b) => a.name.localeCompare(b.name)));
+
+      setFiles((prev) => {
+        const next = [...prev, { name, url }].sort((a, b) => a.name.localeCompare(b.name));
+        syncPdfCountExact(next.length);
+        return next;
+      });
     } catch (e) {
       console.error(e);
       setError(e?.message || String(e));
@@ -654,7 +996,12 @@ function PopupPDFManager({ open, onClose, projet }) {
     try {
       const fileRef = storageRef(storage, `projets/${projet.id}/pdfs/${name}`);
       await deleteObject(fileRef);
-      setFiles((prev) => prev.filter((f) => f.name !== name));
+
+      setFiles((prev) => {
+        const next = prev.filter((f) => f.name !== name);
+        syncPdfCountExact(next.length);
+        return next;
+      });
     } catch (e) {
       console.error(e);
       setError(e?.message || String(e));
@@ -668,26 +1015,58 @@ function PopupPDFManager({ open, onClose, projet }) {
   const title = projet.clientNom || projet.nom || "(projet)";
 
   return (
-    <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(720px, 96vw)", maxHeight: "92vh", overflow: "auto", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)", fontSize: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>PDF – {title}</div>
-          <button onClick={(e) => { e.stopPropagation(); onClose?.(); }} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(760px, 96vw)",
+          maxHeight: "92vh",
+          overflow: "auto",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>PDF – {title}</div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
             ×
           </button>
         </div>
 
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
           <button onClick={pickFile} style={btnPrimary} disabled={busy}>
             {busy ? "Téléversement..." : "Ajouter un PDF"}
           </button>
           <input ref={inputRef} type="file" accept="application/pdf" onChange={onPicked} style={{ display: "none" }} />
         </div>
 
-        <div style={{ fontWeight: 800, margin: "6px 0 8px" }}>Fichiers du projet</div>
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 12 }}>
+        <div style={{ fontWeight: 900, margin: "6px 0 10px", fontSize: 18 }}>Fichiers du projet</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}>
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={th}>Nom</th>
@@ -697,9 +1076,9 @@ function PopupPDFManager({ open, onClose, projet }) {
           <tbody>
             {files.map((f, i) => (
               <tr key={i}>
-                <td style={{ ...td, wordBreak: "break-word" }}>{f.name}</td>
-                <td style={td}>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                <td style={{ ...tdRow, wordBreak: "break-word" }}>{f.name}</td>
+                <td style={tdRow}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
                     <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
                       Ouvrir
                     </a>
@@ -715,7 +1094,9 @@ function PopupPDFManager({ open, onClose, projet }) {
             ))}
             {files.length === 0 && (
               <tr>
-                <td colSpan={2} style={{ padding: 12, color: "#666", textAlign: "center" }}>Aucun PDF.</td>
+                <td colSpan={2} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 18 }}>
+                  Aucun PDF.
+                </td>
               </tr>
             )}
           </tbody>
@@ -734,32 +1115,79 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
   const modele = projet.modele || "—";
 
   return (
-    <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.60)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(560px, 96vw)", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>Fermer le BT</div>
-          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}>×</button>
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.60)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(600px, 96vw)",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>Fermer le BT</div>
+          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}>
+            ×
+          </button>
         </div>
 
-        <div style={{ fontSize: 13, color: "#111827", marginBottom: 10 }}>
-          <div style={{ fontWeight: 800 }}>{title}</div>
+        <div style={{ fontSize: 18, color: "#111827", marginBottom: 12 }}>
+          <div style={{ fontWeight: 1000 }}>{title}</div>
           <div style={{ color: "#6b7280" }}>Unité: {unite} • Modèle: {modele}</div>
         </div>
 
-        <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: 10, fontSize: 12, color: "#334155", marginBottom: 12 }}>
+        <div
+          style={{
+            background: "#f8fafc",
+            border: "1px solid #e5e7eb",
+            borderRadius: 14,
+            padding: 12,
+            fontSize: 16,
+            color: "#334155",
+            marginBottom: 14,
+          }}
+        >
           Le bouton ci-dessous va ouvrir la facture (PDF) et envoyer l’email, puis fermer le projet.
           <br />
           <strong>Note:</strong> tous les travailleurs encore punchés sur ce projet seront automatiquement dépunchés.
         </div>
 
-        <button type="button" onClick={onCreateInvoice} style={{ ...btnPrimary, width: "100%", padding: "12px 14px", fontSize: 15, fontWeight: 900, borderRadius: 14 }}>
+        <button
+          type="button"
+          onClick={onCreateInvoice}
+          style={{ ...btnPrimary, width: "100%", padding: "14px 16px", fontSize: 18, fontWeight: 1000, borderRadius: 16 }}
+        >
           Fermer le BT et créer une facture
         </button>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
-          <button type="button" onClick={onClose} style={btnGhost}>Annuler</button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+          <button type="button" onClick={onClose} style={btnGhost}>
+            Annuler
+          </button>
 
-          <button type="button" onClick={onDeleteProject} style={{ ...btnTinyDanger, padding: "8px 10px", borderRadius: 10, fontSize: 12, fontWeight: 900 }} title="Supprimer le projet définitivement">
+          <button
+            type="button"
+            onClick={onDeleteProject}
+            style={{ ...btnTinyDanger, padding: "10px 12px", borderRadius: 12, fontSize: 14, fontWeight: 1000 }}
+            title="Supprimer le projet définitivement"
+          >
             Supprimer sans sauvegarder
           </button>
         </div>
@@ -768,50 +1196,121 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
   );
 }
 
-/* ---------------------- Popup Détails (simple mais fonctionnel) ---------------------- */
-function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, onOpenMateriel, onCloseBT }) {
+/* ---------------------- Popup Détails ---------------------- */
+function PopupDetailsProjetSimple({
+  open,
+  projet,
+  onClose,
+  onEdit,
+  onOpenPDF,
+  onOpenMateriel,
+  onCloseBT,
+  onOpenHistorique,
+}) {
   if (!open || !projet) return null;
 
   const title = projet.clientNom || projet.nom || "—";
 
   return (
-    <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 12000, background: "rgba(0,0,0,0.60)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(820px, 96vw)", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>Détails – {title}</div>
-          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 26, cursor: "pointer", lineHeight: 1 }}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.60)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(900px, 96vw)",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>Détails – {title}</div>
+          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}>
             ×
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 13 }}>
-          <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Infos</div>
-            <div><strong>Client:</strong> {projet.clientNom || "—"}</div>
-            <div><strong>Unité:</strong> {projet.numeroUnite || "—"}</div>
-            <div><strong>Modèle:</strong> {projet.modele || "—"}</div>
-            <div><strong>Année:</strong> {projet.annee ?? "—"}</div>
-            <div><strong>Marque:</strong> {projet.marque || "—"}</div>
-            <div><strong>Plaque:</strong> {projet.plaque || "—"}</div>
-            <div><strong>VIN:</strong> {projet.vin || "—"}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 12, fontSize: 18 }}>
+          <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
+            <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Infos</div>
+
+            <div style={{ marginBottom: 6 }}>
+              <strong>Client:</strong> {projet.clientNom || "—"}
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <strong>Unité:</strong> {projet.numeroUnite || "—"}
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <strong>Modèle:</strong> {projet.modele || "—"}
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <strong>Année:</strong> {projet.annee ?? "—"}
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <strong>Marque:</strong> {projet.marque || "—"}
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <strong>Plaque:</strong> {projet.plaque || "—"}
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <strong>VIN:</strong> {projet.vin || "—"}
+            </div>
+
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #d1d5db" }}>
+              <div style={{ fontWeight: 1000 }}>
+                Temps estimé:{" "}
+                <span style={{ fontWeight: 900 }}>
+                  {projet.tempsEstimeHeures != null ? `${fmtHours(projet.tempsEstimeHeures)} h` : "—"}
+                </span>
+              </div>
+            </div>
           </div>
 
-          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Actions</div>
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
+            <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Actions</div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button onClick={onEdit} style={btnSecondary}>Modifier</button>
-              <button onClick={onOpenMateriel} style={btnBlue}>Matériel</button>
-              <button onClick={onOpenPDF} style={btnPDF}>PDF</button>
-              <button onClick={onCloseBT} style={btnCloseBT}>Fermer le BT</button>
-            </div>
-            <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
-              (Popup simple) — si tu veux, on peut remettre ton gros PopupDetailsProjet plus tard.
+              <button onClick={onEdit} style={btnSecondary}>
+                Modifier
+              </button>
+
+              <button onClick={onOpenMateriel} style={btnBlue}>
+                Matériel
+              </button>
+
+              <button onClick={onOpenHistorique} style={btnSecondary} title="Voir les heures compilées (historique)">
+                Historique
+              </button>
+
+              <PDFButton count={projet.pdfCount} onClick={onOpenPDF} style={btnPDF} title="PDF du projet">
+                PDF
+              </PDFButton>
+
+              <button onClick={onCloseBT} style={btnCloseBT}>
+                Fermer le BT
+              </button>
             </div>
           </div>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-          <button onClick={onClose} style={btnGhost}>Fermer</button>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={btnGhost}>
+            Fermer
+          </button>
         </div>
       </div>
     </div>
@@ -819,15 +1318,16 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, on
 }
 
 /* ---------------------- Ligne ---------------------- */
-function RowProjet({ p, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT }) {
-  const cell = (content) => <td style={td}>{content}</td>;
+function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT, onOpenHistorique }) {
+  const zebraBg = index % 2 === 1 ? "#f3f4f6" : "transparent";
+  const cell = (content) => <td style={tdRow}>{content}</td>;
 
   return (
     <tr
       onClick={() => onOpenDetails?.(p)}
       onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      style={{ cursor: "pointer", transition: "background 120ms ease" }}
+      onMouseLeave={(e) => (e.currentTarget.style.background = zebraBg)}
+      style={{ cursor: "pointer", transition: "background 120ms ease", background: zebraBg }}
     >
       {cell(p.clientNom || p.nom || "—")}
       {cell(p.numeroUnite || "—")}
@@ -838,9 +1338,10 @@ function RowProjet({ p, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT }) {
       {cell(p.plaque || "—")}
       {cell(typeof p.odometre === "number" ? p.odometre.toLocaleString("fr-CA") : p.odometre || "—")}
       {cell(p.vin || "—")}
+      {cell(p.tempsEstimeHeures != null ? fmtHours(p.tempsEstimeHeures) : "—")}
 
-      <td style={td} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+      <td style={tdRow} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -866,13 +1367,25 @@ function RowProjet({ p, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT }) {
           <button
             onClick={(e) => {
               e.stopPropagation();
+              onOpenHistorique?.(p);
+            }}
+            style={btnSecondary}
+            title="Voir les heures compilées (historique)"
+          >
+            Historique
+          </button>
+
+          <PDFButton
+            count={p.pdfCount}
+            onClick={(e) => {
+              e.stopPropagation();
               onOpenPDF?.(p);
             }}
             style={btnPDF}
             title="PDF du projet"
           >
             PDF
-          </button>
+          </PDFButton>
 
           <button
             onClick={(e) => {
@@ -890,7 +1403,7 @@ function RowProjet({ p, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT }) {
   );
 }
 
-/* ---------------------- Popup création / édition (questionnaire projet) ---------------------- */
+/* ---------------------- Popup création / édition ---------------------- */
 function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = null, onSaved }) {
   const annees = useAnnees();
   const marques = useMarques();
@@ -1003,7 +1516,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
     e.preventDefault();
     try {
       const cleanClientNom = clientNom.trim();
-      const cleanNom = cleanClientNom; // ✅ compat: nom = client
+      const cleanNom = cleanClientNom;
       const cleanClientTel = clientTelephone.trim();
       const cleanUnite = numeroUnite.trim();
       const selectedYear = annees.find((a) => String(a.id) === String(annee));
@@ -1013,10 +1526,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       const cleanPlaque = plaque.trim().toUpperCase();
       const cleanOdo = odometre.trim();
       const cleanVin = vin.trim().toUpperCase();
-
-      const teRaw = tempsEstimeHeures.trim();
-      const teVal = teRaw === "" ? null : toNum(teRaw);
-      if (teRaw !== "" && (teVal == null || teVal < 0)) return setMsg("Temps estimé invalide (heures).");
 
       if (!cleanClientNom) return setMsg("Indique le nom du client/entreprise.");
       if (!cleanClientTel) return setMsg("Indique le téléphone du client.");
@@ -1031,11 +1540,18 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       if (!cleanAnnee || !/^\d{4}$/.test(String(cleanAnnee))) return setMsg("Année invalide (format AAAA).");
       if (isNaN(Number(cleanOdo))) return setMsg("Odomètre doit être un nombre.");
 
+      let teVal = null;
+      if (mode === "create") {
+        const teRaw = tempsEstimeHeures.trim();
+        teVal = teRaw === "" ? null : toNum(teRaw);
+        if (teRaw !== "" && (teVal == null || teVal < 0)) return setMsg("Temps estimé invalide (heures).");
+      }
+
       const u = auth.currentUser;
       const createdByUid = u?.uid || null;
       const createdByEmail = u?.email || null;
 
-      const payload = {
+      const payloadBase = {
         nom: cleanNom,
         clientNom: cleanClientNom,
         clientTelephone: cleanClientTel,
@@ -1046,11 +1562,10 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         plaque: cleanPlaque,
         odometre: Number(cleanOdo),
         vin: cleanVin,
-        tempsEstimeHeures: teVal,
       };
 
       if (mode === "edit" && projet?.id) {
-        await updateDoc(doc(db, "projets", projet.id), payload);
+        await updateDoc(doc(db, "projets", projet.id), payloadBase);
       } else {
         let creator = null;
         let pendingEmpId = null;
@@ -1070,8 +1585,14 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         const dossierNo = await getNextDossierNo();
         const createdAtNow = serverTimestamp();
 
+        const payloadCreate = {
+          ...payloadBase,
+          tempsEstimeHeures: teVal,
+          pdfCount: 0,
+        };
+
         const docRef = await addDoc(collection(db, "projets"), {
-          ...payload,
+          ...payloadCreate,
           dossierNo,
           ouvert: true,
           createdAt: createdAtNow,
@@ -1081,7 +1602,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
           createdByEmpName: creator?.empName || null,
         });
 
-        // ✅ Punch auto du temps questionnaire
         if (creator?.empId) {
           const startMs = Number(createStartMsRef.current || Date.now());
           const startDate = new Date(Number.isFinite(startMs) ? startMs : Date.now());
@@ -1140,28 +1660,59 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   if (!open) return null;
 
   return (
-    <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", border: "1px solid #e5e7eb", width: "min(640px, 96vw)", borderRadius: 16, padding: 18, boxShadow: "0 28px 64px rgba(0,0,0,0.30)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 800, fontSize: 18 }}>{mode === "edit" ? "Modifier le projet" : "Créer un nouveau projet"}</div>
-          <button onClick={(e) => { e.stopPropagation(); onClose?.(); }} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 26, cursor: "pointer", lineHeight: 1 }}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.7)",
+        backdropFilter: "blur(3px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(720px, 96vw)",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>{mode === "edit" ? "Modifier le projet" : "Créer un nouveau projet"}</div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}
+          >
             ×
           </button>
         </div>
 
         {msg && (
-          <div style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "8px 10px", borderRadius: 8, marginBottom: 10 }}>
+          <div style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "10px 12px", borderRadius: 12, marginBottom: 12, fontSize: 18, fontWeight: 900 }}>
             {msg}
           </div>
         )}
 
         {mode === "create" && (
-          <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 10, border: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 12, color: "#111827" }}>
+          <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 14, border: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 18, color: "#111827", fontWeight: 900 }}>
             <strong>No de dossier :</strong> {nextDossierNo != null ? nextDossierNo : "…"}
           </div>
         )}
 
-        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <FieldV label="Nom du client / Entreprise">
             <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={input} />
           </FieldV>
@@ -1174,45 +1725,66 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
             <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={input} />
           </FieldV>
 
-          <FieldV label="Temps estimé (heures)">
-            <input value={tempsEstimeHeures} onChange={(e) => setTempsEstimeHeures(e.target.value)} placeholder="Ex.: 12.5" inputMode="decimal" style={input} />
-          </FieldV>
+          {mode === "edit" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <label style={{ fontSize: 16, color: "#111827", fontWeight: 1000 }}>Temps estimé (heures)</label>
+              <div style={{ ...input, background: "#f3f4f6", borderColor: "#e5e7eb", color: "#111827", fontWeight: 1000 }}>
+                {projet?.tempsEstimeHeures != null ? `${fmtHours(projet.tempsEstimeHeures)} h` : "—"}
+              </div>
+            </div>
+          ) : (
+            <FieldV label="Temps estimé (heures)">
+              <input value={tempsEstimeHeures} onChange={(e) => setTempsEstimeHeures(e.target.value)} placeholder="Ex.: 12.5" inputMode="decimal" style={input} />
+            </FieldV>
+          )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <FieldV label="Année">
-              <div style={{ display: "flex", gap: 6 }}>
+              <div style={{ display: "flex", gap: 8 }}>
                 <select value={annee} onChange={(e) => setAnnee(e.target.value)} style={select}>
                   <option value="">—</option>
                   {annees.map((a) => (
-                    <option key={a.id} value={a.id}>{a.value}</option>
+                    <option key={a.id} value={a.id}>
+                      {a.value}
+                    </option>
                   ))}
                 </select>
-                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les années">Réglages</button>
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les années">
+                  Réglages
+                </button>
               </div>
             </FieldV>
 
             <FieldV label="Marque">
-              <div style={{ display: "flex", gap: 6 }}>
+              <div style={{ display: "flex", gap: 8 }}>
                 <select value={marque} onChange={(e) => setMarque(e.target.value)} style={select}>
                   <option value="">—</option>
                   {marques.map((m) => (
-                    <option key={m.id} value={m.name}>{m.name}</option>
+                    <option key={m.id} value={m.name}>
+                      {m.name}
+                    </option>
                   ))}
                 </select>
-                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Ajouter/supprimer des marques">Réglages</button>
+                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Ajouter/supprimer des marques">
+                  Réglages
+                </button>
               </div>
             </FieldV>
           </div>
 
           <FieldV label="Modèle (lié à la marque)">
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 8 }}>
               <select value={modele} onChange={(e) => setModele(e.target.value)} style={select} disabled={!marqueId}>
                 <option value="">—</option>
                 {modeles.map((mo) => (
-                  <option key={mo.id} value={mo.name}>{mo.name}</option>
+                  <option key={mo.id} value={mo.name}>
+                    {mo.name}
+                  </option>
                 ))}
               </select>
-              <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les modèles">Réglages</button>
+              <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les modèles">
+                Réglages
+              </button>
             </div>
           </FieldV>
 
@@ -1228,9 +1800,13 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
             <input value={vin} onChange={(e) => setVin(e.target.value.toUpperCase())} style={input} />
           </FieldV>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
-            <button type="button" onClick={onClose} style={btnGhost}>Annuler</button>
-            <button type="submit" style={btnPrimary}>Enregistrer</button>
+          <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+            <button type="button" onClick={onClose} style={btnGhost}>
+              Annuler
+            </button>
+            <button type="submit" style={btnPrimary}>
+              Enregistrer
+            </button>
           </div>
         </form>
       </div>
@@ -1255,6 +1831,9 @@ export default function PageListeProjet() {
   const [closeBT, setCloseBT] = useState({ open: false, projet: null });
 
   const [materialProjId, setMaterialProjId] = useState(null);
+
+  // ✅ Historique projet
+  const [hist, setHist] = useState({ open: false, projet: null });
 
   useEffect(() => {
     try {
@@ -1288,6 +1867,9 @@ export default function PageListeProjet() {
   const openCloseBT = (p) => setCloseBT({ open: true, projet: p });
   const closeCloseBT = () => setCloseBT({ open: false, projet: null });
 
+  const openHistorique = (p) => setHist({ open: true, projet: p });
+  const closeHistorique = () => setHist({ open: false, projet: null });
+
   const handleCreateInvoiceAndClose = (proj) => {
     if (!proj?.id) return;
     setCloseWizard({ open: true, projet: proj, startAtSummary: true });
@@ -1302,6 +1884,7 @@ export default function PageListeProjet() {
       setCloseBT({ open: false, projet: null });
       if (details?.projet?.id === proj.id) closeDetails();
       if (pdfMgr?.projet?.id === proj.id) closePDF();
+      if (hist?.projet?.id === proj.id) closeHistorique();
       if (materialProjId === proj.id) setMaterialProjId(null);
 
       await deleteProjectDeep(proj.id);
@@ -1313,7 +1896,6 @@ export default function PageListeProjet() {
 
   const handleWizardCancel = () => setCloseWizard({ open: false, projet: null, startAtSummary: false });
 
-  // ✅ IMPORTANT: au moment où le wizard a fermé le projet, on dépunch les travailleurs punchés dessus.
   const handleWizardClosed = async () => {
     const proj = closeWizard?.projet;
     setCloseWizard({ open: false, projet: null, startAtSummary: false });
@@ -1338,14 +1920,24 @@ export default function PageListeProjet() {
     }
   };
 
+  const anyModalOpen =
+    !!createOpen ||
+    !!details.open ||
+    !!pdfMgr.open ||
+    !!closeBT.open ||
+    !!closeWizard.open ||
+    !!closedPopupOpen ||
+    !!materialProjId ||
+    !!hist.open;
+
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      <ErrorBanner error={error} onClose={() => setError(null)} />
+      {!anyModalOpen && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", marginBottom: 10, gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", marginBottom: 12, gap: 10 }}>
         <div />
-        <h1 style={{ margin: 0, textAlign: "center", fontSize: 32, fontWeight: 900, lineHeight: 1.2 }}>📁 Projets</h1>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <h1 style={{ margin: 0, textAlign: "center", fontSize: 36, fontWeight: 1000, lineHeight: 1.2 }}>📁 Projets</h1>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <a href="#/reglages" style={btnSecondary}>Réglages</a>
           <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
             Projets fermés
@@ -1354,7 +1946,7 @@ export default function PageListeProjet() {
       </div>
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #eee", borderRadius: 12 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}>
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={th}>Client</th>
@@ -1366,23 +1958,26 @@ export default function PageListeProjet() {
               <th style={th}>Plaque</th>
               <th style={th}>Odomètre</th>
               <th style={th}>VIN</th>
+              <th style={th}>Temps estimé (h)</th>
               <th style={th}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {projets.map((p) => (
+            {projets.map((p, idx) => (
               <RowProjet
                 key={p.id}
                 p={p}
+                index={idx}
                 onOpenDetails={(proj) => openDetails(proj)}
                 onOpenMaterial={(proj) => setMaterialProjId(proj.id)}
                 onOpenPDF={openPDF}
+                onOpenHistorique={(proj) => openHistorique(proj)}
                 onCloseBT={(proj) => openCloseBT(proj)}
               />
             ))}
             {projets.length === 0 && (
               <tr>
-                <td colSpan={10} style={{ padding: 12, color: "#666", textAlign: "center" }}>
+                <td colSpan={11} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 18 }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>
@@ -1409,6 +2004,7 @@ export default function PageListeProjet() {
         onClose={closeDetails}
         onEdit={() => {
           if (!details.projet) return;
+          closeDetails();
           setCreateProjet(details.projet);
           setCreateOpen(true);
         }}
@@ -1419,6 +2015,10 @@ export default function PageListeProjet() {
         onOpenMateriel={() => {
           if (!details.projet?.id) return;
           setMaterialProjId(details.projet.id);
+        }}
+        onOpenHistorique={() => {
+          if (!details.projet) return;
+          openHistorique(details.projet);
         }}
         onCloseBT={() => {
           if (!details.projet) return;
@@ -1432,9 +2032,11 @@ export default function PageListeProjet() {
         <ProjectMaterielPanel
           projId={materialProjId}
           onClose={() => setMaterialProjId(null)}
-          setParentError={setError}
+          setParentError={() => {}}
         />
       )}
+
+      <PopupHistoriqueProjet open={hist.open} onClose={closeHistorique} projet={hist.projet} />
 
       <PopupFermerBT
         open={closeBT.open}
@@ -1459,7 +2061,6 @@ export default function PageListeProjet() {
       <ClosedProjectsPopup
         open={closedPopupOpen}
         onClose={() => setClosedPopupOpen(false)}
-        setParentError={setError}
         onReopen={handleReopenClosed}
         onDelete={handleDeleteWithoutSave}
       />
@@ -1470,33 +2071,130 @@ export default function PageListeProjet() {
 /* ---------------------- Petits composants UI ---------------------- */
 function FieldV({ label, children }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <label style={{ fontSize: 11, color: "#444" }}>{label}</label>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <label style={{ fontSize: 16, color: "#111827", fontWeight: 1000 }}>{label}</label>
       {children}
     </div>
   );
 }
 
 /* ---------------------- Styles ---------------------- */
-const th = { textAlign: "center", padding: 8, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap" };
-const td = { padding: 8, borderBottom: "1px solid #eee", textAlign: "center" };
+const th = {
+  textAlign: "center",
+  padding: 10,
+  borderBottom: "1px solid #e0e0e0",
+  whiteSpace: "nowrap",
+  fontSize: 18,
+  fontWeight: 1000,
+};
 
-const input = { width: "100%", padding: "8px 10px", border: "1px solid #ccc", borderRadius: 8, background: "#fff" };
-const select = { ...input, paddingRight: 28 };
+const tdRow = {
+  padding: 10,
+  borderBottom: "1px solid #eee",
+  textAlign: "center",
+  fontSize: 18,
+  fontWeight: 400, // ✅ projets NON en gras
+};
 
-const btnPrimary = { border: "none", background: "#2563eb", color: "#fff", borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontWeight: 800, boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)" };
-const btnSecondary = { border: "1px solid #cbd5e1", background: "#f8fafc", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 700, textDecoration: "none", color: "#111" };
-const btnSecondarySmall = { ...btnSecondary, padding: "4px 8px", fontSize: 12 };
+const input = {
+  width: "100%",
+  padding: "10px 12px",
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  background: "#fff",
+  fontSize: 18,
+  fontWeight: 900,
+};
+const select = { ...input, paddingRight: 34 };
 
-const btnGhost = { border: "1px solid #e5e7eb", background: "#fff", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 700 };
+const btnPrimary = {
+  border: "none",
+  background: "#2563eb",
+  color: "#fff",
+  borderRadius: 14,
+  padding: "10px 16px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 16,
+  boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
+};
+const btnSecondary = {
+  border: "1px solid #cbd5e1",
+  background: "#f8fafc",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 16,
+  textDecoration: "none",
+  color: "#111",
+};
+const btnSecondarySmall = { ...btnSecondary, padding: "8px 10px", fontSize: 14 };
 
-const btnBlue = { border: "none", background: "#0ea5e9", color: "#fff", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 800 };
+const btnGhost = {
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 16,
+};
+
+const btnBlue = {
+  border: "none",
+  background: "#0ea5e9",
+  color: "#fff",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 16,
+};
 const btnPDF = { ...btnBlue, background: "#faa72bff" };
 
-const btnDanger = { border: "1px solid #ef4444", background: "#fee2e2", color: "#b91c1c", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 800 };
+const btnDanger = {
+  border: "1px solid #ef4444",
+  background: "#fee2e2",
+  color: "#b91c1c",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 16,
+};
 
-const btnTinyDanger = { border: "1px solid #ef4444", background: "#fff", color: "#b91c1c", borderRadius: 8, padding: "4px 6px", cursor: "pointer", fontWeight: 800, fontSize: 11, lineHeight: 1 };
+const btnTinyDanger = {
+  border: "1px solid #ef4444",
+  background: "#fff",
+  color: "#b91c1c",
+  borderRadius: 12,
+  padding: "8px 10px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 14,
+  lineHeight: 1,
+};
 
-const btnCloseBT = { border: "1px solid #16a34a", background: "#dcfce7", color: "#166534", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 900 };
+const btnCloseBT = {
+  border: "1px solid #16a34a",
+  background: "#dcfce7",
+  color: "#166534",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 16,
+};
 
-const btnTrash = { border: "1px solid #ef4444", background: "#fff", color: "#b91c1c", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 900, lineHeight: 1 };
+const btnTrash = {
+  border: "1px solid #ef4444",
+  background: "#fff",
+  color: "#b91c1c",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 16,
+  lineHeight: 1,
+};
