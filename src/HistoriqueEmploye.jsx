@@ -53,16 +53,16 @@ function round2(x) {
 function msToHours(ms) {
   return (ms || 0) / 3600000;
 }
-function fmtTimeComma(dt) {
-  if (!dt) return "";
-  return `${dt.getHours()},${pad2(dt.getMinutes())}`;
-}
 function fmtHoursComma(hours) {
   if (hours == null) return "";
   return round2(hours).toFixed(2).replace(".", ",");
 }
+function fmtISODate(d) {
+  if (!d) return "";
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
 
-function dayToAMPM(segments) {
+function computeDayTotal(segments) {
   const rows = (segments || [])
     .map((s) => ({
       start: toJSDateMaybe(s.start),
@@ -81,20 +81,7 @@ function dayToAMPM(segments) {
     totalMs += Math.max(0, (en ?? now.getTime()) - st);
   }
 
-  const am = rows[0] || null;
-
-  let pm = null;
-  if (rows.length >= 2) {
-    const second = rows[1];
-    const last = rows[rows.length - 1];
-    pm = { start: second.start, end: last.end };
-  }
-
   return {
-    amStart: am?.start || null,
-    amEnd: am?.end || null,
-    pmStart: pm?.start || null,
-    pmEnd: pm?.end || null,
     totalHours: round2(msToHours(totalMs)),
   };
 }
@@ -264,38 +251,58 @@ export default function HistoriqueEmploye() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // sélection employé (admin)
-  const fallbackEmpId = useMemo(() => {
-    if (routeEmpId) return routeEmpId;
-    return visibleEmployes?.[0]?.id || "";
-  }, [routeEmpId, visibleEmployes]);
-
-  const [empId, setEmpId] = useState(fallbackEmpId);
-
+  // ✅ pas d'employé par défaut -> force sélectionner
+  const [empId, setEmpId] = useState(() => (routeEmpId ? routeEmpId : ""));
   useEffect(() => {
-    if (!fallbackEmpId) return;
-    setEmpId((cur) => {
-      const wanted = fallbackEmpId;
-      if (visibleEmployes.some((e) => e.id === wanted)) return wanted;
-      const first = visibleEmployes?.[0]?.id || "";
-      return first || cur;
-    });
-  }, [fallbackEmpId, visibleEmployes]);
+    setEmpId(routeEmpId || "");
+  }, [routeEmpId]);
 
   const empObj = useMemo(() => visibleEmployes.find((e) => e.id === empId) || null, [visibleEmployes, empId]);
+  const employeeNameBottom = empObj?.nom || ""; // ✅ lié au dropdown
 
-  // période / données
+  // ✅ Période = TOUJOURS 2 semaines (groupe de paie), alignées au dimanche
   const [anchorDate, setAnchorDate] = useState(() => new Date());
-  const sundayStart = useMemo(() => startOfSunday(anchorDate), [anchorDate]);
-  const days14 = useMemo(() => build14Days(sundayStart), [sundayStart]);
+  const payPeriodStart = useMemo(() => startOfSunday(anchorDate), [anchorDate]); // début du bloc 2 semaines
+  const days14 = useMemo(() => build14Days(payPeriodStart), [payPeriodStart]);
 
   const startDate = days14[0]?.date;
   const endDate = days14[13]?.date;
+
   const payableDate = useMemo(() => {
     const x = new Date(endDate);
     x.setDate(x.getDate() + 5);
     return x;
   }, [endDate]);
+
+  // ✅ bornes de semaine
+  const week1Start = days14[0]?.date;
+  const week1End = days14[6]?.date;
+  const week2Start = days14[7]?.date;
+  const week2End = days14[13]?.date;
+
+  const week1Label = useMemo(() => {
+    if (!week1Start || !week1End) return "";
+    return `Du ${fmtISODate(week1Start)} au ${fmtISODate(week1End)}`;
+  }, [week1Start, week1End]);
+
+  const week2Label = useMemo(() => {
+    if (!week2Start || !week2End) return "";
+    return `Du ${fmtISODate(week2Start)} au ${fmtISODate(week2End)}`;
+  }, [week2Start, week2End]);
+
+  const payBlockLabel = useMemo(() => {
+    if (!week1Start || !week2End) return "";
+    return `Bloc de paie : Du ${fmtISODate(week1Start)} au ${fmtISODate(week2End)}`;
+  }, [week1Start, week2End]);
+
+  const goPrevPayBlock = () => {
+    const newAnchor = addDays(payPeriodStart, -14);
+    setAnchorDate(newAnchor);
+  };
+  const goNextPayBlock = () => {
+    const newAnchor = addDays(payPeriodStart, +14);
+    setAnchorDate(newAnchor);
+  };
 
   const [responsable, setResponsable] = useState("");
   const [pp, setPp] = useState("");
@@ -315,6 +322,7 @@ export default function HistoriqueEmploye() {
           setRows([]);
           return;
         }
+
         setLoading(true);
 
         const results = await Promise.all(
@@ -322,8 +330,8 @@ export default function HistoriqueEmploye() {
             const qSeg = query(segCol(empId, d.key), orderBy("start", "asc"));
             const snap = await getDocs(qSeg);
             const segs = snap.docs.map((doc) => doc.data());
-            const ampm = dayToAMPM(segs);
-            return { ...d, ...ampm };
+            const tot = computeDayTotal(segs);
+            return { ...d, ...tot };
           })
         );
 
@@ -394,15 +402,51 @@ export default function HistoriqueEmploye() {
     textAlign: "right",
   };
 
+  const navWrap = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    padding: "10px 12px",
+    border: "1px solid #e2e8f0",
+    borderRadius: 12,
+    background: "#f8fafc",
+    marginTop: 12,
+  };
+  const bigArrowBtn = {
+    border: "none",
+    background: "#0f172a",
+    color: "#fff",
+    width: 54,
+    height: 44,
+    borderRadius: 12,
+    fontSize: 26,
+    fontWeight: 1000,
+    cursor: "pointer",
+    lineHeight: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
+
+  // ✅ nom employé en bas: un peu plus au centre (pas collé à gauche)
+  const bottomNameStyle = {
+    fontWeight: 1000,
+    minWidth: 260,
+    textAlign: "center",
+    padding: "8px 10px",
+    border: "1px solid #e2e8f0",
+    borderRadius: 12,
+    background: "#f8fafc",
+  };
+
   /* ===================== UI ===================== */
   if (!isAdmin) {
     return (
       <PageContainer>
         <Card>
           <div style={{ fontSize: 20, fontWeight: 1000, marginBottom: 6 }}>Accès refusé</div>
-          <div style={{ color: "#64748b", fontWeight: 800 }}>
-            Cette page Historique est réservée aux administrateurs.
-          </div>
+          <div style={{ color: "#64748b", fontWeight: 800 }}>Cette page Historique est réservée aux administrateurs.</div>
           <div style={{ marginTop: 12 }}>
             <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
               Retour
@@ -451,21 +495,13 @@ export default function HistoriqueEmploye() {
               />
             </div>
 
-            <Button
-              onClick={tryUnlock}
-              disabled={codeLoading}
-              variant="primary"
-            >
+            <Button onClick={tryUnlock} disabled={codeLoading} variant="primary">
               {codeLoading ? "Chargement…" : "Déverrouiller"}
             </Button>
 
             <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
               Retour
             </Button>
-          </div>
-
-          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b", fontWeight: 800 }}>
-            Code lu depuis <strong>config/adminAccess.historiqueCode</strong>.
           </div>
         </Card>
       </PageContainer>
@@ -524,7 +560,7 @@ export default function HistoriqueEmploye() {
                 }}
                 style={smallInput}
               >
-                {visibleEmployes.length === 0 && <option value="">(Aucun employé)</option>}
+                <option value="">— Sélectionner —</option>
                 {visibleEmployes.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.nom || "(sans nom)"}
@@ -550,7 +586,7 @@ export default function HistoriqueEmploye() {
                   }}
                   style={{ ...smallInput, width: 190 }}
                 />
-                <div style={{ color: "#475569", fontWeight: 800 }}>(2 semaines, alignées au dimanche)</div>
+                <div style={{ color: "#475569", fontWeight: 800 }}>(Bloc de paie = 2 semaines)</div>
               </div>
             </div>
 
@@ -574,143 +610,186 @@ export default function HistoriqueEmploye() {
           </div>
         </div>
 
-        {/* WEEK 1 */}
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1</div>
-          <table style={table}>
-            <thead>
-              <tr>
-                <th style={th}>Jour</th>
-                <th style={th}>Date</th>
-                <th style={th} colSpan={2}>Avant-midi</th>
-                <th style={th} colSpan={2}>Après-midi</th>
-                <th style={th}>Total</th>
-                <th style={th}>Notes</th>
-              </tr>
-              <tr>
-                <th style={th}></th>
-                <th style={th}></th>
-                <th style={th}>Début</th>
-                <th style={th}>Fin</th>
-                <th style={th}>Début</th>
-                <th style={th}>Fin</th>
-                <th style={th}></th>
-                <th style={th}></th>
-              </tr>
-            </thead>
+        {/* ✅ NAV 2 SEMAINES (grosses flèches) */}
+        <div style={navWrap} className="no-print">
+          <button type="button" onClick={goPrevPayBlock} style={bigArrowBtn} title="Bloc précédent">
+            ‹
+          </button>
 
-            <tbody>
-              {rows.slice(0, 7).map((r) => (
-                <tr key={r.key}>
-                  <td style={tdLeft}>{r.weekday}</td>
-                  <td style={td}>{r.dateStr}</td>
+          <div style={{ textAlign: "center", flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 1000, fontSize: 16, color: "#0f172a" }}>{payBlockLabel}</div>
+            <div style={{ color: "#64748b", fontWeight: 800, fontSize: 12, marginTop: 2 }}>
+              (déplacement par blocs de 2 semaines)
+            </div>
+          </div>
 
-                  <td style={td}>{fmtTimeComma(r.amStart)}</td>
-                  <td style={td}>{fmtTimeComma(r.amEnd)}</td>
-
-                  <td style={td}>{fmtTimeComma(r.pmStart)}</td>
-                  <td style={td}>{fmtTimeComma(r.pmEnd)}</td>
-
-                  <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
-
-                  <td style={{ ...tdLeft, whiteSpace: "normal" }}>
-                    <input
-                      value={notes[r.key] || ""}
-                      onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
-                      style={{
-                        width: "100%",
-                        border: "1px solid #cbd5e1",
-                        borderRadius: 6,
-                        padding: "6px 8px",
-                        fontSize: 13,
-                      }}
-                    />
-                  </td>
-                </tr>
-              ))}
-
-              <tr>
-                <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={6}>
-                  Total semaine 1
-                </td>
-                <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek1)}</td>
-                <td style={td}></td>
-              </tr>
-            </tbody>
-          </table>
+          <button type="button" onClick={goNextPayBlock} style={bigArrowBtn} title="Bloc suivant">
+            ›
+          </button>
         </div>
 
-        {/* WEEK 2 */}
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 2</div>
-          <table style={table}>
-            <thead>
-              <tr>
-                <th style={th}>Jour</th>
-                <th style={th}>Date</th>
-                <th style={th} colSpan={2}>Avant-midi</th>
-                <th style={th} colSpan={2}>Après-midi</th>
-                <th style={th}>Total</th>
-                <th style={th}>Notes</th>
-              </tr>
-              <tr>
-                <th style={th}></th>
-                <th style={th}></th>
-                <th style={th}>Début</th>
-                <th style={th}>Fin</th>
-                <th style={th}>Début</th>
-                <th style={th}>Fin</th>
-                <th style={th}></th>
-                <th style={th}></th>
-              </tr>
-            </thead>
+        {/* ✅ si aucun employé sélectionné */}
+        {!empId ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              border: "1px solid #e2e8f0",
+              borderRadius: 10,
+              background: "#f8fafc",
+              fontWeight: 800,
+              color: "#334155",
+            }}
+          >
+            Sélectionne un employé pour afficher la feuille d’heures.
+          </div>
+        ) : (
+          <>
+            {/* WEEK 1 */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 1000, fontSize: 16 }}>Semaine 1</div>
+                <div
+                  style={{
+                    fontWeight: 900,
+                    color: "#0f172a",
+                    background: "#eef2ff",
+                    border: "1px solid #c7d2fe",
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                  }}
+                >
+                  {week1Label}
+                </div>
+              </div>
 
-            <tbody>
-              {rows.slice(7, 14).map((r) => (
-                <tr key={r.key}>
-                  <td style={tdLeft}>{r.weekday}</td>
-                  <td style={td}>{r.dateStr}</td>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}>Jour</th>
+                    <th style={th}>Date</th>
+                    <th style={th}>Total (h)</th>
+                    <th style={th}>Notes</th>
+                  </tr>
+                </thead>
 
-                  <td style={td}>{fmtTimeComma(r.amStart)}</td>
-                  <td style={td}>{fmtTimeComma(r.amEnd)}</td>
+                <tbody>
+                  {rows.slice(0, 7).map((r) => (
+                    <tr key={r.key}>
+                      <td style={tdLeft}>{r.weekday}</td>
+                      <td style={td}>{r.dateStr}</td>
+                      <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
 
-                  <td style={td}>{fmtTimeComma(r.pmStart)}</td>
-                  <td style={td}>{fmtTimeComma(r.pmEnd)}</td>
+                      <td style={{ ...tdLeft, whiteSpace: "normal" }}>
+                        <input
+                          value={notes[r.key] || ""}
+                          onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
+                          style={{
+                            width: "100%",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 6,
+                            padding: "6px 8px",
+                            fontSize: 13,
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
 
-                  <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
+                  <tr>
+                    <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={2}>
+                      Total semaine 1
+                    </td>
+                    <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek1)}</td>
+                    <td style={td}></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
-                  <td style={{ ...tdLeft, whiteSpace: "normal" }}>
-                    <input
-                      value={notes[r.key] || ""}
-                      onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
-                      style={{
-                        width: "100%",
-                        border: "1px solid #cbd5e1",
-                        borderRadius: 6,
-                        padding: "6px 8px",
-                        fontSize: 13,
-                      }}
-                    />
-                  </td>
-                </tr>
-              ))}
+            {/* WEEK 2 */}
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 1000, fontSize: 16 }}>Semaine 2</div>
+                <div
+                  style={{
+                    fontWeight: 900,
+                    color: "#0f172a",
+                    background: "#ecfeff",
+                    border: "1px solid #a5f3fc",
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                  }}
+                >
+                  {week2Label}
+                </div>
+              </div>
 
-              <tr>
-                <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={6}>
-                  Total semaine 2
-                </td>
-                <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek2)}</td>
-                <td style={td}></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}>Jour</th>
+                    <th style={th}>Date</th>
+                    <th style={th}>Total (h)</th>
+                    <th style={th}>Notes</th>
+                  </tr>
+                </thead>
 
-        {/* Totaux bas */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 12, alignItems: "center" }}>
-          <div style={{ fontWeight: 1000 }}>Total heures travaillées :</div>
-          <div style={totalBox}>{fmtHoursComma(total2Weeks)}</div>
-        </div>
+                <tbody>
+                  {rows.slice(7, 14).map((r) => (
+                    <tr key={r.key}>
+                      <td style={tdLeft}>{r.weekday}</td>
+                      <td style={td}>{r.dateStr}</td>
+                      <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
+
+                      <td style={{ ...tdLeft, whiteSpace: "normal" }}>
+                        <input
+                          value={notes[r.key] || ""}
+                          onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
+                          style={{
+                            width: "100%",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 6,
+                            padding: "6px 8px",
+                            fontSize: 13,
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+
+                  <tr>
+                    <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={2}>
+                      Total semaine 2
+                    </td>
+                    <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek2)}</td>
+                    <td style={td}></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* ✅ Totaux bas (nom lié au dropdown + un peu plus centré) */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                marginTop: 12,
+                alignItems: "center",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "center", flex: 1 }}>
+                <div style={bottomNameStyle}>{employeeNameBottom || "—"}</div>
+              </div>
+
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <div style={{ fontWeight: 1000 }}>Total heures travaillées :</div>
+                <div style={totalBox}>{fmtHoursComma(total2Weeks)}</div>
+              </div>
+            </div>
+          </>
+        )}
       </Card>
     </PageContainer>
   );

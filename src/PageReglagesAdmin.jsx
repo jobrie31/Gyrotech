@@ -1151,7 +1151,6 @@ export default function PageReglagesAdmin() {
             <input
               value={employeCodeInput}
               onChange={(e) => setEmployeCodeInput(e.target.value)}
-              placeholder="Code (vide = auto)"
               style={{ ...input, width: "100%" }}
             />
           </div>

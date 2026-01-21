@@ -33,6 +33,9 @@
 //
 // ✅ AJOUT (2026-01-14): Bouton Historique (comme AutresProjetsSection)
 // - Affiche les heures par jour + employé (agrégé) pour le projet (projets/{id}/timecards/*/segments)
+//
+// ✅ FIX (2026-01-21): Responsive iPad/tablette (sans changer l'affichage sur PC)
+// - Même UI, mais “plus petit”/ajusté sur iPad: fonts/paddings/boutons réduits, scroll plus smooth.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -332,9 +335,13 @@ async function depunchWorkersOnProject(projId) {
     for (const { empId, key } of pairs.values()) {
       // a) fermer tous les segments ouverts de l'employé sur cette journée
       try {
-        const openSnap = await getDocs(query(empSegCol(empId, key), where("end", "==", null)));
+        const openSnap = await getDocs(
+          query(empSegCol(empId, key), where("end", "==", null))
+        );
         const tasks = [];
-        openSnap.forEach((sd) => tasks.push(updateDoc(sd.ref, { end: now, updatedAt: now })));
+        openSnap.forEach((sd) =>
+          tasks.push(updateDoc(sd.ref, { end: now, updatedAt: now }))
+        );
         if (tasks.length) await Promise.all(tasks);
       } catch (e) {
         console.error("depunch employee open segs error", empId, key, e);
@@ -376,7 +383,9 @@ async function deleteProjectDeep(projId) {
   await depunchWorkersOnProject(projId);
 
   try {
-    const usagesSnap = await getDocs(collection(db, "projets", projId, "usagesMateriels"));
+    const usagesSnap = await getDocs(
+      collection(db, "projets", projId, "usagesMateriels")
+    );
     const del = [];
     usagesSnap.forEach((d) => del.push(deleteDoc(d.ref)));
     if (del.length) await Promise.all(del);
@@ -413,7 +422,9 @@ async function deleteProjectDeep(projId) {
 
     for (const key of dayIds) {
       try {
-        const segSnap = await getDocs(collection(db, "projets", projId, "timecards", key, "segments"));
+        const segSnap = await getDocs(
+          collection(db, "projets", projId, "timecards", key, "segments")
+        );
         const segDel = [];
         segSnap.forEach((d) => segDel.push(deleteDoc(d.ref)));
         if (segDel.length) await Promise.all(segDel);
@@ -566,7 +577,9 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
         let sumAllMs = 0;
 
         for (const key of days) {
-          const segSnap = await getDocs(collection(db, "projets", projet.id, "timecards", key, "segments"));
+          const segSnap = await getDocs(
+            collection(db, "projets", projet.id, "timecards", key, "segments")
+          );
 
           segSnap.forEach((sdoc) => {
             const s = sdoc.data() || {};
@@ -1164,8 +1177,6 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
             marginBottom: 14,
           }}
         >
-          Le bouton ci-dessous va ouvrir la facture (PDF) et envoyer l’email, puis fermer le projet.
-          <br />
           <strong>Note:</strong> tous les travailleurs encore punchés sur ce projet seront automatiquement dépunchés.
         </div>
 
@@ -1341,7 +1352,7 @@ function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onClose
       {cell(p.tempsEstimeHeures != null ? fmtHours(p.tempsEstimeHeures) : "—")}
 
       <td style={tdRow} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+        <div className="plp-row-actions" style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1814,10 +1825,43 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   );
 }
 
+function useIpadShrink() {
+  const [on, setOn] = React.useState(false);
+
+  React.useEffect(() => {
+    const compute = () => {
+      const ua = navigator.userAgent || "";
+      const isIpadClassic = /iPad/.test(ua);
+
+      // iPadOS 13+ peut afficher "Macintosh" dans le UA
+      const isIpadOS = /Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1;
+
+      // On force shrink seulement si appareil tactile type iPad/tablette
+      // (largeur <= 1400 pour couvrir iPad paysage + mode desktop)
+      const w = window.innerWidth || 0;
+      const looksLikeTablet = w <= 1400;
+
+      setOn((isIpadClassic || isIpadOS) && looksLikeTablet);
+    };
+
+    compute();
+    window.addEventListener("resize", compute);
+    window.addEventListener("orientationchange", compute);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("orientationchange", compute);
+    };
+  }, []);
+
+  return on;
+}
+ 
 /* ---------------------- Page ---------------------- */
 export default function PageListeProjet() {
   const [error, setError] = useState(null);
   const projets = useProjets(setError);
+  const ipadShrink = useIpadShrink();
+
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createProjet, setCreateProjet] = useState(null);
@@ -1877,7 +1921,7 @@ export default function PageListeProjet() {
 
   const handleDeleteWithoutSave = async (proj) => {
     if (!proj?.id) return;
-    const ok = window.confirm("Supprimer ce projet définitivement ? (supprime aussi timecards/matériel)");
+    const ok = window.confirm("Supprimer ce projet définitivement ?");
     if (!ok) return;
 
     try {
@@ -1931,13 +1975,19 @@ export default function PageListeProjet() {
     !!hist.open;
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+    <div
+      className={`plp-root ${ipadShrink ? "plp-ipad-shrink" : ""}`}
+      style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}
+    >
+      {/* ✅ Responsive iPad/tablette (sans toucher au PC) */}
+      <ResponsiveStyles />
+
       {!anyModalOpen && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", marginBottom: 12, gap: 10 }}>
         <div />
         <h1 style={{ margin: 0, textAlign: "center", fontSize: 36, fontWeight: 1000, lineHeight: 1.2 }}>📁 Projets</h1>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+        <div className="plp-top-actions" style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <a href="#/reglages" style={btnSecondary}>Réglages</a>
           <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
             Projets fermés
@@ -1945,8 +1995,11 @@ export default function PageListeProjet() {
         </div>
       </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}>
+      <div className="plp-table-wrap" style={{ overflowX: "auto" }}>
+        <table
+          className="plp-table"
+          style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}
+        >
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={th}>Client</th>
@@ -2013,8 +2066,12 @@ export default function PageListeProjet() {
           openPDF(details.projet);
         }}
         onOpenMateriel={() => {
-          if (!details.projet?.id) return;
-          setMaterialProjId(details.projet.id);
+          // ✅ FIX: si on ouvre Matériel depuis Détails, on ferme Détails d’abord
+          // => évite que le popup Matériel soit derrière le popup Détails (z-index/stacking)
+          const id = details.projet?.id;
+          if (!id) return;
+          closeDetails();
+          setMaterialProjId(id);
         }}
         onOpenHistorique={() => {
           if (!details.projet) return;
@@ -2077,6 +2134,31 @@ function FieldV({ label, children }) {
     </div>
   );
 }
+
+/* ---------------------- ✅ Responsive iPad/tablette (CSS override inline) ---------------------- */
+function ResponsiveStyles() {
+  return (
+    <style>{`
+.plp-ipad-shrink {
+  --plpScale: 0.78; /* ajuste: 0.82 si trop petit, 0.72 si trop gros */
+  transform: scale(var(--plpScale));
+  transform-origin: top left;
+  width: calc(100% / var(--plpScale));
+  min-height: 100vh;
+}
+
+.plp-ipad-shrink .plp-table-wrap {
+  -webkit-overflow-scrolling: touch;
+}
+
+html, body { overflow-x: hidden; }
+`}</style>
+  );
+}
+
+
+
+
 
 /* ---------------------- Styles ---------------------- */
 const th = {

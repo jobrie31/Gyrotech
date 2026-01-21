@@ -1,0 +1,356 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+
+    // 🔧 CORRIGÉ : on n'exige plus que le champ == request.time
+    function isServerTimeField(d, key) { return true; }
+
+    /* ================== ✅ HELPERS SEGMENTS ================== */
+    function segAllowedKeys(keys) {
+      return keys.hasOnly([
+        'start','end','createdAt','updatedAt',
+        'jobId','jobName',
+        'empId','empName',
+        'source',
+
+        // compat / anciens champs possibles
+        'notes','note','commentaire',
+        'minutes','dureeMin','totalMin','totalMs','durationMin','durationMs'
+      ]);
+    }
+
+    /* ================== EMPLOYÉS ================== */
+    match /employes/{empId} {
+      allow read: if isSignedIn();
+
+      // ✅ FIX: on autorise isAdmin + activationCode / activatedAt / uid
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          'nom','email','emailLower',
+
+          // ✅ NEW
+          'isAdmin',
+
+          'activationCode','activatedAt',
+          'uid',
+          'createdAt','updatedAt'
+        ])
+        && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+        && (request.resource.data.email is string && request.resource.data.email.size() > 3)
+        && (request.resource.data.emailLower is string && request.resource.data.emailLower.size() > 3)
+
+        // ✅ NEW: validation admin
+        && (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin is bool)
+
+        // activation
+        && (!('activationCode' in request.resource.data) || (request.resource.data.activationCode is string))
+        && (!('activatedAt' in request.resource.data) || request.resource.data.activatedAt == null || request.resource.data.activatedAt is timestamp)
+        && (!('uid' in request.resource.data) || request.resource.data.uid == null || request.resource.data.uid is string)
+
+        && isServerTimeField(request.resource.data, 'createdAt');
+
+      // volontairement permissif
+      allow update, delete: if isSignedIn();
+
+      match /timecards/{dayId} {
+        allow read: if isSignedIn();
+
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasOnly([
+            'start','end','createdAt','updatedAt',
+            'onBreak','breakStartMs','breakTotalMs'
+          ])
+          && isServerTimeField(request.resource.data, 'createdAt')
+          && isServerTimeField(request.resource.data, 'updatedAt');
+
+        allow update: if isSignedIn()
+          && request.resource.data.keys().hasOnly([
+            'start','end','createdAt','updatedAt',
+            'onBreak','breakStartMs','breakTotalMs'
+          ])
+          && isServerTimeField(request.resource.data, 'updatedAt');
+
+        match /segments/{segId} {
+          allow read: if isSignedIn();
+
+          allow create: if isSignedIn()
+            && segAllowedKeys(request.resource.data.keys())
+            && isServerTimeField(request.resource.data, 'createdAt')
+            && isServerTimeField(request.resource.data, 'updatedAt');
+
+          allow update: if isSignedIn()
+            && segAllowedKeys(request.resource.data.keys())
+            && (!('updatedAt' in request.resource.data) || isServerTimeField(request.resource.data, 'updatedAt'));
+
+          allow delete: if isSignedIn();
+        }
+      }
+    }
+
+    /* ================== PROJETS ================== */
+    match /projets/{projId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+        && isServerTimeField(request.resource.data, 'createdAt');
+
+      allow update, delete: if isSignedIn();
+
+      match /timecards/{dayId} {
+        allow read: if isSignedIn();
+
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['start','end','createdAt','updatedAt'])
+          && isServerTimeField(request.resource.data, 'createdAt')
+          && isServerTimeField(request.resource.data, 'updatedAt');
+
+        allow update: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['start','end','createdAt','updatedAt'])
+          && isServerTimeField(request.resource.data, 'updatedAt');
+
+        match /segments/{segId} {
+          allow read: if isSignedIn();
+
+          allow create: if isSignedIn()
+            && segAllowedKeys(request.resource.data.keys())
+            && isServerTimeField(request.resource.data, 'createdAt')
+            && isServerTimeField(request.resource.data, 'updatedAt');
+
+          allow update: if isSignedIn()
+            && segAllowedKeys(request.resource.data.keys())
+            && (!('updatedAt' in request.resource.data) || isServerTimeField(request.resource.data, 'updatedAt'));
+
+          allow delete: if isSignedIn();
+        }
+      }
+
+      match /materiel/{itemId} {
+        allow read: if isSignedIn();
+
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['nom','qty','unite','notes','createdAt'])
+          && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+          && (request.resource.data.qty is int && request.resource.data.qty >= 0)
+          && (request.resource.data.unite == null || request.resource.data.unite is string)
+          && (request.resource.data.notes == null || request.resource.data.notes is string)
+          && isServerTimeField(request.resource.data, 'createdAt');
+
+        allow update: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['nom','qty','unite','notes'])
+          && (!('nom' in request.resource.data) || (request.resource.data.nom is string && request.resource.data.nom.size() > 0))
+          && (!('qty' in request.resource.data) || (request.resource.data.qty is int && request.resource.data.qty >= 0))
+          && (!('unite' in request.resource.data) || (request.resource.data.unite == null || request.resource.data.unite is string))
+          && (!('notes' in request.resource.data) || (request.resource.data.notes == null || request.resource.data.notes is string));
+
+        allow delete: if isSignedIn();
+      }
+
+      /* ================== ✅ FIX POUR ProjectMaterielPanel ==================
+         Problème avant: UPDATE imposait hasOnly(['nom','categorie','prix','qty','updatedAt'])
+         Mais request.resource.data = document COMPLET après update, donc il contient aussi
+         materielId + createdAt => permission denied.
+
+         On autorise maintenant le document complet, et on verrouille createdAt + materielId.
+      */
+      match /usagesMateriels/{uId} {
+        allow read: if isSignedIn();
+
+        function usageAllowedKeys(keys) {
+          return keys.hasOnly([
+            'materielId','nom','categorie','prix','qty','createdAt','updatedAt'
+          ]);
+        }
+
+        function isNonNegNumber(v) {
+          return ((v is int) || (v is float)) && v >= 0;
+        }
+
+        allow create: if isSignedIn()
+          && usageAllowedKeys(request.resource.data.keys())
+          && (request.resource.data.materielId is string && request.resource.data.materielId.size() > 0)
+          && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+          && (request.resource.data.categorie == null || request.resource.data.categorie is string)
+          && isNonNegNumber(request.resource.data.prix)
+          && isNonNegNumber(request.resource.data.qty)
+          && isServerTimeField(request.resource.data, 'createdAt')
+          && isServerTimeField(request.resource.data, 'updatedAt');
+
+        allow update: if isSignedIn()
+          && usageAllowedKeys(request.resource.data.keys())
+
+          // 🔒 champs immuables
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.materielId == resource.data.materielId
+
+          // validations (doc complet)
+          && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+          && (request.resource.data.categorie == null || request.resource.data.categorie is string)
+          && (!('prix' in request.resource.data) || isNonNegNumber(request.resource.data.prix))
+          && (!('qty' in request.resource.data) || isNonNegNumber(request.resource.data.qty))
+          && isServerTimeField(request.resource.data, 'updatedAt');
+
+        allow delete: if isSignedIn();
+      }
+    }
+
+    /* ================== AUTRES PROJETS ================== */
+    match /autresProjets/{itemId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['nom','ordre','note','createdAt'])
+        && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+        && (request.resource.data.ordre == null || request.resource.data.ordre is int)
+        && (request.resource.data.note == null || request.resource.data.note is string);
+
+      allow update: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['nom','ordre','note','updatedAt'])
+        && (!('nom' in request.resource.data) || (request.resource.data.nom is string && request.resource.data.nom.size() > 0))
+        && (!('ordre' in request.resource.data) || request.resource.data.ordre is int || request.resource.data.ordre == null)
+        && (!('note' in request.resource.data) || request.resource.data.note is string || request.resource.data.note == null);
+
+      allow delete: if isSignedIn();
+
+      match /timecards/{dayId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['start','end','createdAt','updatedAt']);
+        allow update: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['start','end','createdAt','updatedAt']);
+
+        match /segments/{segId} {
+          allow read: if isSignedIn();
+          allow create: if isSignedIn() && segAllowedKeys(request.resource.data.keys());
+          allow update: if isSignedIn() && segAllowedKeys(request.resource.data.keys());
+          allow delete: if isSignedIn();
+        }
+      }
+    }
+
+    /* ================== AUTRES_PROJETS (miroir snake_case) ================== */
+    match /autres_projets/{itemId} {
+      allow read, create, update, delete: if isSignedIn();
+      match /timecards/{dayId} {
+        allow read, create, update: if isSignedIn();
+        match /segments/{segId} {
+          allow read, create, update, delete: if isSignedIn();
+        }
+      }
+    }
+
+    /* ================== MATERIELS ================== */
+    match /materiels/{matId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['nom','prix','categorie','createdAt'])
+        && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+        && (((request.resource.data.prix is int) || (request.resource.data.prix is float)) && request.resource.data.prix >= 0)
+        && (request.resource.data.categorie == null || request.resource.data.categorie is string)
+        && isServerTimeField(request.resource.data, 'createdAt');
+
+      allow update: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['nom','prix','categorie','createdAt'])
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+        && (((request.resource.data.prix is int) || (request.resource.data.prix is float)) && request.resource.data.prix >= 0)
+        && (request.resource.data.categorie == null || request.resource.data.categorie is string);
+
+      allow delete: if isSignedIn();
+    }
+
+    /* ================== CATÉGORIES MATERIELS ================== */
+    match /categoriesMateriels/{catId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['nom','createdAt'])
+        && (request.resource.data.nom is string && request.resource.data.nom.size() > 0)
+        && isServerTimeField(request.resource.data, 'createdAt');
+
+      allow update: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['nom','createdAt'])
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (request.resource.data.nom is string && request.resource.data.nom.size() > 0);
+
+      allow delete: if isSignedIn();
+    }
+
+    /* ================== JOBS ================== */
+    match /jobs/{jobId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['titre','actif','createdAt'])
+        && (request.resource.data.titre is string && request.resource.data.titre.size() > 0)
+        && (request.resource.data.actif == null || request.resource.data.actif is bool)
+        && isServerTimeField(request.resource.data, 'createdAt');
+
+      allow update: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['titre','actif'])
+        && (request.resource.data.titre is string && request.resource.data.titre.size() > 0)
+        && (request.resource.data.actif == null || request.resource.data.actif is bool);
+
+      allow delete: if isSignedIn();
+    }
+
+    /* ================== REGLAGES ANNEES ================== */
+    match /reglages_annees/{anneeId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['value'])
+        && (request.resource.data.value is int);
+      allow delete: if isSignedIn();
+    }
+
+    /* ================== REGLAGES MARQUES / MODELES ================== */
+    match /reglages_marques/{marqueId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['name'])
+        && (request.resource.data.name is string && request.resource.data.name.size() > 0);
+
+      allow update: if isSignedIn()
+        && request.resource.data.keys().hasOnly(['name'])
+        && (request.resource.data.name is string && request.resource.data.name.size() > 0);
+
+      allow delete: if isSignedIn();
+
+      match /modeles/{modeleId} {
+        allow read: if isSignedIn();
+
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['name'])
+          && (request.resource.data.name is string && request.resource.data.name.size() > 0);
+
+        allow update: if isSignedIn()
+          && request.resource.data.keys().hasOnly(['name'])
+          && (request.resource.data.name is string && request.resource.data.name.size() > 0);
+
+        allow delete: if isSignedIn();
+      }
+    }
+
+    /* ================== CONFIG FACTURE ================== */
+    match /config/facture {
+      allow read, write: if isSignedIn();
+    }
+
+    /* ================== CONFIG PUNCH CODES ================== */
+    match /config/punchCodes {
+      allow read, write: if isSignedIn();
+    }
+
+    /* ================== ✅ AJOUT: CONFIG ADMIN ACCESS ==================
+       Fix pour PageReglagesAdmin.jsx (doc: config/adminAccess)
+       => sans ça: Missing or insufficient permissions
+    */
+    match /config/adminAccess {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
