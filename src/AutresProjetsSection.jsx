@@ -729,7 +729,7 @@ function RowAutreProjet({
 }) {
   const { hasOpen } = usePresenceTodayAutre(p.id, setError);
 
-  const statutLabel = hasOpen ? "Actif" : "—";
+  const statutLabel = hasOpen ? "En cours" : "—";
   const statutStyle = {
     fontWeight: 800,
     color: hasOpen ? "#166534" : "#6b7280",

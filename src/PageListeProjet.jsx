@@ -36,6 +36,10 @@
 //
 // ✅ FIX (2026-01-21): Responsive iPad/tablette (sans changer l'affichage sur PC)
 // - Même UI, mais “plus petit”/ajusté sur iPad: fonts/paddings/boutons réduits, scroll plus smooth.
+//
+// ✅ MODIF (2026-01-22):
+// - Popup "Créer un nouveau projet" un mini peu plus compact en hauteur (moins collé haut/bas)
+// - Inputs/select/buttons légèrement plus bas + scroll propre
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -1523,6 +1527,21 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
     }
   }, [open, mode]);
 
+  // ✅ Compact: réduit la hauteur des champs (sans changer le look global)
+  const POP_COMPACT = true;
+
+  const inputC = POP_COMPACT
+    ? { ...input, padding: "8px 10px", fontSize: 16, borderRadius: 10, fontWeight: 900 }
+    : input;
+
+  const selectC = POP_COMPACT
+    ? { ...select, padding: "8px 10px", paddingRight: 34, fontSize: 16, borderRadius: 10, fontWeight: 900 }
+    : select;
+
+  const btnPrimaryC = POP_COMPACT ? { ...btnPrimary, padding: "9px 14px", fontSize: 15, borderRadius: 12 } : btnPrimary;
+  const btnGhostC = POP_COMPACT ? { ...btnGhost, padding: "9px 12px", fontSize: 15, borderRadius: 12 } : btnGhost;
+  const btnSecondarySmallC = POP_COMPACT ? { ...btnSecondarySmall, padding: "7px 9px", fontSize: 13, borderRadius: 12 } : btnSecondarySmall;
+
   const submit = async (e) => {
     e.preventDefault();
     try {
@@ -1691,13 +1710,15 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
-          width: "min(720px, 96vw)",
+          width: "min(700px, 96vw)", // ✅ un mini peu plus petit
+          maxHeight: "90vh",         // ✅ garde le popup compact
+          overflow: "auto",          // ✅ scroll propre si ça dépasse
           borderRadius: 18,
-          padding: 18,
+          padding: 16,               // ✅ un peu moins de padding
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>{mode === "edit" ? "Modifier le projet" : "Créer un nouveau projet"}</div>
           <button
             onClick={(e) => {
@@ -1712,47 +1733,49 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         </div>
 
         {msg && (
-          <div style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "10px 12px", borderRadius: 12, marginBottom: 12, fontSize: 18, fontWeight: 900 }}>
+          <div style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "8px 10px", borderRadius: 12, marginBottom: 10, fontSize: 16, fontWeight: 900 }}>
             {msg}
           </div>
         )}
 
         {mode === "create" && (
-          <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 14, border: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 18, color: "#111827", fontWeight: 900 }}>
+          <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 14, border: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 16, color: "#111827", fontWeight: 900 }}>
             <strong>No de dossier :</strong> {nextDossierNo != null ? nextDossierNo : "…"}
           </div>
         )}
 
-        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <FieldV label="Nom du client / Entreprise">
-            <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={input} />
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <FieldV label="Nom du client / Entreprise" compact>
+            <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={inputC} />
           </FieldV>
 
-          <FieldV label="Téléphone du client">
-            <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={input} />
+          <FieldV label="Téléphone du client" compact>
+            <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={inputC} />
           </FieldV>
 
-          <FieldV label="Numéro d’unité">
-            <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={input} />
+          <FieldV label="Numéro d’unité" compact>
+            <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={inputC} />
           </FieldV>
 
           {mode === "edit" ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <label style={{ fontSize: 16, color: "#111827", fontWeight: 1000 }}>Temps estimé (heures)</label>
-              <div style={{ ...input, background: "#f3f4f6", borderColor: "#e5e7eb", color: "#111827", fontWeight: 1000 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 15, color: "#111827", fontWeight: 1000, lineHeight: 1.1 }}>
+                Temps estimé (heures)
+              </label>
+              <div style={{ ...inputC, background: "#f3f4f6", borderColor: "#e5e7eb", color: "#111827", fontWeight: 1000 }}>
                 {projet?.tempsEstimeHeures != null ? `${fmtHours(projet.tempsEstimeHeures)} h` : "—"}
               </div>
             </div>
           ) : (
-            <FieldV label="Temps estimé (heures)">
-              <input value={tempsEstimeHeures} onChange={(e) => setTempsEstimeHeures(e.target.value)} placeholder="Ex.: 12.5" inputMode="decimal" style={input} />
+            <FieldV label="Temps estimé (heures)" compact>
+              <input value={tempsEstimeHeures} onChange={(e) => setTempsEstimeHeures(e.target.value)} placeholder="Ex.: 12.5" inputMode="decimal" style={inputC} />
             </FieldV>
           )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <FieldV label="Année">
+            <FieldV label="Année" compact>
               <div style={{ display: "flex", gap: 8 }}>
-                <select value={annee} onChange={(e) => setAnnee(e.target.value)} style={select}>
+                <select value={annee} onChange={(e) => setAnnee(e.target.value)} style={selectC}>
                   <option value="">—</option>
                   {annees.map((a) => (
                     <option key={a.id} value={a.id}>
@@ -1760,15 +1783,15 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                     </option>
                   ))}
                 </select>
-                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les années">
+                <button type="button" onClick={goReglages} style={btnSecondarySmallC} title="Gérer les années">
                   Réglages
                 </button>
               </div>
             </FieldV>
 
-            <FieldV label="Marque">
+            <FieldV label="Marque" compact>
               <div style={{ display: "flex", gap: 8 }}>
-                <select value={marque} onChange={(e) => setMarque(e.target.value)} style={select}>
+                <select value={marque} onChange={(e) => setMarque(e.target.value)} style={selectC}>
                   <option value="">—</option>
                   {marques.map((m) => (
                     <option key={m.id} value={m.name}>
@@ -1776,16 +1799,16 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                     </option>
                   ))}
                 </select>
-                <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Ajouter/supprimer des marques">
+                <button type="button" onClick={goReglages} style={btnSecondarySmallC} title="Ajouter/supprimer des marques">
                   Réglages
                 </button>
               </div>
             </FieldV>
           </div>
 
-          <FieldV label="Modèle (lié à la marque)">
+          <FieldV label="Modèle (lié à la marque)" compact>
             <div style={{ display: "flex", gap: 8 }}>
-              <select value={modele} onChange={(e) => setModele(e.target.value)} style={select} disabled={!marqueId}>
+              <select value={modele} onChange={(e) => setModele(e.target.value)} style={selectC} disabled={!marqueId}>
                 <option value="">—</option>
                 {modeles.map((mo) => (
                   <option key={mo.id} value={mo.name}>
@@ -1793,29 +1816,29 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
                   </option>
                 ))}
               </select>
-              <button type="button" onClick={goReglages} style={btnSecondarySmall} title="Gérer les modèles">
+              <button type="button" onClick={goReglages} style={btnSecondarySmallC} title="Gérer les modèles">
                 Réglages
               </button>
             </div>
           </FieldV>
 
-          <FieldV label="Plaque">
-            <input value={plaque} onChange={(e) => setPlaque(e.target.value.toUpperCase())} style={input} />
+          <FieldV label="Plaque" compact>
+            <input value={plaque} onChange={(e) => setPlaque(e.target.value.toUpperCase())} style={inputC} />
           </FieldV>
 
-          <FieldV label="Odomètre">
-            <input value={odometre} onChange={(e) => setOdometre(e.target.value)} inputMode="numeric" style={input} />
+          <FieldV label="Odomètre" compact>
+            <input value={odometre} onChange={(e) => setOdometre(e.target.value)} inputMode="numeric" style={inputC} />
           </FieldV>
 
-          <FieldV label="VIN">
-            <input value={vin} onChange={(e) => setVin(e.target.value.toUpperCase())} style={input} />
+          <FieldV label="VIN" compact>
+            <input value={vin} onChange={(e) => setVin(e.target.value.toUpperCase())} style={inputC} />
           </FieldV>
 
           <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-            <button type="button" onClick={onClose} style={btnGhost}>
+            <button type="button" onClick={onClose} style={btnGhostC}>
               Annuler
             </button>
-            <button type="submit" style={btnPrimary}>
+            <button type="submit" style={btnPrimaryC}>
               Enregistrer
             </button>
           </div>
@@ -1855,13 +1878,12 @@ function useIpadShrink() {
 
   return on;
 }
- 
+
 /* ---------------------- Page ---------------------- */
 export default function PageListeProjet() {
   const [error, setError] = useState(null);
   const projets = useProjets(setError);
   const ipadShrink = useIpadShrink();
-
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createProjet, setCreateProjet] = useState(null);
@@ -2066,8 +2088,6 @@ export default function PageListeProjet() {
           openPDF(details.projet);
         }}
         onOpenMateriel={() => {
-          // ✅ FIX: si on ouvre Matériel depuis Détails, on ferme Détails d’abord
-          // => évite que le popup Matériel soit derrière le popup Détails (z-index/stacking)
           const id = details.projet?.id;
           if (!id) return;
           closeDetails();
@@ -2126,10 +2146,14 @@ export default function PageListeProjet() {
 }
 
 /* ---------------------- Petits composants UI ---------------------- */
-function FieldV({ label, children }) {
+function FieldV({ label, children, compact = false }) {
+  const labelStyle = compact
+    ? { fontSize: 15, color: "#111827", fontWeight: 1000, lineHeight: 1.1 }
+    : { fontSize: 16, color: "#111827", fontWeight: 1000 };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <label style={{ fontSize: 16, color: "#111827", fontWeight: 1000 }}>{label}</label>
+    <div style={{ display: "flex", flexDirection: "column", gap: compact ? 4 : 6 }}>
+      <label style={labelStyle}>{label}</label>
       {children}
     </div>
   );
@@ -2155,10 +2179,6 @@ html, body { overflow-x: hidden; }
 `}</style>
   );
 }
-
-
-
-
 
 /* ---------------------- Styles ---------------------- */
 const th = {

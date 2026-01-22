@@ -293,7 +293,7 @@ function InvoiceDocument({
           </View>
 
           <View style={{ alignItems: "flex-end" }}>
-            <Text style={{ fontSize: 15, fontWeight: 700, marginBottom: 2 }}>FACTURE</Text>
+            <Text style={{ fontSize: 15, fontWeight: 700, marginBottom: 2 }}>BON DE TRAVAIL</Text>
             <Text>
               <Text style={{ fontWeight: 700 }}>No :</Text> {dossierNo}
             </Text>
@@ -644,7 +644,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       });
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
-      const toEmail = ["service@gyrotech.ca", "tlemieux@gyrotech.ca"];
+      const toEmail = ["service@gyrotech.ca", "tlemieux@gyrotech.ca", "ventes@gyrotech.ca", "pieces@gyrotech.ca"];
 
 
       await sendInvoiceEmail({

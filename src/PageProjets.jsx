@@ -294,7 +294,7 @@ function LigneProjet({ proj, idx = 0, tick, onOpenMaterial, setError }) {
   const { totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
   const { firstEverStart, totalClosedMs, openStarts } = useProjectLifetimeStats(proj.id, setError);
 
-  const statutLabel = hasOpen ? "En Cours" : "—";
+  const statutLabel = hasOpen ? "En cours" : "—";
   const statutStyle = { fontWeight: 900, color: hasOpen ? "#166534" : "#6b7280" };
 
   const btn = (label, onClick, color = "#2563eb") => (
@@ -341,7 +341,6 @@ function LigneProjet({ proj, idx = 0, tick, onOpenMaterial, setError }) {
 
       <td style={tdCenter}>{fmtDate(firstEverStart)}</td>
       <td style={tdCenter}>{fmtHM(totalAllMsWithOpen)}</td>
-      <td style={tdCenter}>{fmtHM(totalMs)}</td>
       <td style={tdCenter}>{fmtHours(proj?.tempsEstimeHeures)}</td>
 
       <td style={tdCenter}>
@@ -391,7 +390,6 @@ export default function PageProjets({ onOpenMaterial }) {
               <th style={thCenter}>Statut</th>
               <th style={thCenter}>Ouverture</th>
               <th style={thCenter}>Total</th>
-              <th style={thCenter}>Jour</th>
               <th style={thCenter}>Estimé</th>
               <th style={thCenter}>Actions</th>
             </tr>
@@ -412,7 +410,7 @@ export default function PageProjets({ onOpenMaterial }) {
             {projets.length === 0 && (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={8}
                   style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16, fontWeight: 800 }}
                 >
                   Aucun projet pour l’instant.

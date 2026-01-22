@@ -899,11 +899,36 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
 
   const [isHovered, setIsHovered] = useState(false);
 
-  const GREEN_BASE = "#3bf544e1";
-  const GREEN_HOVER = "#04bb41ff";
+    // Couleurs de ligne
+  const ROW_RED_BASE = "#ef4444";     // pas punché
+  const ROW_RED_HOVER = "#dc2626";
 
-  const baseBg = currentIsOther ? "#ec3c3cff" : currentIsProj ? GREEN_BASE : styles.row?.background || "white";
-  const hoverBg = currentIsOther ? "#ff0000ff" : currentIsProj ? GREEN_HOVER : styles.rowHover?.background || "#f9fafb";
+  const ROW_GREEN_BASE = "#22c55e";   // projet
+  const ROW_GREEN_HOVER = "#16a34a";
+
+  const ROW_YELLOW_BASE = "#facc15";  // autres tâches
+  const ROW_YELLOW_HOVER = "#eab308";
+
+  // Règle demandée:
+  // - pas punché => rouge
+  // - punché projet => vert
+  // - punché autres => jaune
+  const baseBg = !present
+    ? ROW_RED_BASE
+    : currentIsOther
+      ? ROW_YELLOW_BASE
+      : currentIsProj
+        ? ROW_GREEN_BASE
+        : ROW_RED_BASE; // fallback
+
+  const hoverBg = !present
+    ? ROW_RED_HOVER
+    : currentIsOther
+      ? ROW_YELLOW_HOVER
+      : currentIsProj
+        ? ROW_GREEN_HOVER
+        : ROW_RED_HOVER;
+
   const rowBg = isHovered ? hoverBg : baseBg;
 
   const requireCode = String(autresProjetsCode || "").trim().length > 0;
@@ -912,8 +937,8 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
     await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
   };
 
-  const punchBtnBg = present ? "#fbbf24" : "#002f94ff";
-  const punchBtnHover = present ? "#f59e0b" : "#002f94ff";
+  const punchBtnBg = present ? "#dc2626" : "#16a34a";
+  const punchBtnHover = present ? "#b91c1c" : "#15803d";
 
   return (
     <>
@@ -927,7 +952,9 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{emp.nom || "—"}</td>
+        <td style={{ ...styles.td, whiteSpace: "nowrap", fontWeight: 900 }}>
+          {emp.nom || "—"}
+        </td>
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
 
         <td style={{ ...styles.td }} onClick={(e) => e.stopPropagation()}>
@@ -1030,7 +1057,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
                 e.currentTarget.style.background = punchBtnBg;
               }}
             >
-              {present ? "Arrêt" : "Départ"}
+              {present ? "ARRÊT" : "DÉPART"}
             </Button>
           </div>
         </td>
