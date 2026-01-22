@@ -294,7 +294,7 @@ function LigneProjet({ proj, idx = 0, tick, onOpenMaterial, setError }) {
   const { totalMs, hasOpen } = usePresenceTodayP(proj.id, setError);
   const { firstEverStart, totalClosedMs, openStarts } = useProjectLifetimeStats(proj.id, setError);
 
-  const statutLabel = hasOpen ? "Actif" : "—";
+  const statutLabel = hasOpen ? "En Cours" : "—";
   const statutStyle = { fontWeight: 900, color: hasOpen ? "#166534" : "#6b7280" };
 
   const btn = (label, onClick, color = "#2563eb") => (

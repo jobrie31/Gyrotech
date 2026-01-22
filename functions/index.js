@@ -1,14 +1,15 @@
 /**
- * Cloud Functions v2 – envoi de facture par courriel avec SendGrid
+ * Cloud Functions v2 – envoi de facture par courriel avec Brevo (SMTP)
  * + Activation de compte (email + code + mot de passe)
  * + ✅ Purge auto des projets fermés complètement après 60 jours (deleteAt)
  */
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
-const sgMail = require("@sendgrid/mail");
+const nodemailer = require("nodemailer");
 
 // Options globales
 setGlobalOptions({
@@ -19,13 +20,11 @@ setGlobalOptions({
 admin.initializeApp();
 
 /* =========================
-   SendGrid helpers
+   ✅ Secrets Brevo (SMTP)
    ========================= */
-function getSendgridKey() {
-  const k = process.env.SENDGRID_API_KEY;
-  if (!k || typeof k !== "string" || !k.startsWith("SG.")) return null;
-  return k;
-}
+const BREVO_SMTP_USER = defineSecret("BREVO_SMTP_USER");
+const BREVO_SMTP_PASS = defineSecret("BREVO_SMTP_PASS");
+const MAIL_FROM = defineSecret("MAIL_FROM");
 
 /* =========================
    ✅ Activate Account (email + code + password)
@@ -50,20 +49,13 @@ exports.activateAccount = onCall(async (request) => {
       throw new HttpsError("invalid-argument", "Code requis.");
     }
     if (!password || password.length < 6) {
-      throw new HttpsError(
-        "invalid-argument",
-        "Mot de passe trop faible (6 caractères minimum)."
-      );
+      throw new HttpsError("invalid-argument", "Mot de passe trop faible (6 caractères minimum).");
     }
 
     const db = admin.firestore();
 
     // 1) Trouver l’employé par emailLower
-    const q = await db
-      .collection("employes")
-      .where("emailLower", "==", email)
-      .limit(1)
-      .get();
+    const q = await db.collection("employes").where("emailLower", "==", email).limit(1).get();
 
     if (q.empty) {
       throw new HttpsError(
@@ -82,9 +74,7 @@ exports.activateAccount = onCall(async (request) => {
     }
 
     // 3) Vérifier le code du travailleur (✅ fallback si ancien champ)
-    const expectedCode = String(
-      empData.activationCode ?? empData.code ?? empData.activation ?? ""
-    ).trim();
+    const expectedCode = String(empData.activationCode ?? empData.code ?? empData.activation ?? "").trim();
 
     if (!expectedCode) {
       throw new HttpsError(
@@ -123,7 +113,7 @@ exports.activateAccount = onCall(async (request) => {
       {
         uid: userRecord.uid,
         activatedAt: now,
-        activationCode: null, // IMPORTANT: empêche une 2e activation avec le même code
+        activationCode: null, // empêche une 2e activation avec le même code
         updatedAt: now,
       },
       { merge: true }
@@ -138,112 +128,131 @@ exports.activateAccount = onCall(async (request) => {
 });
 
 /* =========================
-   ✅ Send Invoice Email
-   ========================= */
+   ✅ Send Invoice Email (Brevo SMTP)
+   =========================
+   Attendu (ton front peut envoyer l’un ou l’autre):
+   - projetId (requis si pdfPath absent)
+   - toEmail (requis) : string "a@x.com" OU "a@x.com, b@y.com" OU array ["a@x.com","b@y.com"]
+   - subject (optionnel)
+   - text (optionnel)
+   - pdfPath (optionnel) ex: "factures/ABC.pdf"
+*/
 exports.sendInvoiceEmail = onCall(
-  { secrets: ["SENDGRID_API_KEY"] },
+  { secrets: [BREVO_SMTP_USER, BREVO_SMTP_PASS, MAIL_FROM] },
   async (request) => {
     const data = request.data || {};
 
     if (!request.auth || !request.auth.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "Vous devez être connecté pour envoyer une facture."
-      );
+      throw new HttpsError("unauthenticated", "Vous devez être connecté pour envoyer une facture.");
     }
 
-    const SENDGRID_API_KEY = getSendgridKey();
-    if (!SENDGRID_API_KEY) {
-      logger.error("SENDGRID_API_KEY absent / invalide (secret non injecté).");
-      throw new HttpsError(
-        "failed-precondition",
-        "Clé SendGrid non configurée côté serveur (secret)."
-      );
+    const projetId = data.projetId || null;
+
+    // ✅ Support: array OU string (avec virgules)
+    const toEmailRaw = data.toEmail;
+    let toEmails = [];
+
+    if (Array.isArray(toEmailRaw)) {
+      toEmails = toEmailRaw.map((x) => String(x).trim()).filter(Boolean);
+    } else {
+      const s = String(toEmailRaw || "").trim();
+      toEmails = s.includes(",")
+        ? s.split(",").map((x) => x.trim()).filter(Boolean)
+        : (s ? [s] : []);
     }
 
-    sgMail.setApiKey(SENDGRID_API_KEY);
+    if (!toEmails.length) {
+      throw new HttpsError("invalid-argument", "Arguments invalides : toEmail est requis.");
+    }
 
-    const projetId = data.projetId;
-    const toEmail = data.toEmail;
+    const subject = String(data.subject || `Facture Gyrotech – ${projetId || "Projet"}`).trim();
 
-    const subject =
-      data.subject || `Facture Gyrotech – ${projetId || "Projet"}`;
-    const text =
-      data.text ||
-      "Bonjour, veuillez trouver ci-joint la facture de votre intervention.";
+    const text = String(
+      data.text || "Bonjour, veuillez trouver ci-joint la facture de votre intervention."
+    );
 
-    if (!projetId || !toEmail) {
+    // ✅ pdfPath: si fourni on l’utilise, sinon on construit avec projetId
+    const pdfPath =
+      String(data.pdfPath || "").trim() ||
+      (projetId ? `factures/${projetId}.pdf` : "");
+
+    if (!pdfPath) {
       throw new HttpsError(
         "invalid-argument",
-        "Arguments invalides : projetId et toEmail sont requis."
+        "Arguments invalides : pdfPath est requis si projetId est absent."
       );
     }
 
+    // 1) Charger le PDF depuis Storage
     const bucket = admin.storage().bucket();
-    const filePath = `factures/${projetId}.pdf`;
-    const file = bucket.file(filePath);
+    const file = bucket.file(pdfPath);
 
     const [exists] = await file.exists();
     if (!exists) {
-      throw new HttpsError(
-        "not-found",
-        `Le fichier PDF ${filePath} est introuvable dans Storage.`
-      );
+      throw new HttpsError("not-found", `Le fichier PDF ${pdfPath} est introuvable dans Storage.`);
     }
 
     const [fileBuffer] = await file.download();
-    const base64Pdf = fileBuffer.toString("base64");
 
-    const msg = {
-      to: toEmail,
-      from: {
-        email: "jobrie31@hotmail.com",
-        name: "Gyrotech",
+    // 2) Transport SMTP Brevo
+    const transporter = nodemailer.createTransport({
+      host: "smtp-relay.brevo.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: BREVO_SMTP_USER.value(),
+        pass: BREVO_SMTP_PASS.value(),
       },
-      subject,
-      text,
-      attachments: [
-        {
-          content: base64Pdf,
-          filename: `facture-${projetId}.pdf`,
-          type: "application/pdf",
-          disposition: "attachment",
-        },
-      ],
-    };
+    });
+
+    const attachName = projetId ? `facture-${projetId}.pdf` : `facture.pdf`;
 
     try {
-      await sgMail.send(msg);
-      logger.info(`Facture envoyée à ${toEmail} pour projet ${projetId}.`);
+      await transporter.sendMail({
+        from: MAIL_FROM.value(), // ex: "Gyrotech <groupegyrotech@gmail.com>"
+        to: toEmails,            // ✅ multiple destinataires
+        subject,
+        text,
+        attachments: [
+          {
+            filename: attachName,
+            content: fileBuffer,
+            contentType: "application/pdf",
+          },
+        ],
+      });
 
+      logger.info(
+        `Facture envoyée à ${toEmails.join(", ")} pour projet ${projetId || "(sans projetId)"} (path=${pdfPath}).`
+      );
+
+      // ✅ (optionnel) Supprimer le PDF après envoi (comme avant)
       try {
-        await file.delete();
-        logger.info(`Facture supprimée du Storage: ${filePath}`);
+        await file.delete({ ignoreNotFound: true });
+        logger.info(`Facture supprimée du Storage: ${pdfPath}`);
       } catch (errDel) {
         logger.error("Erreur lors de la suppression du PDF:", errDel);
       }
 
-      return { ok: true, toEmail, projetId, deletedFromStorage: true };
+      return {
+        ok: true,
+        toEmails,
+        projetId,
+        pdfPath,
+        deletedFromStorage: true,
+      };
     } catch (err) {
-      logger.error("Erreur SendGrid:", err);
-      throw new HttpsError(
-        "internal",
-        "Erreur lors de l'envoi du courriel de facture."
-      );
+      logger.error("Erreur Brevo/Nodemailer:", err);
+      throw new HttpsError("internal", "Erreur lors de l'envoi du courriel de facture.");
     }
   }
 );
 
 /* =========================
    ✅ Purge automatique des projets fermés complètement (deleteAt)
-   =========================
-   - Chaque nuit: supprime les projets où fermeComplet=true ET deleteAt <= maintenant
-   - Supprime aussi les fichiers Storage liés (factures/{id}.pdf + projets/{id}/pdfs/*)
-   - Utilise recursiveDelete() => supprime doc + sous-collections
-*/
+   ========================= */
 async function deleteFilesWithPrefix(bucket, prefix) {
   try {
-    // Pagination "light" (utile si un projet a beaucoup de PDFs)
     let pageToken = undefined;
     do {
       const [files, , apiResponse] = await bucket.getFiles({
@@ -254,9 +263,7 @@ async function deleteFilesWithPrefix(bucket, prefix) {
       });
 
       if (files && files.length) {
-        await Promise.all(
-          files.map((f) => f.delete({ ignoreNotFound: true }).catch(() => null))
-        );
+        await Promise.all(files.map((f) => f.delete({ ignoreNotFound: true }).catch(() => null)));
       }
 
       pageToken = apiResponse?.nextPageToken;
@@ -278,7 +285,6 @@ exports.purgeClosedProjects = onSchedule(
 
     let deletedCount = 0;
 
-    // boucle en paquets (au cas où il y en a beaucoup)
     while (true) {
       const snap = await db
         .collection("projets")
@@ -294,22 +300,14 @@ exports.purgeClosedProjects = onSchedule(
         const projId = d.id;
 
         try {
-          // Storage (best effort)
-          await bucket
-            .file(`factures/${projId}.pdf`)
-            .delete({ ignoreNotFound: true })
-            .catch(() => null);
-
+          await bucket.file(`factures/${projId}.pdf`).delete({ ignoreNotFound: true }).catch(() => null);
           await deleteFilesWithPrefix(bucket, `projets/${projId}/pdfs/`);
-
-          // Firestore: doc + sous-collections
           await db.recursiveDelete(d.ref);
 
           deletedCount++;
           logger.info(`purgeClosedProjects: projet supprimé: ${projId}`);
         } catch (e) {
           logger.error(`purgeClosedProjects FAILED (${projId}):`, e?.message || e);
-          // continue sur les suivants
         }
       }
     }

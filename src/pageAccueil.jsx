@@ -583,7 +583,7 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <h3 style={{ margin: 0 }}>Autres projets</h3>
+          <h3 style={{ margin: 0 }}>Autres tâches</h3>
           <button
             onClick={onClose}
             style={{
@@ -652,7 +652,7 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
         </div>
 
         <div style={{ fontSize: 16, marginBottom: 10 }}>
-          Pour puncher sur <strong>{projetNom || "Autres projets"}</strong>, entre le code.
+          Pour puncher sur <strong>{projetNom || "Autres tâches"}</strong>, entre le code.
         </div>
 
         <input
@@ -952,7 +952,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                   }}
-                  title="Travail en cours (Autres projets)"
+                  title="Travail en cours (Autres tâches)"
                 >
                   Actuellement: {currentJobName || "—"}
                 </div>
@@ -990,7 +990,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
               disabled={present}
               style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
             >
-              Autres projets
+              Autres tâches
             </Button>
 
             <Button
@@ -1030,7 +1030,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
                 e.currentTarget.style.background = punchBtnBg;
               }}
             >
-              {present ? "Dépunch" : "Punch"}
+              {present ? "Arrêt" : "Départ"}
             </Button>
           </div>
         </td>
@@ -1088,7 +1088,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
       <CodeAutresProjetsModal
         open={codeOpen}
         requiredCode={autresProjetsCode}
-        projetNom={pendingOther?.nom || "Autres projets"}
+        projetNom={pendingOther?.nom || "Autres tâches"}
         onConfirm={async () => {
           try {
             if (!pendingOther) return;
@@ -1163,7 +1163,7 @@ export default function PageAccueil() {
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
         <div style={{ display: "flex", flexDirection: "column", gap: 26, marginTop: -10 }}>
-          <Card title="👥 Travailleurs" right={<div style={{ display: "flex", gap: 22, alignItems: "center" }} />}>
+          <Card title="👥 Employé(e)" right={<div style={{ display: "flex", gap: 22, alignItems: "center" }} />}>
             <div style={styles.tableWrap}>
               <table style={styles.table}>
                 <thead>
@@ -1191,7 +1191,7 @@ export default function PageAccueil() {
                   {visibleEmployes.length === 0 && (
                     <tr>
                       <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                        {isAdmin ? "Aucun employé pour l’instant." : "Aucun employé visible (compte non lié ou pas d’employé)."}
+                        {isAdmin ? "Aucun employé(e) pour l’instant." : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
                       </td>
                     </tr>
                   )}
@@ -1225,7 +1225,7 @@ export default function PageAccueil() {
             <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
           </Card>
 
-          <Card title="📁 Autres projets">
+          <Card title="📁 Autres tâches">
             <AutresProjetsSection allowEdit={false} showHeader={false} />
           </Card>
         </div>

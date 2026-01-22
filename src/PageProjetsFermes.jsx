@@ -339,7 +339,7 @@ function InvoiceDocument({
         </View>
 
         {/* Main table */}
-        <Text style={[pdfStyles.sectionTitle, { marginBottom: 6 }]}>Détail de la facture</Text>
+        <Text style={[pdfStyles.sectionTitle, { marginBottom: 6 }]}>Détail du Bon de Travail</Text>
         <View style={[pdfStyles.table, { marginBottom: 10 }]}>
           <View style={pdfStyles.trHead}>
             <Text style={[pdfStyles.th, pdfStyles.cLeft]}>Description</Text>
@@ -644,13 +644,14 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       });
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
-      const toEmail = "jlabrie@styro.ca";
+      const toEmail = ["service@gyrotech.ca", "tlemieux@gyrotech.ca"];
+
 
       await sendInvoiceEmail({
         projetId: projet.id,
         toEmail,
         subject: `Facture Gyrotech – Dossier ${dossierNo} – ${projet.nom || projet.clientNom || projet.id}`,
-        text: "Bonjour, veuillez trouver ci-joint la facture de votre intervention.",
+        text: "Bonjour, veuillez trouver ci-joint le Bon de Travail de votre intervention.",
         pdfPath,
       });
 
@@ -659,7 +660,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         fermeComplet: true,
         fermeCompletAt: serverTimestamp(),
         deleteAt: Timestamp.fromDate(plusDays(new Date(), 60)),
-        factureEnvoyeeA: toEmail,
+        factureEnvoyeeA: toEmail.join(", "),
       });
 
       onClosed?.("full");
@@ -893,7 +894,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
                 {/* ... le reste inchangé (tables + totaux) */}
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Détail de la facture</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Détail du Bon de Travail</div>
 
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 8 }}>
                     <thead>

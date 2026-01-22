@@ -1185,7 +1185,7 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
           onClick={onCreateInvoice}
           style={{ ...btnPrimary, width: "100%", padding: "14px 16px", fontSize: 18, fontWeight: 1000, borderRadius: 16 }}
         >
-          Fermer le BT et créer une facture
+          Fermer le BT et créer le Bon de Travail
         </button>
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
