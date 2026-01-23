@@ -7,6 +7,7 @@
 // ✅ MODIF: Grossit l’écriture
 // ✅ MODIF: Le tableau utilise toute la largeur disponible (pas de largeurs fixes par colonne)
 // ✅ MODIF (demande): ✅ Bouton "Historique" retiré
+// ✅ AJOUT (demande): ✅ Colonne "No dossier" AVANT Client (comme PageListeProjet)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -331,6 +332,9 @@ function LigneProjet({ proj, idx = 0, tick, onOpenMaterial, setError }) {
       onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
       onMouseLeave={(e) => (e.currentTarget.style.background = rowBg)}
     >
+      {/* ✅ No dossier AVANT Client */}
+      <td style={tdCenter}>{proj.dossierNo != null ? proj.dossierNo : "—"}</td>
+
       <td style={tdCenter}>{proj.clientNom || "—"}</td>
       <td style={tdCenter}>{proj.numeroUnite || "—"}</td>
       <td style={tdCenter}>{proj.modele || "—"}</td>
@@ -384,6 +388,9 @@ export default function PageProjets({ onOpenMaterial }) {
         >
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
+              {/* ✅ No dossier AVANT client */}
+              <th style={thCenter}>No dossier</th>
+
               <th style={thCenter}>Client</th>
               <th style={thCenter}>Unité</th>
               <th style={thCenter}>Modèle</th>
@@ -410,7 +417,7 @@ export default function PageProjets({ onOpenMaterial }) {
             {projets.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16, fontWeight: 800 }}
                 >
                   Aucun projet pour l’instant.

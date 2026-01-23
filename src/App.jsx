@@ -172,7 +172,7 @@ export default function App() {
       <BurgerMenu pages={pages} />
 
       {route === "accueil" && <PageAccueil />}
-      {route === "projets" && <PageListeProjet />}
+      {route === "projets" && <PageListeProjet isAdmin={isAdmin} />}
       {route === "materiels" && <PageMateriels />}
       {route === "reglages" && <PageReglages />}
       {route === "reglages-admin" && <PageReglagesAdmin />}

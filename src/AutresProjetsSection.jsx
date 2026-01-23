@@ -1,5 +1,5 @@
 // src/AutresProjetsSection.jsx
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { db } from "./firebaseConfig";
 import {
   collection,
@@ -12,6 +12,7 @@ import {
   getDocs,
   query,
   orderBy,
+  where, // ✅ AJOUT
 } from "firebase/firestore";
 
 /* ---------- Utils dates / temps ---------- */
@@ -82,6 +83,11 @@ function segColAutre(projId, key) {
   return collection(db, "autresProjets", projId, "timecards", key, "segments");
 }
 
+/* ✅ AJOUT: collection segments employé (pour valider si le segment "autre tâche" est encore réellement actif) */
+function empSegCol(empId, key) {
+  return collection(db, "employes", empId, "timecards", key, "segments");
+}
+
 function computeTotalMs(sessions) {
   const now = Date.now();
   return sessions.reduce((acc, s) => {
@@ -100,11 +106,22 @@ function computeTotalMs(sessions) {
   }, 0);
 }
 
+/* ✅ AJOUT: check si un employé est encore punché sur other:<otherId> */
+async function empHasOpenJob(empId, key, jobId) {
+  const qOpen = query(
+    empSegCol(empId, key),
+    where("end", "==", null),
+    where("jobId", "==", jobId)
+  );
+  const snap = await getDocs(qOpen);
+  return !snap.empty;
+}
+
 function useSessionsAutre(projId, key, setError) {
   const [list, setList] = useState([]);
   const [tick, setTick] = useState(0);
 
-  // rafraîchir les sessions aux 15s pour avoir les durées live
+  // rafraîchir les durées (UI) aux 15s, SANS re-souscrire au snapshot
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 15000);
     return () => clearInterval(t);
@@ -117,22 +134,68 @@ function useSessionsAutre(projId, key, setError) {
       qSeg,
       (snap) => {
         const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() })); // ✅ garde la ref pour auto-close
         setList(rows);
       },
       (err) => setError?.(err?.message || String(err))
     );
     return () => unsub();
-  }, [projId, key, setError, tick]);
+  }, [projId, key, setError]);
+
+  // tick utilisé juste pour forcer recalcul des mémos plus bas si nécessaire
+  void tick;
 
   return list;
 }
 
+/* ✅ FIX: statut "En cours" qui reste stuck
+   -> si un segment ouvert existe dans autresProjets mais que l’employé n’a PAS un segment employé ouvert
+      avec jobId = other:<id>, on auto-close ce segment (end + autoClosed*)
+*/
 function usePresenceTodayAutre(projId, setError) {
   const key = todayKey();
   const sessions = useSessionsAutre(projId, key, setError);
+
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
   const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
+
+  const guardRef = useRef(0);
+
+  useEffect(() => {
+    if (!projId) return;
+
+    const openSegs = (sessions || []).filter((s) => !s.end);
+    if (openSegs.length === 0) return;
+
+    // ✅ anti-spam: max 1 fois / 60s par projet
+    const nowMs = Date.now();
+    if (nowMs - guardRef.current < 60000) return;
+    guardRef.current = nowMs;
+
+    (async () => {
+      const jobId = `other:${projId}`;
+
+      for (const seg of openSegs) {
+        const empId = seg.empId || null;
+        const segRef = seg._ref || null;
+        if (!empId || !segRef) continue;
+
+        // si l'employé n'est plus punché sur cette "autre tâche", on ferme le segment "autre tâche"
+        const still = await empHasOpenJob(empId, key, jobId);
+        if (!still) {
+          const now = new Date();
+          await updateDoc(segRef, {
+            end: now,
+            updatedAt: now,
+            autoClosed: true,
+            autoClosedAt: now,
+            autoClosedReason: "orphan_other_segment",
+          });
+        }
+      }
+    })().catch((e) => setError?.(e?.message || String(e)));
+  }, [projId, key, sessions, setError]);
+
   return { key, sessions, totalMs, hasOpen };
 }
 
@@ -492,62 +555,8 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
     })();
   }, [open, projet?.id, histReload]);
 
-  const onDeleteHistRow = async (row) => {
-    if (!projet?.id) return;
-    const labelEmp = row.empName || "cet employé";
-    const ok = window.confirm(
-      `Supprimer toutes les entrées du ${row.date} pour ${labelEmp} ?`
-    );
-    if (!ok) return;
-
-    setHistLoading(true);
-    setError(null);
-    try {
-      const segSnap = await getDocs(
-        collection(
-          db,
-          "autresProjets",
-          projet.id,
-          "timecards",
-          row.date,
-          "segments"
-        )
-      );
-      const deletions = [];
-      segSnap.forEach((sdoc) => {
-        const s = sdoc.data();
-        const match = row.empId
-          ? s.empId === row.empId
-          : (s.empName || "—") === (row.empName || "—");
-        if (match) {
-          deletions.push(
-            deleteDoc(
-              doc(
-                db,
-                "autresProjets",
-                projet.id,
-                "timecards",
-                row.date,
-                "segments",
-                sdoc.id
-              )
-            )
-          );
-        }
-      });
-      await Promise.all(deletions);
-      setHistReload((x) => x + 1);
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    } finally {
-      setHistLoading(false);
-    }
-  };
-
   if (!open || !projet) return null;
 
-  // (Historique modal inchangé — tu peux aussi le compacter si tu veux)
   const th = {
     textAlign: "left",
     padding: 8,
@@ -585,7 +594,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           fontSize: 13,
         }}
       >
-        {/* Header */}
         <div
           style={{
             display: "flex",
@@ -617,7 +625,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
 
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        {/* Infos projet */}
         <div
           style={{
             display: "flex",
@@ -649,7 +656,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           </div>
         </div>
 
-        {/* Résumé */}
         <div style={{ fontWeight: 800, margin: "2px 0 6px", fontSize: 11 }}>
           Résumé
         </div>
@@ -665,7 +671,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           <CardKV k="Total d'heures compilées" v={fmtHM(totalMsAll)} />
         </div>
 
-        {/* Historique */}
         <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>
           Historique — tout
         </div>
@@ -699,8 +704,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
                   <td style={td}>{fmtDate(r.date)}</td>
                   <td style={td}>{fmtHM(r.totalMs)}</td>
                   <td style={td}>{r.empName || "—"}</td>
-                  <td style={td}>
-                  </td>
+                  <td style={td}></td>
                 </tr>
               ))}
             {!histLoading && histRows.length === 0 && (
@@ -743,15 +747,12 @@ function RowAutreProjet({
       onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
       onMouseLeave={(e) => (e.currentTarget.style.background = rowBg)}
     >
-      {/* Nom ✅ gauche complètement */}
       <td style={tdLeft}>{p.nom || "—"}</td>
 
-      {/* Statut */}
       <td style={tdCenter}>
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
-      {/* Actions alignées complètement à droite */}
       <td style={{ ...tdCenter, textAlign: "right", paddingRight: 80 }}>
         <div
           style={{
@@ -854,7 +855,6 @@ export default function AutresProjetsSection({
     <div style={{ marginTop: 24 }}>
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      {/* En-tête + bouton créer (optionnel) */}
       {showHeader && (
         <div
           style={{
@@ -883,13 +883,12 @@ export default function AutresProjetsSection({
         </div>
       )}
 
-      {/* Tableau ✅ arrondis coins comme PageProjets (wrapper + overflow hidden) */}
       <div style={{ overflowX: "auto" }}>
         <div
           style={{
             border: "1px solid #eee",
             borderRadius: 12,
-            overflow: "hidden", // ✅ coupe les coins du header + lignes
+            overflow: "hidden",
             background: "#fff",
           }}
         >
@@ -904,7 +903,15 @@ export default function AutresProjetsSection({
               <tr style={{ background: "#e5e7eb" }}>
                 <th style={thLeft}>Nom</th>
                 <th style={thCenter}>Statut</th>
-                <th style={{ ...thCenter, textAlign: "right", paddingRight: 100 }}>Actions</th>
+                <th
+                  style={{
+                    ...thCenter,
+                    textAlign: "right",
+                    paddingRight: 100,
+                  }}
+                >
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -932,7 +939,6 @@ export default function AutresProjetsSection({
         </div>
       </div>
 
-      {/* Popup créer/renommer */}
       <PopupNomAutreProjet
         open={popupOpen}
         onClose={() => setPopupOpen(false)}
@@ -942,7 +948,6 @@ export default function AutresProjetsSection({
         currentName={editDoc?.nom || ""}
       />
 
-      {/* Popup détails / historique */}
       <PopupDetailsAutreProjet
         open={detailsOpen}
         onClose={() => setDetailsOpen(false)}

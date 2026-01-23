@@ -1,3 +1,4 @@
+// src/PageListeProjet.jsx
 // src/PageListeProjet.jsx — Liste + Détails jam-packed + Matériel (panel inline simplifié)
 // ✅ FIX: Total d'heures compilées en temps réel (segments open => tick + listeners)
 // ✅ AJOUT: No de dossier auto (5000, 5001, ...) + Temps estimé (heures) dans le formulaire création
@@ -40,6 +41,14 @@
 // ✅ MODIF (2026-01-22):
 // - Popup "Créer un nouveau projet" un mini peu plus compact en hauteur (moins collé haut/bas)
 // - Inputs/select/buttons légèrement plus bas + scroll propre
+//
+// ✅ MODIF (2026-01-22):
+// - ✅ DEMANDE: No de dossier dans le tableau en avant de Client
+//
+// ✅ AJOUT (2026-01-22):
+// - Champ "Note" (texte libre) dans Nouveau Projet (en bas)
+// - La note n'apparaît PAS dans le tableau
+// - La note apparaît dans Détails, sous les boutons à droite
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -60,38 +69,14 @@ import {
   getDoc,
   setDoc,
 } from "firebase/firestore";
-import {
-  ref as storageRef,
-  uploadBytes,
-  getDownloadURL,
-  listAll,
-  deleteObject,
-} from "firebase/storage";
+import { ref as storageRef, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
 
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
-import {
-  useAnnees,
-  useMarques,
-  useModeles,
-  useMarqueIdFromName,
-} from "./refData";
+import { useAnnees, useMarques, useModeles, useMarqueIdFromName, useClients } from "./refData";
 import { CloseProjectWizard } from "./PageProjetsFermes";
 
 /* ---------------------- Utils ---------------------- */
-const MONTHS_FR_ABBR = [
-  "janv",
-  "févr",
-  "mars",
-  "avr",
-  "mai",
-  "juin",
-  "juil",
-  "août",
-  "sept",
-  "oct",
-  "nov",
-  "déc",
-];
+const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -145,17 +130,13 @@ function fmtHM(ms) {
 
 /* ---------------------- ✅ Dossier auto (5000, 5001, ...) ---------------------- */
 async function getNextDossierNo() {
-  const qMax = query(
-    collection(db, "projets"),
-    orderBy("dossierNo", "desc"),
-    limit(1)
-  );
+  const qMax = query(collection(db, "projets"), orderBy("dossierNo", "desc"), limit(1));
   const snap = await getDocs(qMax);
-  if (snap.empty) return 5000;
+  if (snap.empty) return 6500;
 
   const last = snap.docs[0].data();
   const lastNo = Number(last?.dossierNo);
-  if (!Number.isFinite(lastNo) || lastNo < 5000) return 5000;
+  if (!Number.isFinite(lastNo) || lastNo < 6500) return 6500;
   return lastNo + 1;
 }
 
@@ -169,11 +150,7 @@ async function getEmpFromAuth() {
 
   try {
     if (uid) {
-      const q1 = query(
-        collection(db, "employes"),
-        where("uid", "==", uid),
-        limit(1)
-      );
+      const q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
       const s1 = await getDocs(q1);
       if (!s1.empty) {
         const d = s1.docs[0];
@@ -185,11 +162,7 @@ async function getEmpFromAuth() {
 
   try {
     if (email) {
-      const q2 = query(
-        collection(db, "employes"),
-        where("email", "==", email),
-        limit(1)
-      );
+      const q2 = query(collection(db, "employes"), where("email", "==", email), limit(1));
       const s2 = await getDocs(q2);
       if (!s2.empty) {
         const d = s2.docs[0];
@@ -285,9 +258,7 @@ async function openProjSeg(projId, empId, empName, key, startDate) {
 
 /* ---------------------- ✅ DEPUNCH travailleurs (fermeture projet) ---------------------- */
 function parseEmpAndDayFromSegPath(path) {
-  const m = String(path || "").match(
-    /^employes\/([^/]+)\/timecards\/([^/]+)\/segments\/[^/]+$/
-  );
+  const m = String(path || "").match(/^employes\/([^/]+)\/timecards\/([^/]+)\/segments\/[^/]+$/);
   if (!m) return null;
   return { empId: m[1], key: m[2] };
 }
@@ -304,15 +275,10 @@ async function depunchWorkersOnProject(projId) {
 
     for (const key of dayIds) {
       const segsOpenSnap = await getDocs(
-        query(
-          collection(db, "projets", projId, "timecards", key, "segments"),
-          where("end", "==", null)
-        )
+        query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null))
       );
       const tasks = [];
-      segsOpenSnap.forEach((sdoc) =>
-        tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now }))
-      );
+      segsOpenSnap.forEach((sdoc) => tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now })));
       if (tasks.length) await Promise.all(tasks);
     }
   } catch (e) {
@@ -321,10 +287,7 @@ async function depunchWorkersOnProject(projId) {
 
   // 2) Trouver les segments côté EMPLOYÉS (jobId = proj:{projId}) et dépunch "définitif"
   try {
-    const cg = query(
-      collectionGroup(db, "segments"),
-      where("jobId", "==", `proj:${projId}`)
-    );
+    const cg = query(collectionGroup(db, "segments"), where("jobId", "==", `proj:${projId}`));
     const snap = await getDocs(cg);
 
     const pairs = new Map();
@@ -339,13 +302,9 @@ async function depunchWorkersOnProject(projId) {
     for (const { empId, key } of pairs.values()) {
       // a) fermer tous les segments ouverts de l'employé sur cette journée
       try {
-        const openSnap = await getDocs(
-          query(empSegCol(empId, key), where("end", "==", null))
-        );
+        const openSnap = await getDocs(query(empSegCol(empId, key), where("end", "==", null)));
         const tasks = [];
-        openSnap.forEach((sd) =>
-          tasks.push(updateDoc(sd.ref, { end: now, updatedAt: now }))
-        );
+        openSnap.forEach((sd) => tasks.push(updateDoc(sd.ref, { end: now, updatedAt: now })));
         if (tasks.length) await Promise.all(tasks);
       } catch (e) {
         console.error("depunch employee open segs error", empId, key, e);
@@ -387,9 +346,7 @@ async function deleteProjectDeep(projId) {
   await depunchWorkersOnProject(projId);
 
   try {
-    const usagesSnap = await getDocs(
-      collection(db, "projets", projId, "usagesMateriels")
-    );
+    const usagesSnap = await getDocs(collection(db, "projets", projId, "usagesMateriels"));
     const del = [];
     usagesSnap.forEach((d) => del.push(deleteDoc(d.ref)));
     if (del.length) await Promise.all(del);
@@ -426,9 +383,7 @@ async function deleteProjectDeep(projId) {
 
     for (const key of dayIds) {
       try {
-        const segSnap = await getDocs(
-          collection(db, "projets", projId, "timecards", key, "segments")
-        );
+        const segSnap = await getDocs(collection(db, "projets", projId, "timecards", key, "segments"));
         const segDel = [];
         segSnap.forEach((d) => segDel.push(deleteDoc(d.ref)));
         if (segDel.length) await Promise.all(segDel);
@@ -581,9 +536,7 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
         let sumAllMs = 0;
 
         for (const key of days) {
-          const segSnap = await getDocs(
-            collection(db, "projets", projet.id, "timecards", key, "segments")
-          );
+          const segSnap = await getDocs(collection(db, "projets", projet.id, "timecards", key, "segments"));
 
           segSnap.forEach((sdoc) => {
             const s = sdoc.data() || {};
@@ -869,6 +822,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
           >
             <thead>
               <tr style={{ background: "#f6f7f8" }}>
+                <th style={th}>No dossier</th>
                 <th style={th}>Client</th>
                 <th style={th}>Unité</th>
                 <th style={th}>Date fermeture</th>
@@ -879,7 +833,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 12, color: "#666", fontSize: 18 }}>
+                  <td colSpan={6} style={{ padding: 12, color: "#666", fontSize: 18 }}>
                     Chargement…
                   </td>
                 </tr>
@@ -887,6 +841,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
               {!loading &&
                 rows.map((p) => (
                   <tr key={p.id}>
+                    <td style={tdRow}>{p.dossierNo != null ? p.dossierNo : "—"}</td>
                     <td style={tdRow}>{p.clientNom || p.nom || "—"}</td>
                     <td style={tdRow}>{p.numeroUnite || "—"}</td>
                     <td style={tdRow}>{fmtDate(p.fermeCompletAt)}</td>
@@ -905,7 +860,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
                 ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 12, color: "#666", fontSize: 18 }}>
+                  <td colSpan={6} style={{ padding: 12, color: "#666", fontSize: 18 }}>
                     Aucun projet fermé récemment.
                   </td>
                 </tr>
@@ -1124,7 +1079,7 @@ function PopupPDFManager({ open, onClose, projet }) {
 }
 
 /* ---------------------- Popup fermeture BT ---------------------- */
-function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject }) {
+function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject, isAdmin = false }) {
   if (!open || !projet) return null;
 
   const title = projet.clientNom || projet.nom || "—";
@@ -1160,14 +1115,20 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>Fermer le BT</div>
-          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}>
+          <button
+            onClick={onClose}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
             ×
           </button>
         </div>
 
         <div style={{ fontSize: 18, color: "#111827", marginBottom: 12 }}>
           <div style={{ fontWeight: 1000 }}>{title}</div>
-          <div style={{ color: "#6b7280" }}>Unité: {unite} • Modèle: {modele}</div>
+          <div style={{ color: "#6b7280" }}>
+            Unité: {unite} • Modèle: {modele}
+          </div>
         </div>
 
         <div
@@ -1197,14 +1158,15 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
             Annuler
           </button>
 
-          <button
-            type="button"
-            onClick={onDeleteProject}
-            style={{ ...btnTinyDanger, padding: "10px 12px", borderRadius: 12, fontSize: 14, fontWeight: 1000 }}
-            title="Supprimer le projet définitivement"
-          >
-            Supprimer sans sauvegarder
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={onDeleteProject}
+              style={{ ...btnTinyDanger, padding: "10px 12px", borderRadius: 12, fontSize: 14, fontWeight: 1000 }}
+            >
+              Supprimer sans sauvegarder
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1212,19 +1174,11 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
 }
 
 /* ---------------------- Popup Détails ---------------------- */
-function PopupDetailsProjetSimple({
-  open,
-  projet,
-  onClose,
-  onEdit,
-  onOpenPDF,
-  onOpenMateriel,
-  onCloseBT,
-  onOpenHistorique,
-}) {
+function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, onOpenMateriel, onCloseBT, onOpenHistorique }) {
   if (!open || !projet) return null;
 
   const title = projet.clientNom || projet.nom || "—";
+  const noteText = (projet.note ?? "").toString();
 
   return (
     <div
@@ -1255,7 +1209,11 @@ function PopupDetailsProjetSimple({
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>Détails – {title}</div>
-          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}>
+          <button
+            onClick={onClose}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}
+          >
             ×
           </button>
         </div>
@@ -1264,6 +1222,9 @@ function PopupDetailsProjetSimple({
           <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
             <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Infos</div>
 
+            <div style={{ marginBottom: 6 }}>
+              <strong>No dossier:</strong> {projet.dossierNo != null ? projet.dossierNo : "—"}
+            </div>
             <div style={{ marginBottom: 6 }}>
               <strong>Client:</strong> {projet.clientNom || "—"}
             </div>
@@ -1298,6 +1259,7 @@ function PopupDetailsProjetSimple({
 
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
             <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Actions</div>
+
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button onClick={onEdit} style={btnSecondary}>
                 Modifier
@@ -1319,6 +1281,27 @@ function PopupDetailsProjetSimple({
                 Fermer le BT
               </button>
             </div>
+
+            {/* ✅ NOTE sous les boutons à droite */}
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #e5e7eb" }}>
+              <div style={{ fontWeight: 1000, marginBottom: 6, fontSize: 18 }}>Note</div>
+              <div
+                style={{
+                  background: "#f8fafc",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 12,
+                  padding: 10,
+                  minHeight: 54,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  color: noteText.trim() ? "#111827" : "#6b7280",
+                  fontWeight: 800,
+                  fontSize: 16,
+                }}
+              >
+                {noteText.trim() ? noteText : "—"}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1333,7 +1316,7 @@ function PopupDetailsProjetSimple({
 }
 
 /* ---------------------- Ligne ---------------------- */
-function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT, onOpenHistorique }) {
+function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT }) {
   const zebraBg = index % 2 === 1 ? "#f3f4f6" : "transparent";
   const cell = (content) => <td style={tdRow}>{content}</td>;
 
@@ -1344,6 +1327,9 @@ function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onClose
       onMouseLeave={(e) => (e.currentTarget.style.background = zebraBg)}
       style={{ cursor: "pointer", transition: "background 120ms ease", background: zebraBg }}
     >
+      {/* ✅ No de dossier AVANT client */}
+      {cell(p.dossierNo != null ? p.dossierNo : "—")}
+
       {cell(p.clientNom || p.nom || "—")}
       {cell(p.numeroUnite || "—")}
       {cell(p.modele || "—")}
@@ -1379,26 +1365,7 @@ function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onClose
             Matériel
           </button>
 
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenHistorique?.(p);
-            }}
-            style={btnSecondary}
-            title="Voir les heures compilées (historique)"
-          >
-            Historique
-          </button>
-
-          <PDFButton
-            count={p.pdfCount}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenPDF?.(p);
-            }}
-            style={btnPDF}
-            title="PDF du projet"
-          >
+          <PDFButton count={p.pdfCount} onClick={(e) => { e.stopPropagation(); onOpenPDF?.(p); }} style={btnPDF} title="PDF du projet">
             PDF
           </PDFButton>
 
@@ -1422,6 +1389,7 @@ function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onClose
 function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = null, onSaved }) {
   const annees = useAnnees();
   const marques = useMarques();
+  const clients = useClients();
 
   const [clientNom, setClientNom] = useState("");
   const [clientTelephone, setClientTelephone] = useState("");
@@ -1433,6 +1401,9 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const [plaque, setPlaque] = useState("");
   const [odometre, setOdometre] = useState("");
   const [vin, setVin] = useState("");
+
+  // ✅ AJOUT: Note
+  const [note, setNote] = useState("");
 
   const [tempsEstimeHeures, setTempsEstimeHeures] = useState("");
   const [nextDossierNo, setNextDossierNo] = useState(null);
@@ -1458,6 +1429,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       setOdometre(projet.odometre != null ? String(projet.odometre) : "");
       setVin(projet.vin ?? "");
       setTempsEstimeHeures(projet.tempsEstimeHeures != null ? String(projet.tempsEstimeHeures) : "");
+      setNote(projet.note ?? "");
       setNextDossierNo(null);
       createStartMsRef.current = null;
     } else {
@@ -1471,6 +1443,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       setOdometre("");
       setVin("");
       setTempsEstimeHeures("");
+      setNote("");
       setNextDossierNo(null);
 
       let startMs = Date.now();
@@ -1519,6 +1492,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       setOdometre(draft.odometre ?? "");
       setVin(draft.vin ?? "");
       setTempsEstimeHeures(draft.tempsEstimeHeures ?? "");
+      setNote(draft.note ?? "");
 
       window.sessionStorage?.removeItem("draftProjetFromReglages");
       window.sessionStorage?.removeItem("draftProjetOpen");
@@ -1530,13 +1504,15 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   // ✅ Compact: réduit la hauteur des champs (sans changer le look global)
   const POP_COMPACT = true;
 
-  const inputC = POP_COMPACT
-    ? { ...input, padding: "8px 10px", fontSize: 16, borderRadius: 10, fontWeight: 900 }
-    : input;
+  const inputC = POP_COMPACT ? { ...input, padding: "8px 10px", fontSize: 16, borderRadius: 10, fontWeight: 900 } : input;
 
   const selectC = POP_COMPACT
     ? { ...select, padding: "8px 10px", paddingRight: 34, fontSize: 16, borderRadius: 10, fontWeight: 900 }
     : select;
+
+  const textareaC = POP_COMPACT
+    ? { ...input, padding: "8px 10px", fontSize: 16, borderRadius: 10, fontWeight: 800, minHeight: 80, resize: "vertical" }
+    : { ...input, fontWeight: 800, minHeight: 90, resize: "vertical" };
 
   const btnPrimaryC = POP_COMPACT ? { ...btnPrimary, padding: "9px 14px", fontSize: 15, borderRadius: 12 } : btnPrimary;
   const btnGhostC = POP_COMPACT ? { ...btnGhost, padding: "9px 12px", fontSize: 15, borderRadius: 12 } : btnGhost;
@@ -1554,8 +1530,9 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       const cleanMarque = marque.trim() || null;
       const cleanModele = modele.trim() || null;
       const cleanPlaque = plaque.trim().toUpperCase();
-      const cleanOdo = odometre.trim();
+      const cleanOdo = odometre.trim(); // ✅ accepte chiffres + lettres
       const cleanVin = vin.trim().toUpperCase();
+      const cleanNote = note.trim();
 
       if (!cleanClientNom) return setMsg("Indique le nom du client/entreprise.");
       if (!cleanClientTel) return setMsg("Indique le téléphone du client.");
@@ -1564,11 +1541,10 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       if (!cleanMarque) return setMsg("Sélectionne une marque.");
       if (!cleanModele) return setMsg("Sélectionne un modèle.");
       if (!cleanPlaque) return setMsg("Indique une plaque.");
-      if (!cleanOdo) return setMsg("Indique un odomètre.");
+      if (!cleanOdo) return setMsg("Indique un odomètre / Heures.");
       if (!cleanVin) return setMsg("Indique un VIN.");
 
       if (!cleanAnnee || !/^\d{4}$/.test(String(cleanAnnee))) return setMsg("Année invalide (format AAAA).");
-      if (isNaN(Number(cleanOdo))) return setMsg("Odomètre doit être un nombre.");
 
       let teVal = null;
       if (mode === "create") {
@@ -1590,8 +1566,11 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         marque: cleanMarque,
         modele: cleanModele,
         plaque: cleanPlaque,
-        odometre: Number(cleanOdo),
+        odometre: cleanOdo,
         vin: cleanVin,
+
+        // ✅ NOTE
+        note: cleanNote ? cleanNote : null,
       };
 
       if (mode === "edit" && projet?.id) {
@@ -1615,11 +1594,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         const dossierNo = await getNextDossierNo();
         const createdAtNow = serverTimestamp();
 
-        const payloadCreate = {
-          ...payloadBase,
-          tempsEstimeHeures: teVal,
-          pdfCount: 0,
-        };
+        const payloadCreate = { ...payloadBase, tempsEstimeHeures: teVal, pdfCount: 0 };
 
         const docRef = await addDoc(collection(db, "projets"), {
           ...payloadCreate,
@@ -1677,7 +1652,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const goReglages = () => {
     if (mode === "create") {
       try {
-        const draft = { clientNom, clientTelephone, numeroUnite, annee, marque, modele, plaque, odometre, vin, tempsEstimeHeures };
+        const draft = { clientNom, clientTelephone, numeroUnite, annee, marque, modele, plaque, odometre, vin, tempsEstimeHeures, note };
         window.sessionStorage?.setItem("draftProjetFromReglages", JSON.stringify(draft));
         window.sessionStorage?.setItem("draftProjetOpen", "1");
       } catch (e) {
@@ -1710,11 +1685,11 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
-          width: "min(700px, 96vw)", // ✅ un mini peu plus petit
-          maxHeight: "90vh",         // ✅ garde le popup compact
-          overflow: "auto",          // ✅ scroll propre si ça dépasse
+          width: "min(700px, 96vw)",
+          maxHeight: "90vh",
+          overflow: "auto",
           borderRadius: 18,
-          padding: 16,               // ✅ un peu moins de padding
+          padding: 16,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
         }}
       >
@@ -1733,21 +1708,57 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         </div>
 
         {msg && (
-          <div style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "8px 10px", borderRadius: 12, marginBottom: 10, fontSize: 16, fontWeight: 900 }}>
+          <div
+            style={{
+              color: "#b45309",
+              background: "#fffbeb",
+              border: "1px solid #fde68a",
+              padding: "8px 10px",
+              borderRadius: 12,
+              marginBottom: 10,
+              fontSize: 16,
+              fontWeight: 900,
+            }}
+          >
             {msg}
           </div>
         )}
 
         {mode === "create" && (
-          <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 14, border: "1px solid #e5e7eb", background: "#f8fafc", fontSize: 16, color: "#111827", fontWeight: 900 }}>
+          <div
+            style={{
+              marginBottom: 10,
+              padding: "8px 10px",
+              borderRadius: 14,
+              border: "1px solid #e5e7eb",
+              background: "#f8fafc",
+              fontSize: 16,
+              color: "#111827",
+              fontWeight: 900,
+            }}
+          >
             <strong>No de dossier :</strong> {nextDossierNo != null ? nextDossierNo : "…"}
           </div>
         )}
 
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <FieldV label="Nom du client / Entreprise" compact>
-            <input value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={inputC} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <select value={clientNom} onChange={(e) => setClientNom(e.target.value)} style={selectC}>
+                <option value="">—</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+
+              <button type="button" onClick={goReglages} style={btnSecondarySmallC} title="Gérer les clients">
+                Réglages
+              </button>
+            </div>
           </FieldV>
+
 
           <FieldV label="Téléphone du client" compact>
             <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={inputC} />
@@ -1759,9 +1770,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
 
           {mode === "edit" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ fontSize: 15, color: "#111827", fontWeight: 1000, lineHeight: 1.1 }}>
-                Temps estimé (heures)
-              </label>
+              <label style={{ fontSize: 15, color: "#111827", fontWeight: 1000, lineHeight: 1.1 }}>Temps estimé (heures)</label>
               <div style={{ ...inputC, background: "#f3f4f6", borderColor: "#e5e7eb", color: "#111827", fontWeight: 1000 }}>
                 {projet?.tempsEstimeHeures != null ? `${fmtHours(projet.tempsEstimeHeures)} h` : "—"}
               </div>
@@ -1826,12 +1835,17 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
             <input value={plaque} onChange={(e) => setPlaque(e.target.value.toUpperCase())} style={inputC} />
           </FieldV>
 
-          <FieldV label="Odomètre" compact>
-            <input value={odometre} onChange={(e) => setOdometre(e.target.value)} inputMode="numeric" style={inputC} />
+          <FieldV label="Odomètre / Heures" compact>
+            <input value={odometre} onChange={(e) => setOdometre(e.target.value)} style={inputC} />
           </FieldV>
 
           <FieldV label="VIN" compact>
             <input value={vin} onChange={(e) => setVin(e.target.value.toUpperCase())} style={inputC} />
+          </FieldV>
+
+          {/* ✅ NOTE en bas */}
+          <FieldV label="Note" compact>
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Écris une note (optionnel)" style={textareaC} />
           </FieldV>
 
           <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
@@ -1855,15 +1869,9 @@ function useIpadShrink() {
     const compute = () => {
       const ua = navigator.userAgent || "";
       const isIpadClassic = /iPad/.test(ua);
-
-      // iPadOS 13+ peut afficher "Macintosh" dans le UA
       const isIpadOS = /Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1;
-
-      // On force shrink seulement si appareil tactile type iPad/tablette
-      // (largeur <= 1400 pour couvrir iPad paysage + mode desktop)
       const w = window.innerWidth || 0;
       const looksLikeTablet = w <= 1400;
-
       setOn((isIpadClassic || isIpadOS) && looksLikeTablet);
     };
 
@@ -1880,7 +1888,7 @@ function useIpadShrink() {
 }
 
 /* ---------------------- Page ---------------------- */
-export default function PageListeProjet() {
+export default function PageListeProjet({ isAdmin = false }) {
   const [error, setError] = useState(null);
   const projets = useProjets(setError);
   const ipadShrink = useIpadShrink();
@@ -1942,11 +1950,18 @@ export default function PageListeProjet() {
   };
 
   const handleDeleteWithoutSave = async (proj) => {
+    if (!isAdmin) {
+      setError("Action réservée aux administrateurs.");
+      return;
+    }
     if (!proj?.id) return;
+
     const ok = window.confirm("Supprimer ce projet définitivement ?");
+
     if (!ok) return;
 
     try {
+      // fermer les popups ouverts liés à ce projet
       setCloseBT({ open: false, projet: null });
       if (details?.projet?.id === proj.id) closeDetails();
       if (pdfMgr?.projet?.id === proj.id) closePDF();
@@ -2004,7 +2019,7 @@ export default function PageListeProjet() {
       {/* ✅ Responsive iPad/tablette (sans toucher au PC) */}
       <ResponsiveStyles />
 
-      {!anyModalOpen && <ErrorBanner error={error} onClose={() => setError(null)} />}
+      <ErrorBanner error={error} onClose={() => setError(null)} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", marginBottom: 12, gap: 10 }}>
         <div />
@@ -2024,6 +2039,8 @@ export default function PageListeProjet() {
         >
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
+              {/* ✅ No de dossier AVANT client */}
+              <th style={th}>No dossier</th>
               <th style={th}>Client</th>
               <th style={th}>Unité</th>
               <th style={th}>Modèle</th>
@@ -2052,7 +2069,7 @@ export default function PageListeProjet() {
             ))}
             {projets.length === 0 && (
               <tr>
-                <td colSpan={11} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 18 }}>
+                <td colSpan={12} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 18 }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>
@@ -2125,6 +2142,7 @@ export default function PageListeProjet() {
           handleCreateInvoiceAndClose(proj);
         }}
         onDeleteProject={() => handleDeleteWithoutSave(closeBT.projet)}
+        isAdmin={isAdmin}
       />
 
       <CloseProjectWizard

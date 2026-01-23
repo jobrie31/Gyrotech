@@ -1,4 +1,4 @@
-// src/PageReglages.jsx — Réglages USER (Années / Marques / Modèles)
+// src/PageReglages.jsx — Réglages USER (Années / Marques / Modèles / Clients)
 // Visible pour tous (admin & non-admin). Le reste est dans PageReglagesAdmin.jsx
 
 import React, { useMemo, useState, useEffect } from "react";
@@ -12,6 +12,11 @@ import {
   deleteMarque,
   addModele,
   deleteModele,
+
+  // ✅ AJOUT
+  useClients,
+  addClient,
+  deleteClient,
 } from "./refData";
 import { auth } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
@@ -20,10 +25,16 @@ export default function PageReglages() {
   const annees = useAnnees();
   const marques = useMarques();
 
+  // ✅ AJOUT
+  const clients = useClients();
+
   const [anneeInput, setAnneeInput] = useState("");
   const [marqueInput, setMarqueInput] = useState("");
   const [modeleInput, setModeleInput] = useState("");
   const [selectedMarqueId, setSelectedMarqueId] = useState(null);
+
+  // ✅ AJOUT
+  const [clientInput, setClientInput] = useState("");
 
   const modeles = useModeles(selectedMarqueId);
 
@@ -35,6 +46,15 @@ export default function PageReglages() {
   const anneesAsc = useMemo(
     () => [...annees].sort((a, b) => (a?.value ?? 0) - (b?.value ?? 0)),
     [annees]
+  );
+
+  // ✅ AJOUT
+  const clientsAsc = useMemo(
+    () =>
+      [...clients].sort((a, b) =>
+        (a?.name || "").localeCompare(b?.name || "", "fr-CA")
+      ),
+    [clients]
   );
 
   // Badge connecté + draft projet
@@ -80,7 +100,8 @@ export default function PageReglages() {
     }
   };
   const onDelMarque = async (id) => {
-    if (!window.confirm("Supprimer cette marque ? (les modèles doivent être vides)")) return;
+    if (!window.confirm("Supprimer cette marque ? (les modèles doivent être vides)"))
+      return;
     try {
       await deleteMarque(id);
       if (selectedMarqueId === id) setSelectedMarqueId(null);
@@ -106,6 +127,24 @@ export default function PageReglages() {
     }
   };
 
+  // ✅ AJOUT — Clients
+  const onAddClient = async () => {
+    try {
+      await addClient(clientInput);
+      setClientInput("");
+    } catch (e) {
+      alert(e?.message || String(e));
+    }
+  };
+  const onDelClient = async (id, name) => {
+    if (!window.confirm(`Supprimer ce client : "${name}" ?`)) return;
+    try {
+      await deleteClient(id);
+    } catch (e) {
+      alert(e?.message || String(e));
+    }
+  };
+
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       <div
@@ -113,7 +152,7 @@ export default function PageReglages() {
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 8,
+          gap: 10,
           marginBottom: 16,
         }}
       >
@@ -135,7 +174,7 @@ export default function PageReglages() {
             onClick={() => {
               window.location.hash = "#/projets";
             }}
-            style={btnSecondary}
+            style={btnBackBig}
           >
             ⬅️ Retour au projet en cours
           </button>
@@ -145,6 +184,37 @@ export default function PageReglages() {
           Connecté: <strong>{authUser?.email || "—"}</strong>
         </div>
       </div>
+
+      {/* ✅ CLIENTS */}
+      <section style={section}>
+        <h3 style={h3}>Clients</h3>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <input
+            value={clientInput}
+            onChange={(e) => setClientInput(e.target.value)}
+            placeholder="Ex.: Garage ABC inc."
+            style={input}
+          />
+          <button onClick={onAddClient} style={btnPrimary}>
+            Ajouter
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {clientsAsc.map((c) => (
+            <div key={c.id} style={chip}>
+              <strong>{c.name}</strong>
+              <button
+                onClick={() => onDelClient(c.id, c.name)}
+                style={btnChipDanger}
+                title="Supprimer"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {clientsAsc.length === 0 && <div style={{ color: "#666" }}>Aucun client.</div>}
+        </div>
+      </section>
 
       {/* ANNEES */}
       <section style={section}>
@@ -205,7 +275,11 @@ export default function PageReglages() {
               >
                 {m.name}
               </button>
-              <button onClick={() => onDelMarque(m.id)} style={btnChipDanger} title="Supprimer marque">
+              <button
+                onClick={() => onDelMarque(m.id)}
+                style={btnChipDanger}
+                title="Supprimer marque"
+              >
                 ×
               </button>
             </div>
@@ -236,7 +310,11 @@ export default function PageReglages() {
               {modeles.map((mo) => (
                 <div key={mo.id} style={chip}>
                   <span>{mo.name}</span>
-                  <button onClick={() => onDelModele(mo.id)} style={btnChipDanger} title="Supprimer modèle">
+                  <button
+                    onClick={() => onDelModele(mo.id)}
+                    style={btnChipDanger}
+                    title="Supprimer modèle"
+                  >
                     ×
                   </button>
                 </div>
@@ -258,7 +336,9 @@ const section = {
   marginBottom: 16,
   background: "#fff",
 };
+
 const h3 = { margin: "0 0 10px 0" };
+
 const input = {
   width: 240,
   padding: "8px 10px",
@@ -266,6 +346,7 @@ const input = {
   borderRadius: 8,
   background: "#fff",
 };
+
 const btnPrimary = {
   border: "none",
   background: "#2563eb",
@@ -276,6 +357,7 @@ const btnPrimary = {
   fontWeight: 800,
   boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
 };
+
 const chip = {
   display: "inline-flex",
   alignItems: "center",
@@ -285,6 +367,7 @@ const chip = {
   borderRadius: 999,
   background: "#fff",
 };
+
 const btnChipDanger = {
   border: "none",
   background: "transparent",
@@ -293,18 +376,28 @@ const btnChipDanger = {
   fontSize: 16,
   lineHeight: 1,
 };
+
 const btnChipText = {
   border: "none",
   background: "transparent",
   cursor: "pointer",
   fontWeight: 700,
 };
-const btnSecondary = {
-  border: "1px solid #cbd5e1",
-  background: "#f8fafc",
-  color: "#111827",
-  borderRadius: 10,
-  padding: "6px 12px",
+
+/* ✅ NOUVEAU: bouton retour GROS (très visible) */
+const btnBackBig = {
+  border: "none",
+  background: "#111827",
+  color: "#fff",
+  borderRadius: 14,
+  padding: "14px 20px",
   cursor: "pointer",
-  fontWeight: 700,
+  fontWeight: 1000,
+  fontSize: 20,
+  lineHeight: 1.1,
+  boxShadow: "0 14px 34px rgba(0,0,0,0.28)",
+  transform: "translateZ(0)",
+
+  // plus large visuellement
+  minWidth: 340,
 };

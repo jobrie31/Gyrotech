@@ -4,19 +4,30 @@
 // ✅ startAtSummary => ouvre directement l’étape facture
 // ✅ Option A: deleteAt (60 jours) lors de la fermeture complète (pour suppression automatique future)
 // ✅ Bonus: clear lastProjectId/lastProjectName chez les employés qui pointaient sur ce projet (best effort)
+// ✅ AJOUT: Checkbox "J’ai remis le matériel au client dans le véhicule" (enregistré sur le projet)
 //
 // ✅ PDF VECTOR: @react-pdf/renderer (texte net, sélectionnable, pas flou)
+// ✅ FIX IMPORTANT (2026-01-22): Le temps passé ENTRE "Fermer le BT" et "Imprimer/PDF" est maintenant ajouté au projet
+//    -> on écrit un segment fermé (start=ouverture du wizard, end=click PDF) dans projet + employé (si trouvé)
+//    -> on recalcule le total LIVE juste avant de générer le PDF
+//
+// ✅ AJOUT (2026-01-22):
+// 1) Total matériel affiché dans la section matériel du BT (UI + PDF)
+// 2) Nom de celui qui remplit (basé sur l’utilisateur connecté) affiché dans les infos (UI + PDF) + sauvegardé en base
+// 3) Date d’ouverture du BT affichée dans les infos (UI + PDF) + sauvegardée en base
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { pdf, Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer";
 import { ref, uploadBytes } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
   collectionGroup,
+  addDoc,
   doc,
   getDocs,
   getDoc,
+  setDoc,
   onSnapshot,
   query,
   orderBy,
@@ -26,7 +37,7 @@ import {
   Timestamp,
   limit,
 } from "firebase/firestore";
-import { db, storage, functions } from "./firebaseConfig";
+import { db, storage, functions, auth } from "./firebaseConfig";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 
 /* ---------------------- Utils ---------------------- */
@@ -60,6 +71,27 @@ function plusDays(d, n) {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
   return x;
+}
+
+/**
+ * Date d'ouverture du BT (on essaie plusieurs champs possibles)
+ * + fallback: createdAt
+ */
+function getBTOpenedAt(projet) {
+  const candidates = [
+    projet?.btOpenedAt,
+    projet?.btOuvertAt,
+    projet?.btOuvertureAt,
+    projet?.openedAt,
+    projet?.ouvertAt,
+    projet?.ouvertureAt,
+    projet?.createdAt,
+    projet?.created,
+    projet?.dateCreation,
+    projet?.dateOuverture,
+  ];
+  const found = candidates.find((v) => v != null && String(v).trim() !== "");
+  return found || null;
 }
 
 /**
@@ -167,6 +199,130 @@ async function computeProjectTotalMs(projId) {
   return total;
 }
 
+/* ---------------------- ✅ Helpers timecards (Emp + Projet) ---------------------- */
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function dayKey(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+}
+
+// Employé
+function empDayRef(empId, key) {
+  return doc(db, "employes", empId, "timecards", key);
+}
+function empSegCol(empId, key) {
+  return collection(db, "employes", empId, "timecards", key, "segments");
+}
+async function ensureEmpDay(empId, key) {
+  const refD = empDayRef(empId, key);
+  const snap = await getDoc(refD);
+  if (!snap.exists()) {
+    const now = new Date();
+    await setDoc(refD, {
+      start: null,
+      end: null,
+      onBreak: false,
+      breakStartMs: null,
+      breakTotalMs: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return refD;
+}
+
+// Projet
+function projDayRef(projId, key) {
+  return doc(db, "projets", projId, "timecards", key);
+}
+function projSegCol(projId, key) {
+  return collection(db, "projets", projId, "timecards", key, "segments");
+}
+async function ensureProjDay(projId, key) {
+  const refD = projDayRef(projId, key);
+  const snap = await getDoc(refD);
+  if (!snap.exists()) {
+    const now = new Date();
+    await setDoc(refD, { start: null, end: null, createdAt: now, updatedAt: now });
+  }
+  return refD;
+}
+
+/* ---------------------- Mapping Auth -> Employé (pour créditer la fermeture) ---------------------- */
+async function getEmpFromAuth() {
+  const u = auth.currentUser;
+  if (!u) return null;
+
+  const uid = u.uid || null;
+  const email = (u.email || "").trim().toLowerCase() || null;
+
+  try {
+    if (uid) {
+      const q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
+      const s1 = await getDocs(q1);
+      if (!s1.empty) {
+        const d = s1.docs[0];
+        const data = d.data() || {};
+        return { empId: d.id, empName: data.nom || null };
+      }
+    }
+  } catch {}
+
+  try {
+    if (email) {
+      const q2 = query(collection(db, "employes"), where("email", "==", email), limit(1));
+      const s2 = await getDocs(q2);
+      if (!s2.empty) {
+        const d = s2.docs[0];
+        const data = d.data() || {};
+        return { empId: d.id, empName: data.nom || null };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+/* ---------------------- ✅ Ajoute le segment "fermeture BT" (Projet + Employé) ---------------------- */
+async function recordCloseBTTime({ projet, startMs, endDate }) {
+  if (!projet?.id) return;
+
+  const startDate = new Date(Number(startMs || Date.now()));
+  const end = endDate instanceof Date ? endDate : new Date(endDate || Date.now());
+  if (end.getTime() <= startDate.getTime()) return; // sécurité
+
+  const key = dayKey(startDate);
+
+  // 1) Projet : segment fermé (start/end)
+  await ensureProjDay(projet.id, key);
+  await addDoc(projSegCol(projet.id, key), {
+    empId: null,
+    empName: null,
+    start: startDate,
+    end,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    source: "close_bt_wizard",
+  });
+
+  // 2) Employé : si on peut identifier l'employé courant
+  const emp = await getEmpFromAuth();
+  if (emp?.empId) {
+    await ensureEmpDay(emp.empId, key);
+    await addDoc(empSegCol(emp.empId, key), {
+      jobId: `proj:${projet.id}`,
+      jobName: projet.nom || projet.clientNom || null,
+      start: startDate,
+      end,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      source: "close_bt_wizard",
+    });
+  }
+}
+
 /* ---------------------- PDF VECTOR (net, texte sélectionnable) ---------------------- */
 function money(n) {
   const x = Number(n || 0);
@@ -238,8 +394,8 @@ const pdfStyles = StyleSheet.create({
   kvColLeft: { marginRight: 14 }, // pas de "gap" (compat react-pdf)
   kvRow: { flexDirection: "row", alignItems: "baseline", marginBottom: 4 },
 
-  // largeur juste assez pour le plus long ("Odomètre")
-  kvLabel: { width: 62, fontWeight: 700, textAlign: "right" },
+  // ✅ élargi pour "Rempli par"
+  kvLabel: { width: 78, fontWeight: 700, textAlign: "right" },
   kvColon: { width: 6, fontWeight: 700, textAlign: "center" },
   kvVal: { flexGrow: 1 },
 });
@@ -261,6 +417,7 @@ function InvoiceDocument({
   dossierNo,
   dateStr,
   usages,
+  totalMateriel,
   totalHeuresArrondies,
   tauxHoraire,
   coutMainOeuvre,
@@ -268,6 +425,8 @@ function InvoiceDocument({
   tps,
   tvq,
   totalFacture,
+  filledByName,
+  openedDateStr,
 }) {
   const clientNom = projet?.clientNom || projet?.nom || "—";
 
@@ -326,6 +485,7 @@ function InvoiceDocument({
                 <PdfKVRow label="Unité" value={projet?.numeroUnite || "—"} />
                 <PdfKVRow label="Année" value={projet?.annee ?? "—"} />
                 <PdfKVRow label="Marque" value={projet?.marque || "—"} />
+                <PdfKVRow label="Ouvert le" value={openedDateStr || "—"} />
               </View>
 
               <View style={pdfStyles.kvCol}>
@@ -333,6 +493,7 @@ function InvoiceDocument({
                 <PdfKVRow label="Plaque" value={projet?.plaque || "—"} />
                 <PdfKVRow label="Odomètre" value={fmtOdometer(projet?.odometre)} />
                 <PdfKVRow label="VIN" value={projet?.vin || "—"} />
+                <PdfKVRow label="Rempli par" value={filledByName || "—"} />
               </View>
             </View>
           </View>
@@ -396,6 +557,13 @@ function InvoiceDocument({
           )}
         </View>
 
+        {/* ✅ Total matériel (dans la section matériel) */}
+        <View style={{ marginTop: 6, alignItems: "flex-end" }}>
+          <Text style={{ fontSize: 11.2, fontWeight: 700 }}>
+            Total matériel : {money(totalMateriel || 0)}
+          </Text>
+        </View>
+
         {/* Totaux */}
         <View style={pdfStyles.totalsBox}>
           <View style={pdfStyles.totalsRow}>
@@ -427,6 +595,7 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
     dossierNo,
     dateStr,
     usages,
+    totalMateriel,
     totalHeuresArrondies,
     tauxHoraire,
     coutMainOeuvre,
@@ -434,6 +603,8 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
     tps,
     tvq,
     totalFacture,
+    filledByName,
+    openedDateStr,
   } = ctx;
 
   const docEl = (
@@ -443,6 +614,7 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
       dossierNo={dossierNo}
       dateStr={dateStr}
       usages={usages}
+      totalMateriel={totalMateriel}
       totalHeuresArrondies={totalHeuresArrondies}
       tauxHoraire={tauxHoraire}
       coutMainOeuvre={coutMainOeuvre}
@@ -450,6 +622,8 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
       tps={tps}
       tvq={tvq}
       totalFacture={totalFacture}
+      filledByName={filledByName}
+      openedDateStr={openedDateStr}
     />
   );
 
@@ -470,8 +644,15 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   const [totalMs, setTotalMs] = useState(0);
   const [usages, setUsages] = useState([]);
-  const [checks, setChecks] = useState({ infos: false, materiel: false, temps: false });
+  // ✅ AJOUT: remisMaterielVehicule
+  const [checks, setChecks] = useState({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
   const [materielOpen, setMaterielOpen] = useState(false);
+
+  // ✅ FIX: on mesure le temps passé dans le wizard "fermeture BT"
+  const closeStartMsRef = useRef(null);
+
+  // ✅ AJOUT: info "rempli par" (affichage + sauvegarde)
+  const [filledBy, setFilledBy] = useState({ name: null, uid: null, email: null });
 
   const [factureConfig, setFactureConfig] = useState({
     companyName: "Gyrotech",
@@ -484,12 +665,33 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
   useEffect(() => {
     if (!open) return;
 
+    // ✅ start "temps fermeture" au moment où le wizard s’ouvre
+    closeStartMsRef.current = Date.now();
+
     setError(null);
-    setChecks({ infos: false, materiel: false, temps: false });
+    // ✅ reset checkbox
+    setChecks({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
     setTotalMs(0);
     setUsages([]);
     setMaterielOpen(false);
     setStep(startAtSummary ? "summary" : "ask");
+
+    // ✅ Rempli par (best effort): employé lié au compte auth
+    (async () => {
+      try {
+        const u = auth.currentUser;
+        const uid = u?.uid || null;
+        const email = (u?.email || "").trim().toLowerCase() || null;
+
+        const emp = await getEmpFromAuth();
+        const name = emp?.empName || null;
+
+        setFilledBy({ name, uid, email });
+      } catch {
+        const u = auth.currentUser;
+        setFilledBy({ name: null, uid: u?.uid || null, email: (u?.email || "").trim().toLowerCase() || null });
+      }
+    })();
 
     (async () => {
       try {
@@ -548,7 +750,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     return () => unsub();
   }, [open, step, projet?.id]);
 
-  const canConfirm = checks.infos && checks.materiel && checks.temps && !loading;
+  // ✅ gate final close avec le nouveau check
+  const canConfirm = checks.infos && checks.materiel && checks.temps && checks.remisMaterielVehicule && !loading;
 
   const goSummary = async () => {
     if (!projet?.id) return;
@@ -575,11 +778,26 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       await depunchWorkersOnProject(projet.id);
       await clearEmployeesLastProject(projet.id);
 
+      const openedAtRaw = getBTOpenedAt(projet);
+      const openedAtDate = toDateSafe(openedAtRaw);
+      const openedAtTs = openedAtDate ? Timestamp.fromDate(openedAtDate) : null;
+
       await updateDoc(doc(db, "projets", projet.id), {
         ouvert: false,
         fermeComplet: false,
         fermeCompletAt: null,
         deleteAt: null,
+
+        // ✅ AJOUT (soft close): on garde une trace si jamais c'est coché (souvent false en soft)
+        materielRemisAuClientVehicule: !!checks.remisMaterielVehicule,
+        materielRemisAuClientVehiculeAt: checks.remisMaterielVehicule ? serverTimestamp() : null,
+
+        // ✅ AJOUT: infos BT (en base)
+        btOpenedAt: openedAtTs,
+        btRempliParNom: filledBy?.name || null,
+        btRempliParUid: filledBy?.uid || null,
+        btRempliParEmail: filledBy?.email || null,
+        btRempliParAt: serverTimestamp(),
       });
 
       onClosed?.("soft");
@@ -593,6 +811,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   if (!open || !projet) return null;
 
+  // ⚠️ Ces calculs restent pour l’affichage UI, mais le PDF final sera recalculé LIVE au click.
   const totalMateriel = usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0);
 
   const tempsOuvertureMinutes = Number(projet.tempsOuvertureMinutes || 0) || 0;
@@ -616,6 +835,11 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   const dossierNoUI = getDossierNo(projet);
 
+  const openedAtRawUI = getBTOpenedAt(projet);
+  const openedDateStrUI = fmtDate(openedAtRawUI);
+
+  const filledByNameUI = filledBy?.name || (filledBy?.email ? filledBy.email : "—");
+
   const handleFinalClose = async () => {
     if (!projet?.id || !canConfirm) return;
 
@@ -623,29 +847,69 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       setLoading(true);
       setError(null);
 
+      // ✅ 1) Écrire le segment "temps fermeture" (wizard open -> maintenant) dans projet + employé
+      const endNow = new Date();
+      const startMs = Number(closeStartMsRef.current || Date.now());
+      await recordCloseBTTime({ projet, startMs, endDate: endNow });
+
+      // ✅ 2) Dépunch (comme avant)
       await depunchWorkersOnProject(projet.id);
       await clearEmployeesLastProject(projet.id);
+
+      // ✅ 3) Recalcul LIVE juste avant PDF (inclut le segment fermeture)
+      const totalNowMs = await computeProjectTotalMs(projet.id);
+
+      const tOpenMin = Number(projet.tempsOuvertureMinutes || 0) || 0;
+      const totalMsInclOuvertureLive = totalNowMs + tOpenMin * 60 * 1000;
+
+      const totalHeuresBrutLive = totalMsInclOuvertureLive / (1000 * 60 * 60);
+      const totalHeuresArrondiesLive = Math.round(totalHeuresBrutLive * 100) / 100;
+
+      const configRateLive = Number(factureConfig.tauxHoraire || 0);
+      const projetRateLive = Number(projet.tauxHoraire || 0);
+      const tauxHoraireLive = configRateLive || projetRateLive || 0;
+
+      const totalMaterielLive = usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0);
+      const coutMainOeuvreLive = tauxHoraireLive > 0 ? totalHeuresArrondiesLive * tauxHoraireLive : null;
+
+      const sousTotalLive = totalMaterielLive + (coutMainOeuvreLive || 0);
+      const tpsLive = sousTotalLive * 0.05;
+      const tvqLive = sousTotalLive * 0.09975;
+      const totalFactureLive = sousTotalLive + tpsLive + tvqLive;
 
       const dossierNo = getDossierNo(projet);
       const dateStr = fmtDate(new Date());
 
+      const openedAtRaw = getBTOpenedAt(projet);
+      const openedDateStr = fmtDate(openedAtRaw);
+
+      const openedAtDate = toDateSafe(openedAtRaw);
+      const openedAtTs = openedAtDate ? Timestamp.fromDate(openedAtDate) : null;
+
+      const filledByName = filledBy?.name || (filledBy?.email ? filledBy.email : null);
+
+      // ✅ 4) PDF + Email avec valeurs LIVE
       const pdfPath = await generateAndUploadInvoicePdf(projet, {
         factureConfig,
         dossierNo,
         dateStr,
         usages,
-        totalHeuresArrondies,
-        tauxHoraire,
-        coutMainOeuvre,
-        sousTotal,
-        tps,
-        tvq,
-        totalFacture,
+        totalMateriel: totalMaterielLive,
+        totalHeuresArrondies: totalHeuresArrondiesLive,
+        tauxHoraire: tauxHoraireLive,
+        coutMainOeuvre: coutMainOeuvreLive,
+        sousTotal: sousTotalLive,
+        tps: tpsLive,
+        tvq: tvqLive,
+        totalFacture: totalFactureLive,
+        filledByName,
+        openedDateStr,
       });
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
-      const toEmail = ["service@gyrotech.ca", "tlemieux@gyrotech.ca", "ventes@gyrotech.ca", "pieces@gyrotech.ca"];
 
+      // ✅ tu peux mettre une string OU un array; ici on garde simple (1 email)
+      const toEmail = ['pieces@gyrotech.ca', 'ventes@gyrotech.ca', 'service@gyrotech.ca', 'tlemieux@gyrotech.ca'];
 
       await sendInvoiceEmail({
         projetId: projet.id,
@@ -660,7 +924,18 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         fermeComplet: true,
         fermeCompletAt: serverTimestamp(),
         deleteAt: Timestamp.fromDate(plusDays(new Date(), 60)),
-        factureEnvoyeeA: toEmail.join(", "),
+        factureEnvoyeeA: String(toEmail || "").trim(),
+
+        // ✅ AJOUT (full close): trace "matériel remis"
+        materielRemisAuClientVehicule: true,
+        materielRemisAuClientVehiculeAt: serverTimestamp(),
+
+        // ✅ AJOUT: infos BT (en base)
+        btOpenedAt: openedAtTs,
+        btRempliParNom: filledBy?.name || null,
+        btRempliParUid: filledBy?.uid || null,
+        btRempliParEmail: filledBy?.email || null,
+        btRempliParAt: serverTimestamp(),
       });
 
       onClosed?.("full");
@@ -887,6 +1162,10 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                         <DetailKV k="Odomètre" v={fmtOdometer(projet.odometre)} />
                         <DetailKV k="Marque" v={projet.marque || "—"} />
                         <DetailKV k="VIN" v={projet.vin || "—"} />
+
+                        {/* ✅ AJOUT: Ouverture + Rempli par */}
+                        <DetailKV k="Ouvert le" v={openedDateStrUI} />
+                        <DetailKV k="Rempli par" v={filledByNameUI} />
                       </div>
                     </div>
                   </div>
@@ -911,7 +1190,11 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                           Main-d'œuvre – {projet.nom || "Travaux mécaniques"}
                         </td>
                         <td style={{ padding: 6, textAlign: "center", borderBottom: "1px solid #f1f5f9" }}>
-                          {totalHeuresArrondies.toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h
+                          {totalHeuresArrondies.toLocaleString("fr-CA", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}{" "}
+                          h
                         </td>
                         <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
                           {tauxHoraire > 0 ? tauxHoraire.toLocaleString("fr-CA", { style: "currency", currency: "CAD" }) : "—"}
@@ -992,6 +1275,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                     </tbody>
                   </table>
 
+                  {/* ✅ Total matériel DANS la section matériel du BT */}
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                    <div style={{ fontWeight: 900, color: "#0f172a" }}>
+                      Total matériel : {totalMateriel.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
+                    </div>
+                  </div>
+
                   <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
                     <div style={{ width: 260, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
                       <RowTotal label="Sous-total :" value={sousTotal} strong />
@@ -1021,17 +1311,42 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
           >
             <div style={{ ...box, marginBottom: 0, background: "#f9fafb" }}>
               <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Confirmer avant de fermer</div>
+
               <label style={{ display: "block", marginBottom: 4 }}>
-                <input type="checkbox" checked={checks.infos} onChange={(e) => setChecks((s) => ({ ...s, infos: e.target.checked }))} />{" "}
+                <input
+                  type="checkbox"
+                  checked={checks.infos}
+                  onChange={(e) => setChecks((s) => ({ ...s, infos: e.target.checked }))}
+                />{" "}
                 J’ai vérifié les informations du projet.
               </label>
+
               <label style={{ display: "block", marginBottom: 4 }}>
-                <input type="checkbox" checked={checks.materiel} onChange={(e) => setChecks((s) => ({ ...s, materiel: e.target.checked }))} />{" "}
+                <input
+                  type="checkbox"
+                  checked={checks.materiel}
+                  onChange={(e) => setChecks((s) => ({ ...s, materiel: e.target.checked }))}
+                />{" "}
                 J’ai vérifié le matériel utilisé.
               </label>
-              <label style={{ display: "block" }}>
-                <input type="checkbox" checked={checks.temps} onChange={(e) => setChecks((s) => ({ ...s, temps: e.target.checked }))} />{" "}
+
+              <label style={{ display: "block", marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={checks.temps}
+                  onChange={(e) => setChecks((s) => ({ ...s, temps: e.target.checked }))}
+                />{" "}
                 J’ai vérifié le temps total.
+              </label>
+
+              {/* ✅ AJOUT demandé */}
+              <label style={{ display: "block" }}>
+                <input
+                  type="checkbox"
+                  checked={checks.remisMaterielVehicule}
+                  onChange={(e) => setChecks((s) => ({ ...s, remisMaterielVehicule: e.target.checked }))}
+                />{" "}
+                J’ai remis le matériel au client dans le véhicule.
               </label>
             </div>
 
@@ -1072,9 +1387,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
           </div>
         )}
 
-        {materielOpen && (
-          <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />
-        )}
+        {materielOpen && <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />}
       </div>
     </div>
   );
@@ -1103,7 +1416,7 @@ function DetailKV({ k, v }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "78px minmax(0, 1fr)", // ✅ PLUS de place pour la valeur (odomètre)
+        gridTemplateColumns: "96px minmax(0, 1fr)", // ✅ élargi pour "Rempli par"
         columnGap: 8,
         alignItems: "baseline",
         padding: "6px 8px",
@@ -1133,6 +1446,7 @@ function DetailKV({ k, v }) {
           textOverflow: isVIN ? "clip" : "ellipsis",
           ...valueStyle,
         }}
+        title={typeof v === "string" ? v : undefined}
       >
         {v}
       </span>

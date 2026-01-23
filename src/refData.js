@@ -18,7 +18,10 @@ import { useEffect, useMemo, useState } from "react";
  * - Collection "reglages_marques": documents (id auto) { name: "Toyota" }
  *    - Subcollection "modeles": documents (id auto) { name: "RAV4" }
  *
- * Stockage dans les projets: on écrit les chaînes (annee: Number, marque: string, modele: string)
+ * ✅ AJOUT:
+ * - Collection "reglages_clients": documents (id = clé stable) { name: "Garage ABC", nameLower: "garage abc" }
+ *
+ * Stockage dans les projets: on écrit les chaînes (annee: Number, marque: string, modele: string, clientNom: string)
  */
 
 /* -------------------- HOOKS -------------------- */
@@ -83,6 +86,24 @@ export function useModeles(marqueId) {
   return items;
 }
 
+/* -------------------- ✅ CLIENTS -------------------- */
+export function useClients() {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    const q = query(collection(db, "reglages_clients"), orderBy("name", "asc"));
+    const unsub = onSnapshot(q, (snap) => {
+      const arr = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        if (data?.name) arr.push({ id: d.id, name: data.name });
+      });
+      setItems(arr);
+    });
+    return () => unsub();
+  }, []);
+  return items;
+}
+
 /* -------------------- HELPERS (CRUD) -------------------- */
 export async function addAnnee(value) {
   const v = Number(value);
@@ -121,6 +142,31 @@ export async function addModele(marqueId, name) {
 export async function deleteModele(marqueId, modeleId) {
   if (!marqueId || !modeleId) return;
   await deleteDoc(doc(db, "reglages_marques", marqueId, "modeles", modeleId));
+}
+
+/* -------------------- ✅ CRUD CLIENTS -------------------- */
+function clientKey(name) {
+  const clean = (name || "").toString().trim();
+  const lower = clean.toLowerCase();
+
+  // clé stable + safe pour doc id (évite /, etc.)
+  // ex: "Garage ABC inc." => "garage%20abc%20inc."
+  const key = encodeURIComponent(lower.replace(/\s+/g, " ").trim());
+  return { clean, lower, key };
+}
+
+export async function addClient(name) {
+  const { clean, lower, key } = clientKey(name);
+  if (!clean) throw new Error("Nom de client requis.");
+
+  // setDoc avec id stable => évite doublons (comme tes années)
+  const ref = doc(db, "reglages_clients", key);
+  await setDoc(ref, { name: clean, nameLower: lower });
+}
+
+export async function deleteClient(id) {
+  if (!id) return;
+  await deleteDoc(doc(db, "reglages_clients", id));
 }
 
 /* -------------------- UTILS -------------------- */

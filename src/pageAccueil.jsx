@@ -53,6 +53,15 @@ function fmtHM(ms) {
   return `${h}:${m.toString().padStart(2, "0")}`;
 }
 
+/* ✅ NOUVEAU: fallback nom projet = nom || clientNom */
+function getProjetNom(data) {
+  const n = String(data?.nom || "").trim();
+  if (n) return n;
+  const cn = String(data?.clientNom || "").trim();
+  if (cn) return cn;
+  return "";
+}
+
 /* ---------------------- Firestore helpers (Employés) ---------------------- */
 function dayRef(empId, key) {
   return doc(db, "employes", empId, "timecards", key);
@@ -215,7 +224,11 @@ function useOpenProjets(setError) {
         snap.forEach((d) => {
           const data = d.data();
           const isOpen = data?.ouvert !== false;
-          list.push({ id: d.id, ...data, ouvert: isOpen });
+
+          // ✅ IMPORTANT: assurer un nom "nom" même si ton doc a surtout clientNom
+          const nom = getProjetNom(data);
+
+          list.push({ id: d.id, ...data, nom, ouvert: isOpen });
         });
         list = list.filter((p) => p.ouvert === true);
         list.sort((a, b) => (a.nom || "").localeCompare(b.nom || ""));
@@ -341,6 +354,9 @@ async function doPunchWithProject(emp, proj) {
   const key = todayKey();
   if (proj && proj.ouvert === false) throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
 
+  // ✅ nom robuste
+  const projName = proj ? (proj.nom || proj.clientNom || null) : null;
+
   await ensureDay(emp.id, key);
   const empSegRef = await openEmpSession(emp.id, key);
 
@@ -350,7 +366,7 @@ async function doPunchWithProject(emp, proj) {
 
     if (empSegRef) {
       const now = new Date();
-      await updateDoc(empSegRef, { jobId: `proj:${proj.id}`, jobName: proj.nom || null, updatedAt: now });
+      await updateDoc(empSegRef, { jobId: `proj:${proj.id}`, jobName: projName, updatedAt: now });
     }
 
     const pdRef = projDayRef(proj.id, key);
@@ -363,7 +379,7 @@ async function doPunchWithProject(emp, proj) {
 
     await updateDoc(doc(db, "employes", emp.id), {
       lastProjectId: proj.id,
-      lastProjectName: proj.nom || null,
+      lastProjectName: projName,
       lastProjectUpdatedAt: new Date(),
     });
   }
@@ -533,9 +549,7 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
           </button>
         </div>
 
-        <div style={{ fontSize: 18, marginBottom: 18 }}>
-          Êtes vous sûr de vouloir créer un projet ?
-        </div>
+        <div style={{ fontSize: 18, marginBottom: 18 }}>Êtes vous sûr de vouloir créer un projet ?</div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
           <Button variant="neutral" onClick={onCancel}>
@@ -899,14 +913,14 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
 
   const [isHovered, setIsHovered] = useState(false);
 
-    // Couleurs de ligne
-  const ROW_RED_BASE = "#ef4444";     // pas punché
+  // Couleurs de ligne
+  const ROW_RED_BASE = "#ef4444"; // pas punché
   const ROW_RED_HOVER = "#dc2626";
 
-  const ROW_GREEN_BASE = "#22c55e";   // projet
+  const ROW_GREEN_BASE = "#22c55e"; // projet
   const ROW_GREEN_HOVER = "#16a34a";
 
-  const ROW_YELLOW_BASE = "#facc15";  // autres tâches
+  const ROW_YELLOW_BASE = "#facc15"; // autres tâches
   const ROW_YELLOW_HOVER = "#eab308";
 
   // Règle demandée:
@@ -916,18 +930,18 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
   const baseBg = !present
     ? ROW_RED_BASE
     : currentIsOther
-      ? ROW_YELLOW_BASE
-      : currentIsProj
-        ? ROW_GREEN_BASE
-        : ROW_RED_BASE; // fallback
+    ? ROW_YELLOW_BASE
+    : currentIsProj
+    ? ROW_GREEN_BASE
+    : ROW_RED_BASE; // fallback
 
   const hoverBg = !present
     ? ROW_RED_HOVER
     : currentIsOther
-      ? ROW_YELLOW_HOVER
-      : currentIsProj
-        ? ROW_GREEN_HOVER
-        : ROW_RED_HOVER;
+    ? ROW_YELLOW_HOVER
+    : currentIsProj
+    ? ROW_GREEN_HOVER
+    : ROW_RED_HOVER;
 
   const rowBg = isHovered ? hoverBg : baseBg;
 
@@ -952,9 +966,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        <td style={{ ...styles.td, whiteSpace: "nowrap", fontWeight: 900 }}>
-          {emp.nom || "—"}
-        </td>
+        <td style={{ ...styles.td, whiteSpace: "nowrap", fontWeight: 900 }}>{emp.nom || "—"}</td>
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
 
         <td style={{ ...styles.td }} onClick={(e) => e.stopPropagation()}>
@@ -979,7 +991,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                   }}
-                  title="Travail en cours (Autres tâches)"
+                  title="Travail en cours (Autre tâche)"
                 >
                   Actuellement: {currentJobName || "—"}
                 </div>
@@ -1017,7 +1029,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
               disabled={present}
               style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
             >
-              Autres tâches
+              Autre tâche
             </Button>
 
             <Button
@@ -1218,7 +1230,9 @@ export default function PageAccueil() {
                   {visibleEmployes.length === 0 && (
                     <tr>
                       <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                        {isAdmin ? "Aucun employé(e) pour l’instant." : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
+                        {isAdmin
+                          ? "Aucun employé(e) pour l’instant."
+                          : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
                       </td>
                     </tr>
                   )}
