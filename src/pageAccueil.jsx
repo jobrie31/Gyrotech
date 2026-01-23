@@ -29,7 +29,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "./firebaseConfig";
-
+import logoGyrotech from "./assets/logo-gyrotech.png";
 import PageProjets from "./PageProjets";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { styles, Card, Button, PageContainer } from "./UIPro";
@@ -1193,9 +1193,23 @@ export default function PageAccueil() {
   return (
     <>
       <EdgeHeader
-        left={<h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>GyroTech</h1>}
+        left={
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <img
+              src={logoGyrotech}
+              alt="GyroTech"
+              style={{
+                height: 200,          // ajuste ici (ex: 30-42)
+                width: "auto",
+                display: "block",
+                filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.15))",
+              }}
+            />
+          </div>
+        }
         right={<ClockBadge now={now} />}
       />
+
 
       <PageContainer>
         <div style={{ height: EDGE_HEADER_H }} />
