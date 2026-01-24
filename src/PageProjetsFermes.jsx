@@ -15,6 +15,24 @@
 // 1) Total matériel affiché dans la section matériel du BT (UI + PDF)
 // 2) Nom de celui qui remplit (basé sur l’utilisateur connecté) affiché dans les infos (UI + PDF) + sauvegardé en base
 // 3) Date d’ouverture du BT affichée dans les infos (UI + PDF) + sauvegardée en base
+//
+// ✅ MODIF (2026-01-23):
+// - ENLEVER "Facturé à" (UI + PDF) => Détails véhicule prend toute la place
+// - AJOUTER "Ouvert par" et "Fermé par" (UI + PDF)
+//
+// ✅ MODIF (2026-01-23) — DEMANDE:
+// - NOTE éditable dans le wizard de fermeture
+// - La note est sauvegardée en base (pendant l’édition + à la fermeture)
+// - La note apparaît dans le PDF
+// - ✅ UI: NOTE placée juste en bas de "Détails véhicule / projet"
+//
+// ✅ FIX (AUJOURD’HUI) — DEMANDE:
+// - PDF: Refaire “Détails véhicule / projet” en vrai tableau 2 colonnes, propre (pas de superposition)
+// - Enlever la requête collectionGroup(segments) qui demande un index
+//
+// ✅ MODIF (AUJOURD’HUI) — DEMANDE:
+// - PDF multi-pages: si ça dépasse 1 page, répéter l’entête + répéter l’entête de table “Matériel” à chaque page
+//   comme un vrai bon de commande, et mettre les totaux seulement à la dernière page.
 
 import React, { useEffect, useRef, useState } from "react";
 import { pdf, Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer";
@@ -22,7 +40,6 @@ import { ref, uploadBytes } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
-  collectionGroup,
   addDoc,
   doc,
   getDocs,
@@ -95,6 +112,44 @@ function getBTOpenedAt(projet) {
 }
 
 /**
+ * Ouvert par (best effort)
+ */
+function getBTOpenedByName(projet) {
+  const candidates = [
+    projet?.btOuvertParNom,
+    projet?.btOpenedByNom,
+    projet?.btOpenedByName,
+    projet?.openedByName,
+    projet?.createdByName,
+    projet?.createdByNom,
+    projet?.createurNom,
+    projet?.creatorName,
+    projet?.createur,
+    projet?.createdByEmail,
+    projet?.btOuvertParEmail,
+    projet?.btOpenedByEmail,
+  ];
+  const found = candidates.find((v) => v != null && String(v).trim() !== "");
+  return found ? String(found) : null;
+}
+
+/**
+ * Fermé par (best effort)
+ */
+function getBTClosedByName(projet) {
+  const candidates = [
+    projet?.btFermeParNom,
+    projet?.btClosedByNom,
+    projet?.btClosedByName,
+    projet?.closedByName,
+    projet?.btFermeParEmail,
+    projet?.btClosedByEmail,
+  ];
+  const found = candidates.find((v) => v != null && String(v).trim() !== "");
+  return found ? String(found) : null;
+}
+
+/**
  * NO (en haut de la facture PDF) = numéro de dossier du projet.
  */
 function getDossierNo(projet) {
@@ -110,93 +165,6 @@ function getDossierNo(projet) {
   if (found != null) return String(found);
   if (projet?.id) return String(projet.id).slice(0, 8);
   return "—";
-}
-
-/* ---------------------- ✅ DEPUNCH travailleurs (fermeture projet) ---------------------- */
-async function depunchWorkersOnProject(projId) {
-  if (!projId) return;
-  const now = new Date();
-
-  // 1) fermer segments ouverts côté PROJET
-  try {
-    const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
-    const dayIds = [];
-    daysSnap.forEach((d) => dayIds.push(d.id));
-
-    for (const key of dayIds) {
-      const openSegs = await getDocs(
-        query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null))
-      );
-      const tasks = [];
-      openSegs.forEach((sdoc) => tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now })));
-      if (tasks.length) await Promise.all(tasks);
-    }
-  } catch (e) {
-    console.error("depunch project segments error", e);
-  }
-
-  // 2) fermer segments ouverts côté EMPLOYÉS (jobId=proj:{projId})
-  // (évite index composite: pas de where(end==null), on filtre en JS)
-  try {
-    const cg = query(collectionGroup(db, "segments"), where("jobId", "==", `proj:${projId}`));
-    const snap = await getDocs(cg);
-    const tasks = [];
-    snap.forEach((d) => {
-      const s = d.data() || {};
-      if (s.end == null) tasks.push(updateDoc(d.ref, { end: now, updatedAt: now }));
-    });
-    if (tasks.length) await Promise.all(tasks);
-  } catch (e) {
-    console.error("depunch employee segments error", e);
-  }
-}
-
-/* ---------------------- ✅ Clear lastProjectId/Name (best effort) ---------------------- */
-async function clearEmployeesLastProject(projId) {
-  if (!projId) return;
-  try {
-    const qEmp = query(collection(db, "employes"), where("lastProjectId", "==", projId), limit(300));
-    const snap = await getDocs(qEmp);
-    const tasks = [];
-    snap.forEach((d) => {
-      tasks.push(
-        updateDoc(d.ref, {
-          lastProjectId: null,
-          lastProjectName: null,
-          lastProjectUpdatedAt: serverTimestamp(),
-        })
-      );
-    });
-    if (tasks.length) await Promise.all(tasks);
-  } catch (e) {
-    console.warn("clearEmployeesLastProject warning:", e);
-  }
-}
-
-/* ---------------------- Temps total de tout le projet (segments) ---------------------- */
-async function computeProjectTotalMs(projId) {
-  let total = 0;
-
-  const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
-  const dayIds = [];
-  daysSnap.forEach((d) => dayIds.push(d.id));
-  dayIds.sort();
-
-  for (const key of dayIds) {
-    const segSnap = await getDocs(
-      query(collection(db, "projets", projId, "timecards", key, "segments"), orderBy("start", "asc"))
-    );
-    segSnap.forEach((sdoc) => {
-      const s = sdoc.data();
-      const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
-      const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
-      if (!st) return;
-      const dur = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
-      total += dur;
-    });
-  }
-
-  return total;
 }
 
 /* ---------------------- ✅ Helpers timecards (Emp + Projet) ---------------------- */
@@ -285,17 +253,138 @@ async function getEmpFromAuth() {
   return null;
 }
 
+/* ---------------------- ✅ DEPUNCH travailleurs (fermeture projet) ---------------------- */
+/**
+ * ✅ FIX: on ENLÈVE la collectionGroup("segments") -> plus besoin d'index.
+ * Stratégie:
+ * - Fermer segments ouverts côté projet (comme avant)
+ * - Fermer segments ouverts côté employés en trouvant les employés lastProjectId == projId,
+ *   puis en regardant leurs timecards des derniers jours et segments end==null (filtre jobId en JS).
+ */
+async function depunchWorkersOnProject(projId) {
+  if (!projId) return;
+  const now = new Date();
+
+  // 1) fermer segments ouverts côté PROJET
+  try {
+    const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
+    const dayIds = [];
+    daysSnap.forEach((d) => dayIds.push(d.id));
+
+    for (const key of dayIds) {
+      const openSegs = await getDocs(
+        query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null))
+      );
+      const tasks = [];
+      openSegs.forEach((sdoc) => tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now })));
+      if (tasks.length) await Promise.all(tasks);
+    }
+  } catch (e) {
+    console.error("depunch project segments error", e);
+  }
+
+  // 2) fermer segments ouverts côté EMPLOYÉS (sans collectionGroup)
+  try {
+    // employés qui pointaient sur ce projet
+    const qEmp = query(collection(db, "employes"), where("lastProjectId", "==", projId), limit(300));
+    const empSnap = await getDocs(qEmp);
+
+    // on check les derniers jours (au cas où un segment ouvert n'est pas juste "aujourd'hui")
+    const keys = [];
+    for (let i = 0; i < 10; i++) keys.push(dayKey(new Date(Date.now() - i * 24 * 60 * 60 * 1000)));
+
+    const allTasks = [];
+
+    empSnap.forEach((edoc) => {
+      const empId = edoc.id;
+
+      keys.forEach((k) => {
+        // on query seulement end==null (pas de composite index),
+        // puis on filtre jobId en JS
+        allTasks.push(
+          (async () => {
+            try {
+              const openSegs = await getDocs(query(empSegCol(empId, k), where("end", "==", null)));
+              const tasks = [];
+              openSegs.forEach((sdoc) => {
+                const s = sdoc.data() || {};
+                if (s.jobId === `proj:${projId}`) tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now }));
+              });
+              if (tasks.length) await Promise.all(tasks);
+            } catch {
+              // si la journée n'existe pas / pas de droits / etc -> on ignore
+            }
+          })()
+        );
+      });
+    });
+
+    if (allTasks.length) await Promise.all(allTasks);
+  } catch (e) {
+    // on évite de “polluer” ton UI si jamais un employé a un cas weird
+    console.warn("depunch employee segments (no collectionGroup) warning:", e);
+  }
+}
+
+/* ---------------------- ✅ Clear lastProjectId/Name (best effort) ---------------------- */
+async function clearEmployeesLastProject(projId) {
+  if (!projId) return;
+  try {
+    const qEmp = query(collection(db, "employes"), where("lastProjectId", "==", projId), limit(300));
+    const snap = await getDocs(qEmp);
+    const tasks = [];
+    snap.forEach((d) => {
+      tasks.push(
+        updateDoc(d.ref, {
+          lastProjectId: null,
+          lastProjectName: null,
+          lastProjectUpdatedAt: serverTimestamp(),
+        })
+      );
+    });
+    if (tasks.length) await Promise.all(tasks);
+  } catch (e) {
+    console.warn("clearEmployeesLastProject warning:", e);
+  }
+}
+
+/* ---------------------- Temps total de tout le projet (segments) ---------------------- */
+async function computeProjectTotalMs(projId) {
+  let total = 0;
+
+  const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
+  const dayIds = [];
+  daysSnap.forEach((d) => dayIds.push(d.id));
+  dayIds.sort();
+
+  for (const key of dayIds) {
+    const segSnap = await getDocs(
+      query(collection(db, "projets", projId, "timecards", key, "segments"), orderBy("start", "asc"))
+    );
+    segSnap.forEach((sdoc) => {
+      const s = sdoc.data();
+      const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
+      const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
+      if (!st) return;
+      const dur = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
+      total += dur;
+    });
+  }
+
+  return total;
+}
+
 /* ---------------------- ✅ Ajoute le segment "fermeture BT" (Projet + Employé) ---------------------- */
 async function recordCloseBTTime({ projet, startMs, endDate }) {
   if (!projet?.id) return;
 
   const startDate = new Date(Number(startMs || Date.now()));
   const end = endDate instanceof Date ? endDate : new Date(endDate || Date.now());
-  if (end.getTime() <= startDate.getTime()) return; // sécurité
+  if (end.getTime() <= startDate.getTime()) return;
 
   const key = dayKey(startDate);
 
-  // 1) Projet : segment fermé (start/end)
+  // Projet
   await ensureProjDay(projet.id, key);
   await addDoc(projSegCol(projet.id, key), {
     empId: null,
@@ -307,7 +396,7 @@ async function recordCloseBTTime({ projet, startMs, endDate }) {
     source: "close_bt_wizard",
   });
 
-  // 2) Employé : si on peut identifier l'employé courant
+  // Employé
   const emp = await getEmpFromAuth();
   if (emp?.empId) {
     await ensureEmpDay(emp.empId, key);
@@ -323,7 +412,7 @@ async function recordCloseBTTime({ projet, startMs, endDate }) {
   }
 }
 
-/* ---------------------- PDF VECTOR (net, texte sélectionnable) ---------------------- */
+/* ---------------------- PDF VECTOR ---------------------- */
 function money(n) {
   const x = Number(n || 0);
   return x.toLocaleString("fr-CA", { style: "currency", currency: "CAD" });
@@ -333,37 +422,51 @@ function fmtOdometer(val) {
   if (val == null || val === "") return "—";
   if (typeof val === "number") return `${val.toLocaleString("fr-CA")} km`;
   const s = String(val).trim();
-  // si c'est un nombre en string
   const n = Number(s.replace(/\s/g, "").replace(/,/g, ""));
   if (!Number.isNaN(n) && s.match(/^\d[\d\s,]*$/)) return `${n.toLocaleString("fr-CA")} km`;
-  // si déjà "km" ou texte, on laisse tel quel
-  return /km/i.test(s) ? s : `${s} km`;
+  return /km/i.test(s) ? s : `${s}`;
+}
+
+// ✅ helper safe text
+function safeTxt(v) {
+  const s = v == null ? "" : String(v);
+  return s.trim() ? s : "—";
+}
+
+/* ---------------------- ✅ Pagination helpers (PDF) ---------------------- */
+function chunkArray(arr, size) {
+  const out = [];
+  const a = Array.isArray(arr) ? arr : [];
+  for (let i = 0; i < a.length; i += size) out.push(a.slice(i, i + size));
+  return out;
 }
 
 const pdfStyles = StyleSheet.create({
-  page: { padding: 26, fontSize: 11.2, fontFamily: "Helvetica", color: "#111827" },
+  page: { paddingTop: 26, paddingBottom: 34, paddingHorizontal: 26, fontSize: 11.2, fontFamily: "Helvetica", color: "#111827" },
   row: { flexDirection: "row" },
   spaceBetween: { flexDirection: "row", justifyContent: "space-between" },
 
-  h1: { fontSize: 20, fontWeight: 700 },
+  h1: { fontSize: 20, fontWeight: "bold" },
   muted: { color: "#6b7280" },
 
+  headerTitle: { fontSize: 15, fontWeight: "bold", marginBottom: 2, lineHeight: 1.2 },
+  headerLine: { fontSize: 11.2, lineHeight: 1.35, marginTop: 2 },
+  headerLineMuted: { fontSize: 10.2, lineHeight: 1.35, marginTop: 1, color: "#6b7280" },
+
   box: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 12 },
-  sectionTitle: { fontSize: 12.2, fontWeight: 700, marginBottom: 8 },
+  sectionTitle: { fontSize: 12.2, fontWeight: "bold", marginBottom: 8, lineHeight: 1.2 },
 
   table: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 8, overflow: "hidden" },
   trHead: { flexDirection: "row", backgroundColor: "#f1f5f9", borderBottomWidth: 1, borderBottomColor: "#e2e8f0" },
   tr: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: "#f1f5f9" },
-  th: { padding: 8, fontWeight: 700 },
+  th: { padding: 8, fontWeight: "bold" },
   td: { padding: 8 },
 
   cLeft: { flexGrow: 1, flexBasis: 0, textAlign: "left" },
   cCenter: { width: 76, textAlign: "center" },
   cRight: { width: 96, textAlign: "right" },
 
-  small: { fontSize: 10.2 },
-
-  // ✅ Totaux dans une case séparée
+  // ✅ Totaux
   totalsBox: {
     marginTop: 10,
     alignSelf: "flex-end",
@@ -376,7 +479,7 @@ const pdfStyles = StyleSheet.create({
   },
   totalsRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 5 },
   totalsLabel: { color: "#334155" },
-  totalsValue: { fontWeight: 700, textAlign: "right" },
+  totalsValue: { fontWeight: "bold", textAlign: "right" },
   totalsRowStrong: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -385,28 +488,117 @@ const pdfStyles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#e5e7eb",
   },
-  totalsLabelStrong: { fontWeight: 700 },
-  totalsValueStrong: { fontWeight: 900, textAlign: "right" },
+  totalsLabelStrong: { fontWeight: "bold" },
+  totalsValueStrong: { fontWeight: "bold", textAlign: "right" },
 
-  // ✅ KV (PDF) : ":" dans sa mini-colonne => valeurs vraiment collées
-  kvGrid: { flexDirection: "row" },
-  kvCol: { flex: 1 },
-  kvColLeft: { marginRight: 14 }, // pas de "gap" (compat react-pdf)
-  kvRow: { flexDirection: "row", alignItems: "baseline", marginBottom: 4 },
+  // ✅ NOTE PDF
+  noteBox: { marginTop: 10, borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 12 },
+  noteTitle: { fontSize: 12.2, fontWeight: "bold", marginBottom: 6, lineHeight: 1.2 },
+  noteText: { fontSize: 11.2, lineHeight: 1.35 },
 
-  // ✅ élargi pour "Rempli par"
-  kvLabel: { width: 78, fontWeight: 700, textAlign: "right" },
-  kvColon: { width: 6, fontWeight: 700, textAlign: "center" },
-  kvVal: { flexGrow: 1 },
+  // ✅ “vrai tableau” 2 colonnes pour détails
+  detailsBox: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 12 },
+  detailsTitle: { fontSize: 12.2, fontWeight: "bold", marginBottom: 10, textAlign: "center", lineHeight: 1.2 },
+
+  detailsGrid: { flexDirection: "row" },
+  detailsCol: { flex: 1 },
+  detailsColGap: { width: 14 },
+
+  fieldRow: { marginBottom: 8 },
+  fieldLabel: { fontSize: 10.2, color: "#64748b", lineHeight: 1.2, fontWeight: "bold" },
+  fieldValue: { fontSize: 11.2, color: "#0f172a", lineHeight: 1.35, fontWeight: "bold" },
+
+  // Footer page number
+  pageNumber: {
+    position: "absolute",
+    bottom: 14,
+    left: 0,
+    right: 0,
+    textAlign: "center",
+    fontSize: 10,
+    color: "#94a3b8",
+  },
 });
 
-// ✅ rangée KV PDF (safe, pas de "gap", ":" collé)
-function PdfKVRow({ label, value }) {
+// ✅ cellule “label au-dessus / valeur en dessous” (zéro superposition)
+function PdfField({ label, value }) {
   return (
-    <View style={pdfStyles.kvRow}>
-      <Text style={pdfStyles.kvLabel}>{label}</Text>
-      <Text style={pdfStyles.kvColon}>:</Text>
-      <Text style={pdfStyles.kvVal}>{value}</Text>
+    <View style={pdfStyles.fieldRow}>
+      <Text style={pdfStyles.fieldLabel}>{label}</Text>
+      <Text style={pdfStyles.fieldValue}>{safeTxt(value)}</Text>
+    </View>
+  );
+}
+
+/* ---------------------- ✅ Header répété (PDF) ---------------------- */
+function PdfDocHeader({ factureConfig, dossierNo, dateStr, projet }) {
+  return (
+    <View style={[pdfStyles.spaceBetween, { marginBottom: 12, alignItems: "flex-start" }]}>
+      <View style={{ flexShrink: 1 }}>
+        <Text style={pdfStyles.h1}>{factureConfig?.companyName || "Gyrotech"}</Text>
+        <Text style={[pdfStyles.muted, { fontSize: 11.0, marginTop: 2, lineHeight: 1.35 }]}>
+          {factureConfig?.companySubtitle || "Service mobile – Diagnostic & réparation"}
+        </Text>
+
+        <View style={{ marginTop: 4 }}>
+          {factureConfig?.companyPhone ? (
+            <Text style={pdfStyles.headerLineMuted}>Téléphone : {factureConfig.companyPhone}</Text>
+          ) : null}
+          {factureConfig?.companyEmail ? (
+            <Text style={pdfStyles.headerLineMuted}>Courriel : {factureConfig.companyEmail}</Text>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={{ alignItems: "flex-end", flexShrink: 0 }}>
+        <Text style={pdfStyles.headerTitle}>BON DE TRAVAIL</Text>
+
+        <Text style={pdfStyles.headerLine}>
+          <Text style={{ fontWeight: "bold" }}>No :</Text> {dossierNo}
+        </Text>
+        <Text style={pdfStyles.headerLine}>
+          <Text style={{ fontWeight: "bold" }}>Date :</Text> {dateStr}
+        </Text>
+        <Text style={pdfStyles.headerLine}>
+          <Text style={{ fontWeight: "bold" }}>Projet :</Text> {projet?.clientNom || projet?.nom || "—"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function PdfMaterialsTable({ rows }) {
+  return (
+    <View style={pdfStyles.table}>
+      <View style={pdfStyles.trHead}>
+        <Text style={[pdfStyles.th, pdfStyles.cLeft]}>Nom</Text>
+        <Text style={[pdfStyles.th, pdfStyles.cCenter]}>Qté</Text>
+        <Text style={[pdfStyles.th, pdfStyles.cRight]}>Prix unitaire</Text>
+        <Text style={[pdfStyles.th, pdfStyles.cRight]}>Total</Text>
+      </View>
+
+      {rows?.length ? (
+        rows.map((u) => {
+          const qty = Number(u.qty) || 0;
+          const prix = Number(u.prix) || 0;
+          const tot = qty * prix;
+          return (
+            <View key={u.id} style={pdfStyles.tr} wrap={false}>
+              <Text style={[pdfStyles.td, pdfStyles.cLeft]}>{safeTxt(u.nom)}</Text>
+              <Text style={[pdfStyles.td, pdfStyles.cCenter]}>{qty}</Text>
+              <Text style={[pdfStyles.td, pdfStyles.cRight]}>{money(prix)}</Text>
+              <Text style={[pdfStyles.td, pdfStyles.cRight]}>{money(tot)}</Text>
+            </View>
+          );
+        })
+      ) : (
+        <View style={pdfStyles.tr}>
+          <Text style={[pdfStyles.td, pdfStyles.cLeft, pdfStyles.muted]}>Aucun matériel enregistré.</Text>
+          <Text style={[pdfStyles.td, pdfStyles.cCenter]}> </Text>
+          <Text style={[pdfStyles.td, pdfStyles.cRight]}> </Text>
+          <Text style={[pdfStyles.td, pdfStyles.cRight]}> </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -425,82 +617,74 @@ function InvoiceDocument({
   tps,
   tvq,
   totalFacture,
-  filledByName,
   openedDateStr,
+  openedByName,
+  closedByName,
+  noteText,
 }) {
-  const clientNom = projet?.clientNom || projet?.nom || "—";
+  const note = (noteText ?? projet?.note ?? "").toString();
+
+  // ✅ Pagination: ajustable
+  const FIRST_PAGE_MAT_ROWS = 16; // <- première page a détails + note + MO, donc moins de place
+  const NEXT_PAGE_MAT_ROWS = 26;  // <- pages suivantes: presque juste la table
+
+  const matRows = Array.isArray(usages) ? usages : [];
+  const firstChunk = matRows.slice(0, FIRST_PAGE_MAT_ROWS);
+  const rest = matRows.slice(FIRST_PAGE_MAT_ROWS);
+  const otherChunks = chunkArray(rest, NEXT_PAGE_MAT_ROWS);
+
+  // on aura au minimum 1 page
+  const totalPages = 1 + (otherChunks.length || 0);
 
   return (
     <Document>
+      {/* ------------------- PAGE 1 ------------------- */}
       <Page size="A4" style={pdfStyles.page}>
-        {/* ✅ PDF: Header (NE CHANGE PAS) */}
-        <View style={[pdfStyles.spaceBetween, { marginBottom: 12 }]}>
-          <View>
-            <Text style={pdfStyles.h1}>{factureConfig?.companyName || "Gyrotech"}</Text>
-            <Text style={[pdfStyles.muted, { fontSize: 11.0, marginTop: 2 }]}>
-              {factureConfig?.companySubtitle || "Service mobile – Diagnostic & réparation"}
-            </Text>
+        <Text
+          style={pdfStyles.pageNumber}
+          render={({ pageNumber, totalPages: tp }) => `Page ${pageNumber} / ${tp}`}
+          fixed
+        />
 
-            <View style={{ marginTop: 4 }}>
-              {factureConfig?.companyPhone ? (
-                <Text style={[pdfStyles.muted, pdfStyles.small]}>Téléphone : {factureConfig.companyPhone}</Text>
-              ) : null}
-              {factureConfig?.companyEmail ? (
-                <Text style={[pdfStyles.muted, pdfStyles.small]}>Courriel : {factureConfig.companyEmail}</Text>
-              ) : null}
-            </View>
-          </View>
+        {/* Header (répété sur toutes pages via composant, mais ici c’est page 1) */}
+        <PdfDocHeader factureConfig={factureConfig} dossierNo={dossierNo} dateStr={dateStr} projet={projet} />
 
-          <View style={{ alignItems: "flex-end" }}>
-            <Text style={{ fontSize: 15, fontWeight: 700, marginBottom: 2 }}>BON DE TRAVAIL</Text>
-            <Text>
-              <Text style={{ fontWeight: 700 }}>No :</Text> {dossierNo}
-            </Text>
-            <Text>
-              <Text style={{ fontWeight: 700 }}>Date :</Text> {dateStr}
-            </Text>
-            <Text>
-              <Text style={{ fontWeight: 700 }}>Projet :</Text> {projet?.clientNom || projet?.nom || "—"}
-            </Text>
-          </View>
-        </View>
+        {/* ✅ Détails véhicule/projet (seulement page 1) */}
+        <View style={{ marginBottom: 10 }}>
+          <View style={pdfStyles.detailsBox}>
+            <Text style={pdfStyles.detailsTitle}>Détails véhicule / projet</Text>
 
-        {/* Boxes: Facturé à = 1/4, Détails = 3/4 */}
-        <View style={[pdfStyles.row, { gap: 10, marginBottom: 12 }]}>
-          <View style={[pdfStyles.box, { flex: 1 }]}>
-            <Text style={pdfStyles.sectionTitle}>Facturé à</Text>
-            <Text style={{ fontWeight: 700, fontSize: 12.2 }}>{clientNom}</Text>
-            {projet?.clientAdresse ? <Text style={{ marginTop: 3 }}>{projet.clientAdresse}</Text> : null}
-            {projet?.clientTelephone ? <Text style={{ marginTop: 6 }}>Tél : {projet.clientTelephone}</Text> : null}
-            {projet?.clientCourriel ? <Text>Courriel : {projet.clientCourriel}</Text> : null}
-          </View>
-
-          <View style={[pdfStyles.box, { flex: 3 }]}>
-            <Text style={[pdfStyles.sectionTitle, { textAlign: "center" }]}>Détails véhicule / projet</Text>
-
-            {/* ✅ 2 colonnes + valeurs collées au ":" */}
-            <View style={pdfStyles.kvGrid}>
-              <View style={[pdfStyles.kvCol, pdfStyles.kvColLeft]}>
-                <PdfKVRow label="Nom" value={projet?.nom || "—"} />
-                <PdfKVRow label="Unité" value={projet?.numeroUnite || "—"} />
-                <PdfKVRow label="Année" value={projet?.annee ?? "—"} />
-                <PdfKVRow label="Marque" value={projet?.marque || "—"} />
-                <PdfKVRow label="Ouvert le" value={openedDateStr || "—"} />
+            <View style={pdfStyles.detailsGrid}>
+              <View style={pdfStyles.detailsCol}>
+                <PdfField label="Nom" value={projet?.nom} />
+                <PdfField label="Unité" value={projet?.numeroUnite} />
+                <PdfField label="Année" value={projet?.annee ?? "—"} />
+                <PdfField label="Marque" value={projet?.marque} />
+                <PdfField label="Ouvert le" value={openedDateStr} />
+                <PdfField label="Ouvert par" value={openedByName} />
               </View>
 
-              <View style={pdfStyles.kvCol}>
-                <PdfKVRow label="Modèle" value={projet?.modele || "—"} />
-                <PdfKVRow label="Plaque" value={projet?.plaque || "—"} />
-                <PdfKVRow label="Odomètre" value={fmtOdometer(projet?.odometre)} />
-                <PdfKVRow label="VIN" value={projet?.vin || "—"} />
-                <PdfKVRow label="Rempli par" value={filledByName || "—"} />
+              <View style={pdfStyles.detailsColGap} />
+
+              <View style={pdfStyles.detailsCol}>
+                <PdfField label="Modèle" value={projet?.modele} />
+                <PdfField label="Plaque" value={projet?.plaque} />
+                <PdfField label="Odomètre" value={fmtOdometer(projet?.odometre)} />
+                <PdfField label="VIN" value={projet?.vin} />
+                <PdfField label="Fermé par" value={closedByName} />
               </View>
             </View>
           </View>
         </View>
 
-        {/* Main table */}
-        <Text style={[pdfStyles.sectionTitle, { marginBottom: 6 }]}>Détail du Bon de Travail</Text>
+        {/* NOTE (seulement page 1) */}
+        <View style={pdfStyles.noteBox}>
+          <Text style={pdfStyles.noteTitle}>Note</Text>
+          <Text style={pdfStyles.noteText}>{note.trim() ? note : "—"}</Text>
+        </View>
+
+        {/* Main table (MO) */}
+        <Text style={[pdfStyles.sectionTitle, { marginTop: 12, marginBottom: 6 }]}>Détail du Bon de Travail</Text>
         <View style={[pdfStyles.table, { marginBottom: 10 }]}>
           <View style={pdfStyles.trHead}>
             <Text style={[pdfStyles.th, pdfStyles.cLeft]}>Description</Text>
@@ -509,7 +693,7 @@ function InvoiceDocument({
             <Text style={[pdfStyles.th, pdfStyles.cRight]}>Total</Text>
           </View>
 
-          <View style={pdfStyles.tr}>
+          <View style={pdfStyles.tr} wrap={false}>
             <Text style={[pdfStyles.td, pdfStyles.cLeft]}>Main-d'œuvre – {projet?.nom || "Travaux mécaniques"}</Text>
             <Text style={[pdfStyles.td, pdfStyles.cCenter]}>
               {Number(totalHeuresArrondies || 0).toLocaleString("fr-CA", {
@@ -523,68 +707,95 @@ function InvoiceDocument({
           </View>
         </View>
 
-        {/* Materials */}
+        {/* Materials (page 1) */}
         <Text style={[pdfStyles.sectionTitle, { marginBottom: 6 }]}>Matériel utilisé</Text>
-        <View style={pdfStyles.table}>
-          <View style={pdfStyles.trHead}>
-            <Text style={[pdfStyles.th, pdfStyles.cLeft]}>Nom</Text>
-            <Text style={[pdfStyles.th, pdfStyles.cCenter]}>Qté</Text>
-            <Text style={[pdfStyles.th, pdfStyles.cRight]}>Prix unitaire</Text>
-            <Text style={[pdfStyles.th, pdfStyles.cRight]}>Total</Text>
-          </View>
+        <PdfMaterialsTable rows={firstChunk.length ? firstChunk : (matRows.length ? [] : [])} />
 
-          {usages?.length ? (
-            usages.map((u) => {
-              const qty = Number(u.qty) || 0;
-              const prix = Number(u.prix) || 0;
-              const tot = qty * prix;
-              return (
-                <View key={u.id} style={pdfStyles.tr}>
-                  <Text style={[pdfStyles.td, pdfStyles.cLeft]}>{u.nom}</Text>
-                  <Text style={[pdfStyles.td, pdfStyles.cCenter]}>{qty}</Text>
-                  <Text style={[pdfStyles.td, pdfStyles.cRight]}>{money(prix)}</Text>
-                  <Text style={[pdfStyles.td, pdfStyles.cRight]}>{money(tot)}</Text>
-                </View>
-              );
-            })
-          ) : (
-            <View style={pdfStyles.tr}>
-              <Text style={[pdfStyles.td, pdfStyles.cLeft, pdfStyles.muted]}>Aucun matériel enregistré.</Text>
-              <Text style={[pdfStyles.td, pdfStyles.cCenter]}> </Text>
-              <Text style={[pdfStyles.td, pdfStyles.cRight]}> </Text>
-              <Text style={[pdfStyles.td, pdfStyles.cRight]}> </Text>
+        {/* Si TOUT rentre en 1 page (aucune page suivante), afficher totaux ici */}
+        {totalPages === 1 && (
+          <>
+            <View style={{ marginTop: 6, alignItems: "flex-end" }}>
+              <Text style={{ fontSize: 11.2, fontWeight: "bold", lineHeight: 1.35 }}>
+                Total matériel : {money(totalMateriel || 0)}
+              </Text>
             </View>
-          )}
-        </View>
 
-        {/* ✅ Total matériel (dans la section matériel) */}
-        <View style={{ marginTop: 6, alignItems: "flex-end" }}>
-          <Text style={{ fontSize: 11.2, fontWeight: 700 }}>
-            Total matériel : {money(totalMateriel || 0)}
-          </Text>
-        </View>
+            <View style={pdfStyles.totalsBox}>
+              <View style={pdfStyles.totalsRow}>
+                <Text style={pdfStyles.totalsLabel}>Sous-total :</Text>
+                <Text style={pdfStyles.totalsValue}>{money(sousTotal)}</Text>
+              </View>
+              <View style={pdfStyles.totalsRow}>
+                <Text style={pdfStyles.totalsLabel}>TPS (5,0 %) :</Text>
+                <Text style={pdfStyles.totalsValue}>{money(tps)}</Text>
+              </View>
+              <View style={pdfStyles.totalsRow}>
+                <Text style={pdfStyles.totalsLabel}>TVQ (9,975 %) :</Text>
+                <Text style={pdfStyles.totalsValue}>{money(tvq)}</Text>
+              </View>
 
-        {/* Totaux */}
-        <View style={pdfStyles.totalsBox}>
-          <View style={pdfStyles.totalsRow}>
-            <Text style={pdfStyles.totalsLabel}>Sous-total :</Text>
-            <Text style={pdfStyles.totalsValue}>{money(sousTotal)}</Text>
-          </View>
-          <View style={pdfStyles.totalsRow}>
-            <Text style={pdfStyles.totalsLabel}>TPS (5,0 %) :</Text>
-            <Text style={pdfStyles.totalsValue}>{money(tps)}</Text>
-          </View>
-          <View style={pdfStyles.totalsRow}>
-            <Text style={pdfStyles.totalsLabel}>TVQ (9,975 %) :</Text>
-            <Text style={pdfStyles.totalsValue}>{money(tvq)}</Text>
-          </View>
-
-          <View style={pdfStyles.totalsRowStrong}>
-            <Text style={pdfStyles.totalsLabelStrong}>Total :</Text>
-            <Text style={pdfStyles.totalsValueStrong}>{money(totalFacture)}</Text>
-          </View>
-        </View>
+              <View style={pdfStyles.totalsRowStrong}>
+                <Text style={pdfStyles.totalsLabelStrong}>Total :</Text>
+                <Text style={pdfStyles.totalsValueStrong}>{money(totalFacture)}</Text>
+              </View>
+            </View>
+          </>
+        )}
       </Page>
+
+      {/* ------------------- PAGES SUIVANTES (Matériel) ------------------- */}
+      {otherChunks.map((chunk, idx) => {
+        const isLast = idx === otherChunks.length - 1;
+        const showTotalsHere = isLast; // totaux uniquement à la dernière page
+        const pageKey = `mat-page-${idx}`;
+
+        return (
+          <Page key={pageKey} size="A4" style={pdfStyles.page}>
+            <Text
+              style={pdfStyles.pageNumber}
+              render={({ pageNumber, totalPages: tp }) => `Page ${pageNumber} / ${tp}`}
+              fixed
+            />
+
+            {/* ✅ Header répété */}
+            <PdfDocHeader factureConfig={factureConfig} dossierNo={dossierNo} dateStr={dateStr} projet={projet} />
+
+            {/* ✅ Titre répété + table header répété */}
+            <Text style={[pdfStyles.sectionTitle, { marginBottom: 6 }]}>Matériel utilisé (suite)</Text>
+            <PdfMaterialsTable rows={chunk} />
+
+            {showTotalsHere && (
+              <>
+                <View style={{ marginTop: 6, alignItems: "flex-end" }}>
+                  <Text style={{ fontSize: 11.2, fontWeight: "bold", lineHeight: 1.35 }}>
+                    Total matériel : {money(totalMateriel || 0)}
+                  </Text>
+                </View>
+
+                <View style={pdfStyles.totalsBox}>
+                  <View style={pdfStyles.totalsRow}>
+                    <Text style={pdfStyles.totalsLabel}>Sous-total :</Text>
+                    <Text style={pdfStyles.totalsValue}>{money(sousTotal)}</Text>
+                  </View>
+                  <View style={pdfStyles.totalsRow}>
+                    <Text style={pdfStyles.totalsLabel}>TPS (5,0 %) :</Text>
+                    <Text style={pdfStyles.totalsValue}>{money(tps)}</Text>
+                  </View>
+                  <View style={pdfStyles.totalsRow}>
+                    <Text style={pdfStyles.totalsLabel}>TVQ (9,975 %) :</Text>
+                    <Text style={pdfStyles.totalsValue}>{money(tvq)}</Text>
+                  </View>
+
+                  <View style={pdfStyles.totalsRowStrong}>
+                    <Text style={pdfStyles.totalsLabelStrong}>Total :</Text>
+                    <Text style={pdfStyles.totalsValueStrong}>{money(totalFacture)}</Text>
+                  </View>
+                </View>
+              </>
+            )}
+          </Page>
+        );
+      })}
     </Document>
   );
 }
@@ -603,8 +814,10 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
     tps,
     tvq,
     totalFacture,
-    filledByName,
     openedDateStr,
+    openedByName,
+    closedByName,
+    noteText,
   } = ctx;
 
   const docEl = (
@@ -622,8 +835,10 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
       tps={tps}
       tvq={tvq}
       totalFacture={totalFacture}
-      filledByName={filledByName}
       openedDateStr={openedDateStr}
+      openedByName={openedByName}
+      closedByName={closedByName}
+      noteText={noteText}
     />
   );
 
@@ -644,15 +859,18 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   const [totalMs, setTotalMs] = useState(0);
   const [usages, setUsages] = useState([]);
-  // ✅ AJOUT: remisMaterielVehicule
   const [checks, setChecks] = useState({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
   const [materielOpen, setMaterielOpen] = useState(false);
 
-  // ✅ FIX: on mesure le temps passé dans le wizard "fermeture BT"
   const closeStartMsRef = useRef(null);
 
-  // ✅ AJOUT: info "rempli par" (affichage + sauvegarde)
+  // fermé par
   const [filledBy, setFilledBy] = useState({ name: null, uid: null, email: null });
+
+  // NOTE
+  const [noteDraft, setNoteDraft] = useState("");
+  const noteSaveTimerRef = useRef(null);
+  const lastSavedNoteRef = useRef(null);
 
   const [factureConfig, setFactureConfig] = useState({
     companyName: "Gyrotech",
@@ -665,18 +883,18 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
   useEffect(() => {
     if (!open) return;
 
-    // ✅ start "temps fermeture" au moment où le wizard s’ouvre
     closeStartMsRef.current = Date.now();
 
     setError(null);
-    // ✅ reset checkbox
     setChecks({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
     setTotalMs(0);
     setUsages([]);
     setMaterielOpen(false);
     setStep(startAtSummary ? "summary" : "ask");
 
-    // ✅ Rempli par (best effort): employé lié au compte auth
+    setNoteDraft((projet?.note ?? "").toString());
+    lastSavedNoteRef.current = (projet?.note ?? "").toString();
+
     (async () => {
       try {
         const u = auth.currentUser;
@@ -705,7 +923,46 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         console.error(e);
       }
     })();
+
+    return () => {
+      if (noteSaveTimerRef.current) {
+        clearTimeout(noteSaveTimerRef.current);
+        noteSaveTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, projet?.id, startAtSummary]);
+
+  // autosave note (debounce) quand on est en summary
+  useEffect(() => {
+    if (!open || step !== "summary" || !projet?.id) return;
+
+    const cur = (noteDraft ?? "").toString();
+    if (cur === lastSavedNoteRef.current) return;
+
+    if (noteSaveTimerRef.current) clearTimeout(noteSaveTimerRef.current);
+
+    noteSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const clean = cur.trim();
+        await updateDoc(doc(db, "projets", projet.id), {
+          note: clean ? clean : null,
+          noteUpdatedAt: serverTimestamp(),
+          noteUpdatedByUid: filledBy?.uid || null,
+          noteUpdatedByEmail: filledBy?.email || null,
+          noteUpdatedByName: filledBy?.name || null,
+        });
+        lastSavedNoteRef.current = cur;
+      } catch (e) {
+        console.warn("autosave note warning:", e);
+      }
+    }, 450);
+
+    return () => {
+      if (noteSaveTimerRef.current) clearTimeout(noteSaveTimerRef.current);
+      noteSaveTimerRef.current = null;
+    };
+  }, [noteDraft, open, step, projet?.id, filledBy?.uid, filledBy?.email, filledBy?.name]);
 
   // si startAtSummary => calcule tout automatiquement
   useEffect(() => {
@@ -750,7 +1007,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     return () => unsub();
   }, [open, step, projet?.id]);
 
-  // ✅ gate final close avec le nouveau check
   const canConfirm = checks.infos && checks.materiel && checks.temps && checks.remisMaterielVehicule && !loading;
 
   const goSummary = async () => {
@@ -775,6 +1031,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       setLoading(true);
       setError(null);
 
+      const noteClean = (noteDraft ?? "").toString().trim();
+
       await depunchWorkersOnProject(projet.id);
       await clearEmployeesLastProject(projet.id);
 
@@ -782,22 +1040,37 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       const openedAtDate = toDateSafe(openedAtRaw);
       const openedAtTs = openedAtDate ? Timestamp.fromDate(openedAtDate) : null;
 
+      const closedByName = filledBy?.name || (filledBy?.email ? filledBy.email : null);
+
       await updateDoc(doc(db, "projets", projet.id), {
         ouvert: false,
         fermeComplet: false,
         fermeCompletAt: null,
         deleteAt: null,
 
-        // ✅ AJOUT (soft close): on garde une trace si jamais c'est coché (souvent false en soft)
+        // NOTE
+        note: noteClean ? noteClean : null,
+        noteUpdatedAt: serverTimestamp(),
+        noteUpdatedByUid: filledBy?.uid || null,
+        noteUpdatedByEmail: filledBy?.email || null,
+        noteUpdatedByName: filledBy?.name || null,
+
         materielRemisAuClientVehicule: !!checks.remisMaterielVehicule,
         materielRemisAuClientVehiculeAt: checks.remisMaterielVehicule ? serverTimestamp() : null,
 
-        // ✅ AJOUT: infos BT (en base)
         btOpenedAt: openedAtTs,
+
+        // compat ancien
         btRempliParNom: filledBy?.name || null,
         btRempliParUid: filledBy?.uid || null,
         btRempliParEmail: filledBy?.email || null,
         btRempliParAt: serverTimestamp(),
+
+        // nouveau Fermé par
+        btFermeParNom: closedByName,
+        btFermeParUid: filledBy?.uid || null,
+        btFermeParEmail: filledBy?.email || null,
+        btFermeParAt: serverTimestamp(),
       });
 
       onClosed?.("soft");
@@ -811,7 +1084,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
   if (!open || !projet) return null;
 
-  // ⚠️ Ces calculs restent pour l’affichage UI, mais le PDF final sera recalculé LIVE au click.
   const totalMateriel = usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0);
 
   const tempsOuvertureMinutes = Number(projet.tempsOuvertureMinutes || 0) || 0;
@@ -838,7 +1110,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
   const openedAtRawUI = getBTOpenedAt(projet);
   const openedDateStrUI = fmtDate(openedAtRawUI);
 
-  const filledByNameUI = filledBy?.name || (filledBy?.email ? filledBy.email : "—");
+  const openedByNameUI = getBTOpenedByName(projet) || "—";
+  const closedByNameUI = filledBy?.name || (filledBy?.email ? filledBy.email : "—");
 
   const handleFinalClose = async () => {
     if (!projet?.id || !canConfirm) return;
@@ -847,16 +1120,32 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       setLoading(true);
       setError(null);
 
-      // ✅ 1) Écrire le segment "temps fermeture" (wizard open -> maintenant) dans projet + employé
+      const noteClean = (noteDraft ?? "").toString().trim();
+
+      // force save note
+      try {
+        await updateDoc(doc(db, "projets", projet.id), {
+          note: noteClean ? noteClean : null,
+          noteUpdatedAt: serverTimestamp(),
+          noteUpdatedByUid: filledBy?.uid || null,
+          noteUpdatedByEmail: filledBy?.email || null,
+          noteUpdatedByName: filledBy?.name || null,
+        });
+        lastSavedNoteRef.current = (noteDraft ?? "").toString();
+      } catch (e) {
+        console.warn("force save note warning:", e);
+      }
+
+      // segment temps fermeture
       const endNow = new Date();
       const startMs = Number(closeStartMsRef.current || Date.now());
       await recordCloseBTTime({ projet, startMs, endDate: endNow });
 
-      // ✅ 2) Dépunch (comme avant)
+      // dépunch
       await depunchWorkersOnProject(projet.id);
       await clearEmployeesLastProject(projet.id);
 
-      // ✅ 3) Recalcul LIVE juste avant PDF (inclut le segment fermeture)
+      // Recalc LIVE
       const totalNowMs = await computeProjectTotalMs(projet.id);
 
       const tOpenMin = Number(projet.tempsOuvertureMinutes || 0) || 0;
@@ -886,9 +1175,9 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       const openedAtDate = toDateSafe(openedAtRaw);
       const openedAtTs = openedAtDate ? Timestamp.fromDate(openedAtDate) : null;
 
-      const filledByName = filledBy?.name || (filledBy?.email ? filledBy.email : null);
+      const openedByName = getBTOpenedByName(projet) || null;
+      const closedByName = filledBy?.name || (filledBy?.email ? filledBy.email : null);
 
-      // ✅ 4) PDF + Email avec valeurs LIVE
       const pdfPath = await generateAndUploadInvoicePdf(projet, {
         factureConfig,
         dossierNo,
@@ -902,14 +1191,15 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         tps: tpsLive,
         tvq: tvqLive,
         totalFacture: totalFactureLive,
-        filledByName,
         openedDateStr,
+        openedByName,
+        closedByName,
+        noteText: noteClean ? noteClean : null,
       });
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
 
-      // ✅ tu peux mettre une string OU un array; ici on garde simple (1 email)
-      const toEmail = ['pieces@gyrotech.ca', 'ventes@gyrotech.ca', 'service@gyrotech.ca', 'tlemieux@gyrotech.ca'];
+      const toEmail = ["jlabrie@styro.ca"];
 
       await sendInvoiceEmail({
         projetId: projet.id,
@@ -926,16 +1216,26 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         deleteAt: Timestamp.fromDate(plusDays(new Date(), 60)),
         factureEnvoyeeA: String(toEmail || "").trim(),
 
-        // ✅ AJOUT (full close): trace "matériel remis"
+        note: noteClean ? noteClean : null,
+        noteUpdatedAt: serverTimestamp(),
+        noteUpdatedByUid: filledBy?.uid || null,
+        noteUpdatedByEmail: filledBy?.email || null,
+        noteUpdatedByName: filledBy?.name || null,
+
         materielRemisAuClientVehicule: true,
         materielRemisAuClientVehiculeAt: serverTimestamp(),
 
-        // ✅ AJOUT: infos BT (en base)
         btOpenedAt: openedAtTs,
+
         btRempliParNom: filledBy?.name || null,
         btRempliParUid: filledBy?.uid || null,
         btRempliParEmail: filledBy?.email || null,
         btRempliParAt: serverTimestamp(),
+
+        btFermeParNom: closedByName || null,
+        btFermeParUid: filledBy?.uid || null,
+        btFermeParEmail: filledBy?.email || null,
+        btFermeParAt: serverTimestamp(),
       });
 
       onClosed?.("full");
@@ -1079,7 +1379,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                   borderColor: "#d1d5db",
                 }}
               >
-                {/* ✅ Ligne du haut: No (gauche) + Titre (centré) */}
+                {/* ligne du haut */}
                 <div
                   style={{
                     display: "grid",
@@ -1098,80 +1398,66 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                   <div style={{ visibility: "hidden", fontSize: 14, fontWeight: 900 }}>No : {dossierNoUI}</div>
                 </div>
 
-                {/* ✅ Facturé (gauche) + Détails (droite) */}
-                <div style={{ display: "flex", gap: 14, marginBottom: 12, alignItems: "flex-start" }}>
-                  <div style={{ flex: 0.75 }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6, color: "#0f172a" }}>Facturé à</div>
-
+                {/* Détails */}
+                <div style={{ marginBottom: 12 }}>
+                  <div
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 8,
+                      background: "#ffffff",
+                      boxShadow: "0 1px 0 rgba(15,23,42,0.04)",
+                    }}
+                  >
                     <div
                       style={{
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 12,
-                        padding: 10,
-                        fontSize: 13,
-                        background: "#ffffff",
-                        boxShadow: "0 1px 0 rgba(15,23,42,0.04)",
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                        gap: 6,
+                        alignItems: "start",
                       }}
                     >
-                      <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 3, color: "#0f172a" }}>
-                        {projet.clientNom || projet.nom || "—"}
-                      </div>
+                      <DetailKV k="Nom" v={projet.nom || "—"} />
+                      <DetailKV k="Modèle" v={projet.modele || "—"} />
+                      <DetailKV k="Unité" v={projet.numeroUnite || "—"} />
+                      <DetailKV k="Plaque" v={projet.plaque || "—"} />
+                      <DetailKV k="Année" v={projet.annee ?? "—"} />
+                      <DetailKV k="Odomètre" v={fmtOdometer(projet.odometre)} />
+                      <DetailKV k="Marque" v={projet.marque || "—"} />
+                      <DetailKV k="VIN" v={projet.vin || "—"} />
 
-                      {projet.clientAdresse ? (
-                        <div style={{ color: "#334155", lineHeight: 1.2, marginBottom: 4 }}>{projet.clientAdresse}</div>
-                      ) : null}
-
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, color: "#334155", lineHeight: 1.2 }}>
-                        {projet.clientTelephone ? (
-                          <div>
-                            <strong style={{ color: "#0f172a" }}>Tél :</strong> {projet.clientTelephone}
-                          </div>
-                        ) : null}
-                        {projet.clientCourriel ? (
-                          <div>
-                            <strong style={{ color: "#0f172a" }}>Courriel :</strong> {projet.clientCourriel}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ flex: 2.25 }}>
-                    <div
-                      style={{
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 12,
-                        padding: 8,
-                        background: "#ffffff",
-                        boxShadow: "0 1px 0 rgba(15,23,42,0.04)",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", // ✅ important
-                          gap: 6,
-                          alignItems: "start",
-                        }}
-                      >
-                        <DetailKV k="Nom" v={projet.nom || "—"} />
-                        <DetailKV k="Modèle" v={projet.modele || "—"} />
-                        <DetailKV k="Unité" v={projet.numeroUnite || "—"} />
-                        <DetailKV k="Plaque" v={projet.plaque || "—"} />
-                        <DetailKV k="Année" v={projet.annee ?? "—"} />
-                        <DetailKV k="Odomètre" v={fmtOdometer(projet.odometre)} />
-                        <DetailKV k="Marque" v={projet.marque || "—"} />
-                        <DetailKV k="VIN" v={projet.vin || "—"} />
-
-                        {/* ✅ AJOUT: Ouverture + Rempli par */}
-                        <DetailKV k="Ouvert le" v={openedDateStrUI} />
-                        <DetailKV k="Rempli par" v={filledByNameUI} />
-                      </div>
+                      <DetailKV k="Ouvert le" v={openedDateStrUI} />
+                      <DetailKV k="Ouvert par" v={openedByNameUI} />
+                      <DetailKV k="Fermé par" v={closedByNameUI} />
                     </div>
                   </div>
                 </div>
 
-                {/* ... le reste inchangé (tables + totaux) */}
+                {/* NOTE */}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "#0f172a", marginBottom: 6 }}>
+                    Note (incluse dans le PDF)
+                  </div>
+                  <textarea
+                    value={noteDraft}
+                    onChange={(e) => setNoteDraft(e.target.value)}
+                    placeholder="Résumé des travaux / remarques…"
+                    style={{
+                      width: "100%",
+                      minHeight: 90,
+                      resize: "vertical",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 10,
+                      fontSize: 14,
+                      fontWeight: 800,
+                      background: "#f8fafc",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+
+                {/* tables */}
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Détail du Bon de Travail</div>
 
@@ -1200,9 +1486,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                           {tauxHoraire > 0 ? tauxHoraire.toLocaleString("fr-CA", { style: "currency", currency: "CAD" }) : "—"}
                         </td>
                         <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
-                          {coutMainOeuvre != null
-                            ? coutMainOeuvre.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })
-                            : "—"}
+                          {coutMainOeuvre != null ? coutMainOeuvre.toLocaleString("fr-CA", { style: "currency", currency: "CAD" }) : "—"}
                         </td>
                       </tr>
                     </tbody>
@@ -1275,7 +1559,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                     </tbody>
                   </table>
 
-                  {/* ✅ Total matériel DANS la section matériel du BT */}
                   <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
                     <div style={{ fontWeight: 900, color: "#0f172a" }}>
                       Total matériel : {totalMateriel.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
@@ -1339,7 +1622,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                 J’ai vérifié le temps total.
               </label>
 
-              {/* ✅ AJOUT demandé */}
               <label style={{ display: "block" }}>
                 <input
                   type="checkbox"
@@ -1387,13 +1669,15 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
           </div>
         )}
 
-        {materielOpen && <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />}
+        {materielOpen && (
+          <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />
+        )}
       </div>
     </div>
   );
 }
 
-/* ✅ petite rangée pour la boîte des totaux UI */
+/* petite rangée totaux UI */
 function RowTotal({ label, value, strong = false, total = false }) {
   const v = Number(value || 0);
   return (
@@ -1406,17 +1690,17 @@ function RowTotal({ label, value, strong = false, total = false }) {
   );
 }
 
-/* ✅ KV compact (valeur utilise toute la largeur dispo) */
+/* KV compact UI */
 function DetailKV({ k, v }) {
   const kk = String(k || "").toLowerCase();
-  const isVIN = kk === "vin"; // VIN peut être long -> on autorise wrap/break
+  const isVIN = kk === "vin";
   const valueStyle = isVIN ? { wordBreak: "break-all", whiteSpace: "normal" } : { whiteSpace: "nowrap" };
 
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "96px minmax(0, 1fr)", // ✅ élargi pour "Rempli par"
+        gridTemplateColumns: "96px minmax(0, 1fr)",
         columnGap: 8,
         alignItems: "baseline",
         padding: "6px 8px",
@@ -1456,7 +1740,7 @@ function DetailKV({ k, v }) {
 
 /**
  * IMPORTANT:
- * - Il n’y a PAS de "PageProjetsFermes" ici, parce que tu as déjà ClosedProjectsPopup dans PageListeProjet.
+ * - Il n’y a PAS de "PageProjetsFermes" ici.
  * - Ce fichier sert uniquement à exporter CloseProjectWizard.
  */
 export default function PageProjetsFermes() {

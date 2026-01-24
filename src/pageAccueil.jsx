@@ -62,6 +62,13 @@ function getProjetNom(data) {
   return "";
 }
 
+/* ✅ AJOUT: libellé projet pour la dropdown = Nom + Unité (si présent) */
+function getProjetLabel(p) {
+  const nom = String(p?.nom || p?.clientNom || "(sans nom)").trim() || "(sans nom)";
+  const unite = String(p?.numeroUnite ?? p?.unite ?? "").trim();
+  return unite ? `${nom} — ${unite}` : nom;
+}
+
 /* ---------------------- Firestore helpers (Employés) ---------------------- */
 function dayRef(empId, key) {
   return doc(db, "employes", empId, "timecards", key);
@@ -1015,7 +1022,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
                   <option value="">— Projet —</option>
                   {projets.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.nom || "(sans nom)"}
+                      {getProjetLabel(p)}
                     </option>
                   ))}
                 </select>
@@ -1199,7 +1206,7 @@ export default function PageAccueil() {
               src={logoGyrotech}
               alt="GyroTech"
               style={{
-                height: 200,          // ajuste ici (ex: 30-42)
+                height: 200, // ajuste ici (ex: 30-42)
                 width: "auto",
                 display: "block",
                 filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.15))",
@@ -1209,7 +1216,6 @@ export default function PageAccueil() {
         }
         right={<ClockBadge now={now} />}
       />
-
 
       <PageContainer>
         <div style={{ height: EDGE_HEADER_H }} />

@@ -1244,6 +1244,9 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, on
               <strong>Plaque:</strong> {projet.plaque || "—"}
             </div>
             <div style={{ marginBottom: 6 }}>
+              <strong>Odomètre:</strong> {projet.odometre ?? "—"}
+            </div>
+            <div style={{ marginBottom: 6 }}>
               <strong>VIN:</strong> {projet.vin || "—"}
             </div>
 
@@ -1333,7 +1336,6 @@ function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onClose
       {cell(p.clientNom || p.nom || "—")}
       {cell(p.numeroUnite || "—")}
       {cell(p.modele || "—")}
-      {cell(p.clientTelephone || "—")}
       {cell(typeof p.annee === "number" ? p.annee : p.annee || "—")}
       {cell(p.marque || "—")}
       {cell(p.plaque || "—")}
@@ -1392,7 +1394,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const clients = useClients();
 
   const [clientNom, setClientNom] = useState("");
-  const [clientTelephone, setClientTelephone] = useState("");
   const [numeroUnite, setNumeroUnite] = useState("");
   const [annee, setAnnee] = useState("");
   const [marque, setMarque] = useState("");
@@ -1413,6 +1414,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const modeles = useModeles(marqueId);
 
   const createStartMsRef = useRef(null);
+  const prevMarqueIdRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
@@ -1420,7 +1422,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
 
     if (mode === "edit" && projet) {
       setClientNom(projet.clientNom ?? "");
-      setClientTelephone(projet.clientTelephone ?? "");
       setNumeroUnite(projet.numeroUnite ?? "");
       setAnnee(projet.annee != null ? String(projet.annee) : "");
       setMarque(projet.marque ?? "");
@@ -1432,9 +1433,9 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       setNote(projet.note ?? "");
       setNextDossierNo(null);
       createStartMsRef.current = null;
+      prevMarqueIdRef.current = null;
     } else {
       setClientNom("");
-      setClientTelephone("");
       setNumeroUnite("");
       setAnnee("");
       setMarque("");
@@ -1452,12 +1453,24 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         if (Number.isFinite(pending) && pending > 0) startMs = pending;
       } catch {}
       createStartMsRef.current = startMs;
+      prevMarqueIdRef.current = null;
+
     }
   }, [open, mode, projet]);
 
   useEffect(() => {
-    setModele("");
-  }, [marqueId]);
+    if (!open) return;
+
+    const prev = prevMarqueIdRef.current;
+    prevMarqueIdRef.current = marqueId;
+
+    // Premier calcul après ouverture: on ne touche pas au modèle
+    if (prev == null) return;
+
+    // Si la marque a vraiment changé après (action utilisateur), on reset le modèle
+    if (prev !== marqueId) setModele("");
+  }, [marqueId, open]);
+
 
   useEffect(() => {
     if (!open || mode !== "create") return;
@@ -1483,7 +1496,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       const draft = JSON.parse(raw);
 
       setClientNom(draft.clientNom ?? "");
-      setClientTelephone(draft.clientTelephone ?? "");
       setNumeroUnite(draft.numeroUnite ?? "");
       setAnnee(draft.annee ?? "");
       setMarque(draft.marque ?? "");
@@ -1523,7 +1535,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
     try {
       const cleanClientNom = clientNom.trim();
       const cleanNom = cleanClientNom;
-      const cleanClientTel = clientTelephone.trim();
       const cleanUnite = numeroUnite.trim();
       const selectedYear = annees.find((a) => String(a.id) === String(annee));
       const cleanAnnee = annee ? Number(selectedYear?.value ?? annee) : null;
@@ -1535,7 +1546,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       const cleanNote = note.trim();
 
       if (!cleanClientNom) return setMsg("Indique le nom du client/entreprise.");
-      if (!cleanClientTel) return setMsg("Indique le téléphone du client.");
       if (!cleanUnite) return setMsg("Indique le numéro d’unité.");
       if (!annee) return setMsg("Sélectionne une année.");
       if (!cleanMarque) return setMsg("Sélectionne une marque.");
@@ -1560,7 +1570,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       const payloadBase = {
         nom: cleanNom,
         clientNom: cleanClientNom,
-        clientTelephone: cleanClientTel,
         numeroUnite: cleanUnite,
         annee: Number(cleanAnnee),
         marque: cleanMarque,
@@ -1652,7 +1661,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const goReglages = () => {
     if (mode === "create") {
       try {
-        const draft = { clientNom, clientTelephone, numeroUnite, annee, marque, modele, plaque, odometre, vin, tempsEstimeHeures, note };
+        const draft = { clientNom, numeroUnite, annee, marque, modele, plaque, odometre, vin, tempsEstimeHeures, note };
         window.sessionStorage?.setItem("draftProjetFromReglages", JSON.stringify(draft));
         window.sessionStorage?.setItem("draftProjetOpen", "1");
       } catch (e) {
@@ -1759,11 +1768,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
             </div>
           </FieldV>
 
-
-          <FieldV label="Téléphone du client" compact>
-            <input value={clientTelephone} onChange={(e) => setClientTelephone(e.target.value)} style={inputC} />
-          </FieldV>
-
           <FieldV label="Numéro d’unité" compact>
             <input value={numeroUnite} onChange={(e) => setNumeroUnite(e.target.value)} style={inputC} />
           </FieldV>
@@ -1845,7 +1849,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
 
           {/* ✅ NOTE en bas */}
           <FieldV label="Note" compact>
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Écris une note (optionnel)" style={textareaC} />
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Résumé des travaux" style={textareaC} />
           </FieldV>
 
           <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
@@ -2044,7 +2048,6 @@ export default function PageListeProjet({ isAdmin = false }) {
               <th style={th}>Client</th>
               <th style={th}>Unité</th>
               <th style={th}>Modèle</th>
-              <th style={th}>Téléphone</th>
               <th style={th}>Année</th>
               <th style={th}>Marque</th>
               <th style={th}>Plaque</th>
