@@ -1199,7 +1199,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
 
-      const toEmail = ['pieces@gyrotech.ca', 'ventes@gyrotech.ca', 'service@gyrotech.ca', 'tlemieux@gyrotech.ca'];
+      const toEmail = ['jlabrie@styro.ca'];
 
       await sendInvoiceEmail({
         projetId: projet.id,

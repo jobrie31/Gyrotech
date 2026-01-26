@@ -873,7 +873,7 @@ export default function AutresProjetsSection({
               lineHeight: 1.2,
             }}
           >
-            📁 Autres projets
+            📁 Autres tâches
           </h2>
           {allowEdit && (
             <button type="button" onClick={openCreate} style={btnPrimary}>

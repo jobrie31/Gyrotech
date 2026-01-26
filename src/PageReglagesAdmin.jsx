@@ -344,7 +344,7 @@ export default function PageReglagesAdmin() {
     if (!isValidEmail(emailLower)) return alert("Email invalide.");
 
     if (employes.some((e) => (e.emailLower || "").toLowerCase() === emailLower)) {
-      return alert("Cet email existe déjà dans la liste des travailleurs.");
+      return alert("Cet email existe déjà dans la liste des employés.");
     }
 
     if (code.length < 4) {
@@ -376,7 +376,7 @@ export default function PageReglagesAdmin() {
   const onDelEmploye = async (id, nom) => {
     if (!canUseAdminPage) return;
 
-    const label = nom || "ce travailleur";
+    const label = nom || "cet employé ";
     if (
       !window.confirm(
         `Supprimer définitivement ${label} ? (Le punch / historique lié ne sera plus visible dans l'application.)`
@@ -905,8 +905,8 @@ export default function PageReglagesAdmin() {
       <section style={section}>
         <h3 style={h3Bold}>Gestion du temps (admin)</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Choisis une date, un type (Projet / Autre projet) et (optionnel) un employé pour voir les blocs de temps, puis les modifier.
-          Les changements sont appliqués au job (projet/autre projet) et à l&apos;employé.
+          Choisis une date, un type (Projet / Autre tâche) et (optionnel) un employé pour voir les blocs de temps, puis les modifier.
+          Les changements sont appliqués au job (projet/autre tâche) et à l&apos;employé.
           <br />
           <strong>Note:</strong> le bouton poubelle (Supprimer) est disponible seulement pour <strong>Projet</strong>.
         </div>
@@ -951,7 +951,7 @@ export default function PageReglagesAdmin() {
               style={input}
             >
               <option value="projet">Projet</option>
-              <option value="autre">Autre projet</option>
+              <option value="autre">Autre tâche</option>
             </select>
           </div>
 
@@ -970,7 +970,7 @@ export default function PageReglagesAdmin() {
             </div>
           ) : (
             <div>
-              <label style={label}>Autre projet</label>
+              <label style={label}>Autre tâche</label>
               <select value={timeOtherId} onChange={(e) => setTimeOtherId(e.target.value)} style={input}>
                 <option value="">Sélectionner…</option>
                 {timeAutresProjets.map((p) => (
@@ -998,7 +998,7 @@ export default function PageReglagesAdmin() {
         {(() => {
           const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
           if (!timeDate || !jobId) {
-            return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre projet.</div>;
+            return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre tâche.</div>;
           }
 
           return (
@@ -1125,9 +1125,9 @@ export default function PageReglagesAdmin() {
 
       {/* ===================== 3) TRAVAILLEURS ===================== */}
       <section style={section}>
-        <h3 style={h3Bold}>Travailleurs</h3>
+        <h3 style={h3Bold}>Employés</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ajoute un travailleur avec son email + un code d’activation (utilisé dans “Activer mon compte”).
+          Ajoute un employé avec son email + un code d’activation (utilisé dans “Activer mon compte”).
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "end" }}>
@@ -1136,7 +1136,7 @@ export default function PageReglagesAdmin() {
             <input
               value={employeNomInput}
               onChange={(e) => setEmployeNomInput(e.target.value)}
-              placeholder="Nom du travailleur"
+              placeholder="Nom de l'employé"
               style={{ ...input, width: "100%" }}
             />
           </div>
@@ -1201,7 +1201,7 @@ export default function PageReglagesAdmin() {
                             Nouveau code
                           </button>
                         )}
-                        <button onClick={() => onDelEmploye(emp.id, emp.nom)} style={btnDangerSmall} title="Supprimer ce travailleur">
+                        <button onClick={() => onDelEmploye(emp.id, emp.nom)} style={btnDangerSmall} title="Supprimer cet employé ">
                           Supprimer
                         </button>
                       </div>
@@ -1212,7 +1212,7 @@ export default function PageReglagesAdmin() {
               {employes.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
-                    Aucun travailleur pour l’instant.
+                    Aucun employé pour l’instant.
                   </td>
                 </tr>
               )}
@@ -1223,15 +1223,15 @@ export default function PageReglagesAdmin() {
 
       {/* ===================== 4) CODE AUTRES PROJETS ===================== */}
       <section style={section}>
-        <h3 style={h3Bold}>Code — Autres projets</h3>
+        <h3 style={h3Bold}>Code — Autres tâches</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres projets” avant de puncher.
+          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres tâches” avant de puncher.
           <br />
           Laisse vide pour ne pas demander de code.
         </div>
 
         {autresCodeError && <div style={alertErr}>{autresCodeError}</div>}
-        {autresCodeSaved && !autresCodeError && <div style={alertOk}>Code “Autres projets” enregistré.</div>}
+        {autresCodeSaved && !autresCodeError && <div style={alertOk}>Code “Autres tâches” enregistré.</div>}
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
@@ -1253,9 +1253,9 @@ export default function PageReglagesAdmin() {
 
       {/* ===================== 5) AUTRES PROJETS (ADMIN) ===================== */}
       <section style={section}>
-        <h3 style={h3Bold}>Autres projets (admin)</h3>
+        <h3 style={h3Bold}>Autres tâches (admin)</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Gestion de la banque “Autres projets”. Ici tu peux ajouter / modifier / supprimer.
+          Gestion de la banque “Autres tâches”. Ici tu peux ajouter / modifier / supprimer.
         </div>
 
         <AutresProjetsSection allowEdit={true} />
