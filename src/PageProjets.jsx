@@ -389,7 +389,7 @@ export default function PageProjets({ onOpenMaterial }) {
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               {/* ✅ No dossier AVANT client */}
-              <th style={thCenter}>No dossier</th>
+              <th style={thCenter}>BT</th>
 
               <th style={thCenter}>Client</th>
               <th style={thCenter}>Unité</th>

@@ -554,7 +554,7 @@ function PdfDocHeader({ factureConfig, dossierNo, dateStr, projet }) {
         <Text style={pdfStyles.headerTitle}>BON DE TRAVAIL</Text>
 
         <Text style={pdfStyles.headerLine}>
-          <Text style={{ fontWeight: "bold" }}>No :</Text> {dossierNo}
+          <Text style={{ fontWeight: "bold" }}>BT :</Text> {dossierNo}
         </Text>
         <Text style={pdfStyles.headerLine}>
           <Text style={{ fontWeight: "bold" }}>Date :</Text> {dateStr}
@@ -1199,7 +1199,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
 
-      const toEmail = ['jlabrie@styro.ca'];
+      const toEmail = ['pieces@gyrotech.ca', 'ventes@gyrotech.ca', 'service@gyrotech.ca', 'tlemieux@gyrotech.ca'];
 
       await sendInvoiceEmail({
         projetId: projet.id,
@@ -1389,13 +1389,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                     marginBottom: 6,
                   }}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>No : {dossierNoUI}</div>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>BT : {dossierNoUI}</div>
 
                   <div style={{ textAlign: "center", fontSize: 13.5, fontWeight: 900, color: "#0f172a" }}>
                     Détails véhicule / projet
                   </div>
 
-                  <div style={{ visibility: "hidden", fontSize: 14, fontWeight: 900 }}>No : {dossierNoUI}</div>
+                  <div style={{ visibility: "hidden", fontSize: 14, fontWeight: 900 }}>BT : {dossierNoUI}</div>
                 </div>
 
                 {/* Détails */}

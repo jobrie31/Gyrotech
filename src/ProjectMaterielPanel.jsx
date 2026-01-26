@@ -37,10 +37,7 @@ function useProject(projId, setError) {
 function useCategories(setError) {
   const [cats, setCats] = useState([]);
   useEffect(() => {
-    const qy = query(
-      collection(db, "categoriesMateriels"),
-      orderBy("nom", "asc")
-    );
+    const qy = query(collection(db, "categoriesMateriels"), orderBy("nom", "asc"));
     const unsub = onSnapshot(
       qy,
       (snap) => {
@@ -75,10 +72,7 @@ function useUsagesMateriels(projId, setError) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
     if (!projId) return;
-    const qy = query(
-      collection(db, "projets", projId, "usagesMateriels"),
-      orderBy("nom", "asc")
-    );
+    const qy = query(collection(db, "projets", projId, "usagesMateriels"), orderBy("nom", "asc"));
     const unsub = onSnapshot(
       qy,
       (snap) => {
@@ -95,6 +89,9 @@ function useUsagesMateriels(projId, setError) {
 
 /* ---------- actions ---------- */
 async function addMaterialQty({ projId, mat, amount }) {
+  // ✅ sécurité: ne permet jamais 0 / négatif
+  const incVal = Math.max(1, Number(amount) || 0);
+
   const ref = doc(db, "projets", projId, "usagesMateriels", mat.id);
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
@@ -104,13 +101,13 @@ async function addMaterialQty({ projId, mat, amount }) {
         nom: mat.nom || "",
         categorie: mat.categorie || null,
         prix: Number(mat.prix) || 0,
-        qty: Math.max(0, Number(amount) || 0),
+        qty: incVal,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     } else {
       tx.update(ref, {
-        qty: increment(Math.max(0, Number(amount) || 0)),
+        qty: increment(incVal),
         updatedAt: serverTimestamp(),
       });
     }
@@ -172,11 +169,16 @@ export default function ProjectMaterielPanel({
   const [showAdd, setShowAdd] = useState(startInAdd);
   const addRef = useRef(null);
 
+  // ✅ feedback visuel sans popup (quantité invalide)
+  const [invalidQtyId, setInvalidQtyId] = useState(null);
+
   const proj = useProject(projId, setError);
   const categories = useCategories(setError);
   const materiels = useMateriels(setError);
   const usages = useUsagesMateriels(projId, setError);
 
+  // ✅ On continue de propager les VRAIES erreurs au parent,
+  //    mais on ne déclenche plus d'erreur pour "Qté ≥ 1" (voir addWithQty)
   useEffect(() => {
     if (error) setParentError?.(error);
   }, [error, setParentError]);
@@ -196,15 +198,18 @@ export default function ProjectMaterielPanel({
       !term ||
       r.nom?.toLowerCase().includes(term) ||
       (r.categorie || "").toLowerCase().includes(term);
+
     const map = new Map();
     categories.forEach((c) => map.set(c.nom, []));
     const none = [];
+
     materiels.forEach((r) => {
       if (!pass(r)) return;
       const k = (r.categorie || "").trim();
       if (!k) none.push(r);
       else (map.get(k) || (map.set(k, []), map.get(k))).push(r);
     });
+
     const out = [];
     categories.forEach((c) => {
       out.push({ cat: c, items: map.get(c.nom) || [] });
@@ -214,29 +219,34 @@ export default function ProjectMaterielPanel({
   }, [materiels, categories, q]);
 
   const total = useMemo(
-    () =>
-      usages.reduce(
-        (s, u) =>
-          s + (Number(u.prix) || 0) * (Number(u.qty) || 0),
-        0
-      ),
+    () => usages.reduce((s, u) => s + (Number(u.prix) || 0) * (Number(u.qty) || 0), 0),
     [usages]
   );
 
   const add1 = (mat) =>
-    addMaterialQty({ projId, mat, amount: 1 }).catch((e) =>
-      setError(e.message || String(e))
-    );
+    addMaterialQty({ projId, mat, amount: 1 }).catch((e) => setError(e?.message || String(e)));
 
   const dec1 = (u) =>
-    removeOneMaterial({ projId, matId: u.id }).catch((e) =>
-      setError(e.message || String(e))
-    );
+    removeOneMaterial({ projId, matId: u.id }).catch((e) => setError(e?.message || String(e)));
 
   const addWithQty = async (mat) => {
-    const amount = asInt(qtyById[mat.id] ?? 1);
-    if (!Number.isFinite(amount) || amount < 1)
-      return setError("Qté ≥ 1.");
+    // ✅ IMPORTANT: plus de setError("Qté ≥ 1.") -> donc plus aucun popup d'erreur (popup + parent)
+    const raw = qtyById[mat.id];
+
+    // On exige que l'utilisateur remplisse la quantité (vide => on ne fait rien)
+    if (raw == null || String(raw).trim() === "") {
+      setInvalidQtyId(mat.id);
+      setTimeout(() => setInvalidQtyId(null), 900);
+      return;
+    }
+
+    const amount = asInt(String(raw).trim());
+    if (!Number.isFinite(amount) || amount < 1) {
+      setInvalidQtyId(mat.id);
+      setTimeout(() => setInvalidQtyId(null), 900);
+      return;
+    }
+
     try {
       await addMaterialQty({ projId, mat, amount });
       setQty(mat.id, "");
@@ -248,11 +258,7 @@ export default function ProjectMaterielPanel({
   const toggleAdd = () => {
     setShowAdd((s) => !s);
     setTimeout(() => {
-      if (addRef.current)
-        addRef.current.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
+      if (addRef.current) addRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 10);
   };
 
@@ -271,10 +277,7 @@ export default function ProjectMaterielPanel({
       >
         <h3 style={{ margin: 0 }}>Matériel — {proj?.nom || "…"}</h3>
         <div style={{ display: "flex", gap: 8 }}>
-          <Button
-            variant={showAdd ? "neutral" : "primary"}
-            onClick={toggleAdd}
-          >
+          <Button variant={showAdd ? "neutral" : "primary"} onClick={toggleAdd}>
             {showAdd ? "Fermer l’ajout" : "Ajouter du matériel"}
           </Button>
           {!inline && (
@@ -285,26 +288,14 @@ export default function ProjectMaterielPanel({
         </div>
       </div>
 
+      {/* ✅ Bannière d'erreur (vraies erreurs seulement; la Qté invalide ne déclenche plus setError) */}
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
       {/* Résumé très compact (optionnel) */}
       {!hideSummary && (
         <Card title="Utilisé dans ce projet (simple)">
-          <div
-            style={{
-              ...styles.tableWrap,
-              maxHeight: "unset",
-              overflow: "visible",
-            }}
-          >
-            <table
-              style={{
-                ...styles.table,
-                borderCollapse: "separate",
-                borderSpacing: 0,
-                width: "100%",
-              }}
-            >
+          <div style={{ ...styles.tableWrap, maxHeight: "unset", overflow: "visible" }}>
+            <table style={{ ...styles.table, borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
               <thead>
                 <tr>
                   {["Matériel", "Quantité", "Actions"].map((h, i) => (
@@ -313,12 +304,8 @@ export default function ProjectMaterielPanel({
                       style={{
                         ...styles.th,
                         padding: "6px 8px",
-                        ...(i === 1
-                          ? { width: 110, textAlign: "center" }
-                          : {}),
-                        ...(i === 2
-                          ? { width: 160, textAlign: "right" }
-                          : {}),
+                        ...(i === 1 ? { width: 110, textAlign: "center" } : {}),
+                        ...(i === 2 ? { width: 160, textAlign: "right" } : {}),
                       }}
                     >
                       {h}
@@ -336,9 +323,7 @@ export default function ProjectMaterielPanel({
                       height: 34,
                     }}
                   >
-                    <td style={{ ...styles.td, padding: "6px 8px" }}>
-                      {u.nom}
-                    </td>
+                    <td style={{ ...styles.td, padding: "6px 8px" }}>{u.nom}</td>
                     <td
                       style={{
                         ...styles.td,
@@ -349,13 +334,7 @@ export default function ProjectMaterielPanel({
                     >
                       {Number(u.qty) || 0}
                     </td>
-                    <td
-                      style={{
-                        ...styles.td,
-                        padding: "4px 8px",
-                        textAlign: "right",
-                      }}
-                    >
+                    <td style={{ ...styles.td, padding: "4px 8px", textAlign: "right" }}>
                       <div style={{ display: "inline-flex", gap: 6 }}>
                         <Button
                           variant="neutral"
@@ -386,10 +365,7 @@ export default function ProjectMaterielPanel({
                 ))}
                 {usages.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={3}
-                      style={{ ...styles.td, color: "#64748b" }}
-                    >
+                    <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
                       Aucun matériel pour l’instant.
                     </td>
                   </tr>
@@ -397,19 +373,9 @@ export default function ProjectMaterielPanel({
               </tbody>
             </table>
           </div>
-          <div
-            style={{
-              textAlign: "right",
-              marginTop: 6,
-              fontWeight: 800,
-              fontSize: 13,
-            }}
-          >
+          <div style={{ textAlign: "right", marginTop: 6, fontWeight: 800, fontSize: 13 }}>
             Total estimé:{" "}
-            {total.toLocaleString("fr-CA", {
-              style: "currency",
-              currency: "CAD",
-            })}
+            {total.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
           </div>
         </Card>
       )}
@@ -418,14 +384,7 @@ export default function ProjectMaterielPanel({
       <div ref={addRef} />
       {showAdd && (
         <Card title="Ajouter du matériel (catégories)">
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-              marginBottom: 8,
-            }}
-          >
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -437,26 +396,11 @@ export default function ProjectMaterielPanel({
                 padding: "4px 8px",
               }}
             />
-            <Pill variant="neutral">
-              {materiels.length} articles dans le catalogue
-            </Pill>
+            <Pill variant="neutral">{materiels.length} articles dans le catalogue</Pill>
           </div>
 
-          <div
-            style={{
-              ...styles.tableWrap,
-              maxHeight: "unset",
-              overflow: "visible",
-            }}
-          >
-            <table
-              style={{
-                ...styles.table,
-                borderCollapse: "separate",
-                borderSpacing: 0,
-                width: "100%",
-              }}
-            >
+          <div style={{ ...styles.tableWrap, maxHeight: "unset", overflow: "visible" }}>
+            <table style={{ ...styles.table, borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
               <thead>
                 <tr>
                   {["Nom", "Quantité", "Ajouter"].map((h, i) => (
@@ -465,12 +409,8 @@ export default function ProjectMaterielPanel({
                       style={{
                         ...styles.th,
                         padding: "6px 8px",
-                        ...(i === 1
-                          ? { width: 120, textAlign: "center" }
-                          : {}),
-                        ...(i === 2
-                          ? { width: 160, textAlign: "right" }
-                          : {}),
+                        ...(i === 1 ? { width: 120, textAlign: "center" } : {}),
+                        ...(i === 2 ? { width: 160, textAlign: "right" } : {}),
                       }}
                     >
                       {h}
@@ -481,7 +421,6 @@ export default function ProjectMaterielPanel({
               <tbody>
                 {groups.map(({ cat, items }) => {
                   const hasSearch = q.trim().length > 0;
-
                   if (hasSearch && items.length === 0) return null;
 
                   return (
@@ -503,6 +442,8 @@ export default function ProjectMaterielPanel({
 
                       {items.map((mat) => {
                         const used = usagesMap.get(mat.id);
+                        const isInvalid = invalidQtyId === mat.id;
+
                         return (
                           <tr
                             key={mat.id}
@@ -512,44 +453,22 @@ export default function ProjectMaterielPanel({
                               height: 34,
                             }}
                           >
-                            <td
-                              style={{ ...styles.td, padding: "6px 8px" }}
-                            >
-                              <div
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 8,
-                                }}
-                              >
-                                <span style={{ fontWeight: 600 }}>
-                                  {mat.nom}
-                                </span>
-                                <span
-                                  style={{
-                                    fontSize: 11,
-                                    color: "#64748b",
-                                  }}
-                                >
+                            <td style={{ ...styles.td, padding: "6px 8px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontWeight: 600 }}>{mat.nom}</span>
+                                <span style={{ fontSize: 11, color: "#64748b" }}>
                                   {used ? `(${used.qty})` : ""}
                                 </span>
                               </div>
                             </td>
-                            <td
-                              style={{
-                                ...styles.td,
-                                padding: "6px 8px",
-                                textAlign: "center",
-                              }}
-                            >
+
+                            <td style={{ ...styles.td, padding: "6px 8px", textAlign: "center" }}>
                               <input
                                 type="number"
                                 min="1"
                                 step="1"
                                 value={qtyById[mat.id] ?? ""}
-                                onChange={(e) =>
-                                  setQty(mat.id, e.target.value)
-                                }
+                                onChange={(e) => setQty(mat.id, e.target.value)}
                                 placeholder="Qté"
                                 style={{
                                   ...styles.input,
@@ -557,22 +476,14 @@ export default function ProjectMaterielPanel({
                                   height: 28,
                                   padding: "2px 6px",
                                   textAlign: "center",
+                                  borderColor: isInvalid ? "#ef4444" : styles.input?.borderColor,
+                                  boxShadow: isInvalid ? "0 0 0 3px rgba(239,68,68,0.18)" : "none",
                                 }}
                               />
                             </td>
-                            <td
-                              style={{
-                                ...styles.td,
-                                padding: "4px 8px",
-                                textAlign: "right",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  display: "inline-flex",
-                                  gap: 6,
-                                }}
-                              >
+
+                            <td style={{ ...styles.td, padding: "4px 8px", textAlign: "right" }}>
+                              <div style={{ display: "inline-flex", gap: 6 }}>
                                 <Button
                                   variant="success"
                                   onClick={() => add1(mat)}
@@ -596,10 +507,7 @@ export default function ProjectMaterielPanel({
 
                       {!hasSearch && items.length === 0 && (
                         <tr>
-                          <td
-                            colSpan={3}
-                            style={{ ...styles.td, color: "#94a3b8" }}
-                          >
+                          <td colSpan={3} style={{ ...styles.td, color: "#94a3b8" }}>
                             Aucun article.
                           </td>
                         </tr>
@@ -629,6 +537,7 @@ export default function ProjectMaterielPanel({
       </div>
     );
   }
+
   return (
     <div
       style={{

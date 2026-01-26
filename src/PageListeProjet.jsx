@@ -822,7 +822,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
           >
             <thead>
               <tr style={{ background: "#f6f7f8" }}>
-                <th style={th}>No dossier</th>
+                <th style={th}>BT</th>
                 <th style={th}>Client</th>
                 <th style={th}>Unité</th>
                 <th style={th}>Date fermeture</th>
@@ -1223,7 +1223,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, on
             <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Infos</div>
 
             <div style={{ marginBottom: 6 }}>
-              <strong>No dossier:</strong> {projet.dossierNo != null ? projet.dossierNo : "—"}
+              <strong>BT:</strong> {projet.dossierNo != null ? projet.dossierNo : "—"}
             </div>
             <div style={{ marginBottom: 6 }}>
               <strong>Client:</strong> {projet.clientNom || "—"}
@@ -2044,7 +2044,7 @@ export default function PageListeProjet({ isAdmin = false }) {
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               {/* ✅ No de dossier AVANT client */}
-              <th style={th}>No dossier</th>
+              <th style={th}>BT</th>
               <th style={th}>Client</th>
               <th style={th}>Unité</th>
               <th style={th}>Modèle</th>

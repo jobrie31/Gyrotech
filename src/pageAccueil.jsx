@@ -231,10 +231,7 @@ function useOpenProjets(setError) {
         snap.forEach((d) => {
           const data = d.data();
           const isOpen = data?.ouvert !== false;
-
-          // ✅ IMPORTANT: assurer un nom "nom" même si ton doc a surtout clientNom
           const nom = getProjetNom(data);
-
           list.push({ id: d.id, ...data, nom, ouvert: isOpen });
         });
         list = list.filter((p) => p.ouvert === true);
@@ -316,10 +313,12 @@ function useDay(empId, key, setError) {
 function useSessions(empId, key, setError) {
   const [list, setList] = useState([]);
   const [tick, setTick] = useState(0);
+
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 15000);
     return () => clearInterval(t);
   }, []);
+
   useEffect(() => {
     if (!empId || !key) return;
     const qSeg = query(segCol(empId, key), orderBy("start", "asc"));
@@ -334,6 +333,7 @@ function useSessions(empId, key, setError) {
     );
     return () => unsub();
   }, [empId, key, setError, tick]);
+
   return list;
 }
 
@@ -349,7 +349,7 @@ function computeTotalMs(sessions) {
 
 function usePresenceToday(empId, setError) {
   const key = todayKey();
-  useDay(empId, key, setError); // garde ton listener day
+  useDay(empId, key, setError);
   const sessions = useSessions(empId, key, setError);
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
   const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
@@ -361,7 +361,6 @@ async function doPunchWithProject(emp, proj) {
   const key = todayKey();
   if (proj && proj.ouvert === false) throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
 
-  // ✅ nom robuste
   const projName = proj ? (proj.nom || proj.clientNom || null) : null;
 
   await ensureDay(emp.id, key);
@@ -539,8 +538,8 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
 }
 
 function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
+  void empName;
   if (!open) return null;
-  const txtName = empName || "cet employé";
 
   const modal = (
     <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
@@ -569,6 +568,7 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
       </div>
     </div>
   );
+
   return ReactDOM.createPortal(modal, document.body);
 }
 
@@ -726,7 +726,36 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ---------- Horloge (badge) ---------- */
+/* ✅ UI flottante (logo dans la marge + horloge à droite) */
+const APP_TOP = 38; // hauteur de ta barre du haut (Connecté comme…)
+const LEFT_RAIL_W = 270; // espace réservé à gauche pour ne pas passer sous le logo
+
+function LogoRail() {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: APP_TOP + 10,
+        left: 14,
+        zIndex: 50,
+        pointerEvents: "none", // IMPORTANT: ne bloque jamais les clics
+      }}
+    >
+      <img
+        src={logoGyrotech}
+        alt="GyroTech"
+        style={{
+          height: 220,
+          width: "auto",
+          display: "block",
+          filter: "drop-shadow(0 6px 18px rgba(0,0,0,0.18))",
+          opacity: 0.98,
+        }}
+      />
+    </div>
+  );
+}
+
 function ClockBadge({ now }) {
   const heure = now.toLocaleTimeString("fr-CA", {
     hour: "2-digit",
@@ -765,36 +794,18 @@ function ClockBadge({ now }) {
   );
 }
 
-const APP_TOP = 38;
-const EDGE_HEADER_H = 30;
-
-function EdgeHeader({ left, right }) {
+function ClockFloat({ now }) {
   return (
     <div
       style={{
         position: "fixed",
-        top: APP_TOP,
-        left: 0,
-        right: 0,
-        zIndex: 2000,
+        top: APP_TOP + 10,
+        right: 14,
+        zIndex: 60,
         pointerEvents: "none",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          padding: "10px 18px",
-          paddingLeft: 72,
-          background: "transparent",
-          pointerEvents: "auto",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>{left}</div>
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>{right}</div>
-      </div>
+      <ClockBadge now={now} />
     </div>
   );
 }
@@ -839,7 +850,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
     if (present && currentIsProj && currentProjId) setProjSel(currentProjId);
   }, [present, currentIsProj, currentProjId]);
 
-  // ✅ AUTO-DÉPUNCH si le projet actif se ferme (ou n'est plus dans projets ouverts)
+  // ✅ AUTO-DÉPUNCH si le projet actif se ferme
   const autoDepunchRef = useRef(false);
   useEffect(() => {
     if (!present || !currentIsProj || !currentProjId) {
@@ -858,8 +869,6 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
       try {
         setPending(true);
         await doDepunchWithProject(emp);
-
-        // ✅ on clear lastProject pour éviter qu'au réopen ça revienne "par défaut"
         try {
           await updateDoc(doc(db, "employes", emp.id), {
             lastProjectId: null,
@@ -920,35 +929,18 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
 
   const [isHovered, setIsHovered] = useState(false);
 
-  // Couleurs de ligne
-  const ROW_RED_BASE = "#ef4444"; // pas punché
+  const ROW_RED_BASE = "#ef4444";
   const ROW_RED_HOVER = "#dc2626";
 
-  const ROW_GREEN_BASE = "#22c55e"; // projet
+  const ROW_GREEN_BASE = "#22c55e";
   const ROW_GREEN_HOVER = "#16a34a";
 
-  const ROW_YELLOW_BASE = "#facc15"; // autres tâches
+  const ROW_YELLOW_BASE = "#facc15";
   const ROW_YELLOW_HOVER = "#eab308";
 
-  // Règle demandée:
-  // - pas punché => rouge
-  // - punché projet => vert
-  // - punché autres => jaune
-  const baseBg = !present
-    ? ROW_RED_BASE
-    : currentIsOther
-    ? ROW_YELLOW_BASE
-    : currentIsProj
-    ? ROW_GREEN_BASE
-    : ROW_RED_BASE; // fallback
+  const baseBg = !present ? ROW_RED_BASE : currentIsOther ? ROW_YELLOW_BASE : currentIsProj ? ROW_GREEN_BASE : ROW_RED_BASE;
 
-  const hoverBg = !present
-    ? ROW_RED_HOVER
-    : currentIsOther
-    ? ROW_YELLOW_HOVER
-    : currentIsProj
-    ? ROW_GREEN_HOVER
-    : ROW_RED_HOVER;
+  const hoverBg = !present ? ROW_RED_HOVER : currentIsOther ? ROW_YELLOW_HOVER : currentIsProj ? ROW_GREEN_HOVER : ROW_RED_HOVER;
 
   const rowBg = isHovered ? hoverBg : baseBg;
 
@@ -1160,7 +1152,6 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
 export default function PageAccueil() {
   const [error, setError] = useState(null);
 
-  // ✅ user connecté
   const [user, setUser] = useState(null);
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u || null));
@@ -1172,17 +1163,19 @@ export default function PageAccueil() {
   const autresProjets = useAutresProjets(setError);
   const { autresProjetsCode } = usePunchCodes(setError);
 
-  // ✅ Trouver "mon" employé + admin
   const myEmploye = useMemo(() => {
     if (!user) return null;
     const uid = user.uid || "";
     const emailLower = (user.email || "").toLowerCase();
-    return employes.find((e) => e.uid === uid) || employes.find((e) => (e.emailLower || "") === emailLower) || null;
+    return (
+      employes.find((e) => e.uid === uid) ||
+      employes.find((e) => (e.emailLower || "") === emailLower) ||
+      null
+    );
   }, [user, employes]);
 
   const isAdmin = !!myEmploye?.isAdmin;
 
-  // ✅ Liste visible
   const visibleEmployes = useMemo(() => {
     if (isAdmin) return employes;
     if (!myEmploye) return [];
@@ -1197,31 +1190,24 @@ export default function PageAccueil() {
 
   const [materialProjId, setMaterialProjId] = useState(null);
 
+  // ✅ IMPORTANT: état "pressed" (c’est ça qui manquait, donc ça ne marchait pas)
+  const [pressed, setPressed] = useState(false);
+
   return (
     <>
-      <EdgeHeader
-        left={
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <img
-              src={logoGyrotech}
-              alt="GyroTech"
-              style={{
-                height: 200, // ajuste ici (ex: 30-42)
-                width: "auto",
-                display: "block",
-                filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.15))",
-              }}
-            />
-          </div>
-        }
-        right={<ClockBadge now={now} />}
-      />
+      <LogoRail />
+      <ClockFloat now={now} />
 
-      <PageContainer>
-        <div style={{ height: EDGE_HEADER_H }} />
+      <PageContainer
+        style={{
+          paddingTop: 8,
+          marginLeft: LEFT_RAIL_W,
+          marginRight: 10,
+        }}
+      >
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 26, marginTop: -10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
           <Card title="👥 Employé(e)" right={<div style={{ display: "flex", gap: 22, alignItems: "center" }} />}>
             <div style={styles.tableWrap}>
               <table style={styles.table}>
@@ -1268,18 +1254,25 @@ export default function PageAccueil() {
                 variant="primary"
                 onClick={() => (window.location.hash = "#/projets")}
                 aria-label="Aller à la liste des projets"
+                onPointerDown={() => setPressed(true)}
+                onPointerUp={() => setPressed(false)}
+                onPointerCancel={() => setPressed(false)}
+                onPointerLeave={() => setPressed(false)}
                 style={{
-                  height: 32,
-                  padding: "0 10px",
-                  fontSize: 13,
-                  fontWeight: 800,
-                  borderRadius: 10,
+                  height: 42,
+                  padding: "0 16px",
+                  fontSize: 32, // ✅ texte plus gros
+                  fontWeight: 1000,
+                  borderRadius: 12,
                   lineHeight: 1,
-                  background: "#36ad5eff",
-                  borderColor: "#36ad5eff",
+                  background: pressed ? "#d97706" : "#f59e0b",
+                  borderColor: pressed ? "#d97706" : "#f59e0b",
+                  color: "#111827",
+                  transform: pressed ? "translateY(1px)" : "translateY(0)",
+                  transition: "background 120ms ease, border-color 120ms ease, transform 120ms ease",
                 }}
               >
-                projet
+                Projets
               </Button>
             }
           >
