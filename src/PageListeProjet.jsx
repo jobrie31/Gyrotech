@@ -48,7 +48,8 @@
 // ✅ AJOUT (2026-01-22):
 // - Champ "Note" (texte libre) dans Nouveau Projet (en bas)
 // - La note n'apparaît PAS dans le tableau
-// - La note apparaît dans Détails, sous les boutons à droite
+// - ✅ MODIF (2026-02-04): Dans Détails, PLUS de bouton Modifier.
+//   → Tu modifies DIRECTEMENT dans la popup (infos + notes). Sauvegarde auto (debounce).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -1173,12 +1174,166 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
   );
 }
 
-/* ---------------------- Popup Détails ---------------------- */
-function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, onOpenMateriel, onCloseBT, onOpenHistorique }) {
+/* ---------------------- ✅ helper: patch projet (compat nom=clientNom) ---------------------- */
+async function updateProjetPatch(projId, patch) {
+  if (!projId) return;
+  const p = { ...(patch || {}) };
+
+  // compat: "nom" = "clientNom"
+  if (p.clientNom != null) {
+    const cn = String(p.clientNom || "").trim();
+    p.clientNom = cn ? cn : null;
+    p.nom = p.clientNom; // ✅ toujours égal
+  }
+
+  // trims safe
+  const trimKeys = ["numeroUnite", "marque", "modele", "plaque", "odometre", "vin", "note"];
+  for (const k of trimKeys) {
+    if (p[k] != null) {
+      const v = String(p[k] ?? "");
+      p[k] = v.trim() ? (k === "plaque" || k === "vin" ? v.trim().toUpperCase() : v.trim()) : null;
+    }
+  }
+
+  // année: accepte number ou string
+  if (p.annee != null) {
+    const n = Number(String(p.annee).trim());
+    p.annee = Number.isFinite(n) ? n : null;
+  }
+
+  await updateDoc(doc(db, "projets", projId), p);
+}
+
+/* ---------------------- Popup Détails (édition directe + auto-save) ---------------------- */
+function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMateriel, onCloseBT, onOpenHistorique }) {
+  const projId = projet?.id || null;
+
+  // ✅ on suit le projet live pendant que la popup est ouverte (sinon état "stale")
+  const [live, setLive] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+
+  const debounceRef = useRef(null);
+  const lastSentRef = useRef({});
+  const isFirstLoadRef = useRef(true);
+
+  useEffect(() => {
+    if (!open || !projId) {
+      setLive(null);
+      return;
+    }
+
+    let unsub = null;
+    try {
+      unsub = onSnapshot(
+        doc(db, "projets", projId),
+        (snap) => {
+          if (!snap.exists()) return;
+          const data = snap.data() || {};
+          const obj = { id: snap.id, ...data };
+
+          setLive(obj);
+
+          // premier load: on initialise lastSentRef (pour éviter d'écrire direct)
+          if (isFirstLoadRef.current) {
+            isFirstLoadRef.current = false;
+            lastSentRef.current = {
+              clientNom: obj.clientNom ?? "",
+              numeroUnite: obj.numeroUnite ?? "",
+              modele: obj.modele ?? "",
+              annee: obj.annee ?? "",
+              marque: obj.marque ?? "",
+              plaque: obj.plaque ?? "",
+              odometre: obj.odometre ?? "",
+              vin: obj.vin ?? "",
+              note: obj.note ?? "",
+            };
+          }
+        },
+        (e) => {
+          console.error("onSnapshot projet (details) error", e);
+        }
+      );
+    } catch (e) {
+      console.error(e);
+    }
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [open, projId]);
+
+  // reset flags à l’ouverture / changement projet
+  useEffect(() => {
+    if (!open || !projId) return;
+    isFirstLoadRef.current = true;
+    setSaving(false);
+    setSaveMsg("");
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = null;
+    // lastSentRef sera init quand on reçoit le snap
+  }, [open, projId]);
+
+  const commitPatchDebounced = (patch) => {
+    if (!projId) return;
+
+    // éviter save au tout premier render avant init
+    if (isFirstLoadRef.current) return;
+
+    // calculer seulement les champs réellement modifiés vs lastSentRef
+    const next = { ...(lastSentRef.current || {}) };
+    let changed = {};
+    for (const [k, v] of Object.entries(patch || {})) {
+      const prev = next[k];
+      if (String(prev ?? "") !== String(v ?? "")) {
+        changed[k] = v;
+      }
+    }
+    if (Object.keys(changed).length === 0) return;
+
+    // mettre à jour "optimistiquement" la mémoire lastSentRef (pour éviter spam)
+    lastSentRef.current = { ...next, ...changed };
+
+    // debounce
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSaving(true);
+      setSaveMsg("");
+
+      try {
+        await updateProjetPatch(projId, changed);
+        setSaveMsg("✅ Sauvegardé");
+        setTimeout(() => setSaveMsg(""), 900);
+      } catch (e) {
+        console.error("save details error", e);
+        setSaveMsg("❌ Erreur sauvegarde");
+        // en cas d'erreur, on ne rollback pas ici (le snap va ramener la vérité)
+      } finally {
+        setSaving(false);
+      }
+    }, 450);
+  };
+
   if (!open || !projet) return null;
 
-  const title = projet.clientNom || projet.nom || "—";
-  const noteText = (projet.note ?? "").toString();
+  const p = live || projet; // fallback si jamais le live n'est pas encore arrivé
+  const title = p.clientNom || p.nom || "—";
+
+  const inputInline = {
+    ...input,
+    fontSize: 16,
+    fontWeight: 900,
+    padding: "9px 10px",
+    borderRadius: 12,
+  };
+
+  const labelMini = { fontSize: 13, fontWeight: 1000, color: "#334155", marginBottom: 4 };
+
+  const infoGrid = {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  };
 
   return (
     <div
@@ -1201,7 +1356,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, on
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
-          width: "min(900px, 96vw)",
+          width: "min(980px, 96vw)",
           borderRadius: 18,
           padding: 18,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
@@ -1218,56 +1373,153 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, on
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 12, fontSize: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 12, fontSize: 18 }}>
+          {/* -------- Infos (éditables) -------- */}
           <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
-            <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Infos</div>
+            <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Informations</div>
 
-            <div style={{ marginBottom: 6 }}>
-              <strong>BT:</strong> {projet.dossierNo != null ? projet.dossierNo : "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>Client:</strong> {projet.clientNom || "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>Unité:</strong> {projet.numeroUnite || "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>Modèle:</strong> {projet.modele || "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>Année:</strong> {projet.annee ?? "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>Marque:</strong> {projet.marque || "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>Plaque:</strong> {projet.plaque || "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>Odomètre:</strong> {projet.odometre ?? "—"}
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <strong>VIN:</strong> {projet.vin || "—"}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontWeight: 1000, marginBottom: 6 }}>
+                BT: <span style={{ fontWeight: 900 }}>{p.dossierNo != null ? p.dossierNo : "—"}</span>
+              </div>
             </div>
 
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #d1d5db" }}>
+            <div style={infoGrid}>
+              <div>
+                <div style={labelMini}>Client</div>
+                <input
+                  value={p.clientNom ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, clientNom: v, nom: v } : prev));
+                    commitPatchDebounced({ clientNom: v });
+                  }}
+                  style={inputInline}
+                />
+              </div>
+
+              <div>
+                <div style={labelMini}>Unité</div>
+                <input
+                  value={p.numeroUnite ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, numeroUnite: v } : prev));
+                    commitPatchDebounced({ numeroUnite: v });
+                  }}
+                  style={inputInline}
+                />
+              </div>
+
+              <div>
+                <div style={labelMini}>Modèle</div>
+                <input
+                  value={p.modele ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, modele: v } : prev));
+                    commitPatchDebounced({ modele: v });
+                  }}
+                  style={inputInline}
+                />
+              </div>
+
+              <div>
+                <div style={labelMini}>Année</div>
+                <input
+                  value={p.annee ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, annee: v } : prev));
+                    commitPatchDebounced({ annee: v });
+                  }}
+                  inputMode="numeric"
+                  style={inputInline}
+                />
+              </div>
+
+              <div>
+                <div style={labelMini}>Marque</div>
+                <input
+                  value={p.marque ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, marque: v } : prev));
+                    commitPatchDebounced({ marque: v });
+                  }}
+                  style={inputInline}
+                />
+              </div>
+
+              <div>
+                <div style={labelMini}>Plaque</div>
+                <input
+                  value={p.plaque ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value.toUpperCase();
+                    setLive((prev) => (prev ? { ...prev, plaque: v } : prev));
+                    commitPatchDebounced({ plaque: v });
+                  }}
+                  style={inputInline}
+                />
+              </div>
+
+              <div>
+                <div style={labelMini}>Odomètre</div>
+                <input
+                  value={p.odometre ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, odometre: v } : prev));
+                    commitPatchDebounced({ odometre: v });
+                  }}
+                  style={inputInline}
+                />
+              </div>
+
+              <div>
+                <div style={labelMini}>VIN</div>
+                <input
+                  value={p.vin ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value.toUpperCase();
+                    setLive((prev) => (prev ? { ...prev, vin: v } : prev));
+                    commitPatchDebounced({ vin: v });
+                  }}
+                  style={inputInline}
+                />
+              </div>
+            </div>
+
+            {/* Temps estimé (non modifiable) */}
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #d1d5db" }}>
               <div style={{ fontWeight: 1000 }}>
                 Temps estimé:{" "}
                 <span style={{ fontWeight: 900 }}>
-                  {projet.tempsEstimeHeures != null ? `${fmtHours(projet.tempsEstimeHeures)} h` : "—"}
+                  {p.tempsEstimeHeures != null ? `${fmtHours(p.tempsEstimeHeures)} h` : "—"}
                 </span>
               </div>
             </div>
+
+            {(saving || saveMsg) && (
+              <div
+                style={{
+                  marginTop: 10,
+                  fontSize: 14,
+                  fontWeight: 1000,
+                  color: saveMsg.startsWith("❌") ? "#b91c1c" : "#166534",
+                }}
+              >
+                {saving ? "⏳ Sauvegarde..." : saveMsg}
+              </div>
+            )}
           </div>
 
+          {/* -------- Actions + Notes (éditables) -------- */}
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
             <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Actions</div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button onClick={onEdit} style={btnSecondary}>
-                Modifier
-              </button>
-
               <button onClick={onOpenMateriel} style={btnBlue}>
                 Matériel
               </button>
@@ -1276,7 +1528,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, on
                 Historique
               </button>
 
-              <PDFButton count={projet.pdfCount} onClick={onOpenPDF} style={btnPDF} title="PDF du projet">
+              <PDFButton count={p.pdfCount} onClick={onOpenPDF} style={btnPDF} title="PDF du projet">
                 PDF
               </PDFButton>
 
@@ -1285,25 +1537,25 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onEdit, onOpenPDF, on
               </button>
             </div>
 
-            {/* ✅ NOTE sous les boutons à droite */}
+            {/* ✅ NOTE éditable */}
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #e5e7eb" }}>
-              <div style={{ fontWeight: 1000, marginBottom: 6, fontSize: 18 }}>Note</div>
-              <div
-                style={{
-                  background: "#f8fafc",
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 12,
-                  padding: 10,
-                  minHeight: 54,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  color: noteText.trim() ? "#111827" : "#6b7280",
-                  fontWeight: 800,
-                  fontSize: 16,
+              <div style={{ fontWeight: 1000, marginBottom: 6, fontSize: 18 }}>Notes / Travaux à effectuer</div>
+              <textarea
+                value={(p.note ?? "").toString()}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setLive((prev) => (prev ? { ...prev, note: v } : prev));
+                  commitPatchDebounced({ note: v });
                 }}
-              >
-                {noteText.trim() ? noteText : "—"}
-              </div>
+                placeholder="Écris les notes ici…"
+                style={{
+                  ...inputInline,
+                  minHeight: 120,
+                  resize: "vertical",
+                  whiteSpace: "pre-wrap",
+                  fontWeight: 800,
+                }}
+              />
             </div>
           </div>
         </div>
@@ -1367,7 +1619,15 @@ function RowProjet({ p, index, onOpenDetails, onOpenMaterial, onOpenPDF, onClose
             Matériel
           </button>
 
-          <PDFButton count={p.pdfCount} onClick={(e) => { e.stopPropagation(); onOpenPDF?.(p); }} style={btnPDF} title="PDF du projet">
+          <PDFButton
+            count={p.pdfCount}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenPDF?.(p);
+            }}
+            style={btnPDF}
+            title="PDF du projet"
+          >
             PDF
           </PDFButton>
 
@@ -1454,7 +1714,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       } catch {}
       createStartMsRef.current = startMs;
       prevMarqueIdRef.current = null;
-
     }
   }, [open, mode, projet]);
 
@@ -1470,7 +1729,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
     // Si la marque a vraiment changé après (action utilisateur), on reset le modèle
     if (prev !== marqueId) setModele("");
   }, [marqueId, open]);
-
 
   useEffect(() => {
     if (!open || mode !== "create") return;
@@ -1781,7 +2039,13 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
             </div>
           ) : (
             <FieldV label="Temps estimé (heures)" compact>
-              <input value={tempsEstimeHeures} onChange={(e) => setTempsEstimeHeures(e.target.value)} placeholder="Ex.: 12.5" inputMode="decimal" style={inputC} />
+              <input
+                value={tempsEstimeHeures}
+                onChange={(e) => setTempsEstimeHeures(e.target.value)}
+                placeholder="Ex.: 12.5"
+                inputMode="decimal"
+                style={inputC}
+              />
             </FieldV>
           )}
 
@@ -1961,7 +2225,6 @@ export default function PageListeProjet({ isAdmin = false }) {
     if (!proj?.id) return;
 
     const ok = window.confirm("Supprimer ce projet définitivement ?");
-
     if (!ok) return;
 
     try {
@@ -2016,10 +2279,7 @@ export default function PageListeProjet({ isAdmin = false }) {
     !!hist.open;
 
   return (
-    <div
-      className={`plp-root ${ipadShrink ? "plp-ipad-shrink" : ""}`}
-      style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}
-    >
+    <div className={`plp-root ${ipadShrink ? "plp-ipad-shrink" : ""}`} style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       {/* ✅ Responsive iPad/tablette (sans toucher au PC) */}
       <ResponsiveStyles />
 
@@ -2029,7 +2289,9 @@ export default function PageListeProjet({ isAdmin = false }) {
         <div />
         <h1 style={{ margin: 0, textAlign: "center", fontSize: 36, fontWeight: 1000, lineHeight: 1.2 }}>📁 Projets</h1>
         <div className="plp-top-actions" style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <a href="#/reglages" style={btnSecondary}>Réglages</a>
+          <a href="#/reglages" style={btnSecondary}>
+            Réglages
+          </a>
           <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
             Projets fermés
           </button>
@@ -2097,12 +2359,6 @@ export default function PageListeProjet({ isAdmin = false }) {
         open={details.open}
         projet={details.projet}
         onClose={closeDetails}
-        onEdit={() => {
-          if (!details.projet) return;
-          closeDetails();
-          setCreateProjet(details.projet);
-          setCreateOpen(true);
-        }}
         onOpenPDF={() => {
           if (!details.projet) return;
           openPDF(details.projet);
@@ -2126,11 +2382,7 @@ export default function PageListeProjet({ isAdmin = false }) {
       <PopupPDFManager open={pdfMgr.open} onClose={closePDF} projet={pdfMgr.projet} />
 
       {materialProjId && (
-        <ProjectMaterielPanel
-          projId={materialProjId}
-          onClose={() => setMaterialProjId(null)}
-          setParentError={() => {}}
-        />
+        <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={() => {}} />
       )}
 
       <PopupHistoriqueProjet open={hist.open} onClose={closeHistorique} projet={hist.projet} />
