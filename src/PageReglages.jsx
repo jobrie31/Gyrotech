@@ -147,15 +147,24 @@ export default function PageReglages() {
 
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+      {/* ✅ TOP BAR INLINE (comme Matériels): gauche + titre centré + espace droite */}
       <div
         style={{
-          display: "flex",
-          flexDirection: "column",
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
           alignItems: "center",
-          gap: 10,
           marginBottom: 16,
+          gap: 10,
         }}
       >
+        {/* Gauche */}
+        <div style={{ display: "flex", justifyContent: "flex-start" }}>
+          <a href="#/" style={btnAccueil} title="Retour à l'accueil">
+            ⬅ Accueil
+          </a>
+        </div>
+
+        {/* Centre */}
         <h1
           style={{
             margin: 0,
@@ -163,25 +172,30 @@ export default function PageReglages() {
             lineHeight: 1.15,
             fontWeight: 900,
             textAlign: "center",
+            whiteSpace: "nowrap",
           }}
         >
           ⚙️ Réglages
         </h1>
 
-        {hasDraftProjet && (
-          <button
-            type="button"
-            onClick={() => {
-              window.location.hash = "#/projets";
-            }}
-            style={btnBackBig}
-          >
-            ⬅️ Retour au projet en cours
-          </button>
-        )}
+        {/* Droite (pour équilibrer / infos) */}
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
+          {hasDraftProjet && (
+            <button
+              type="button"
+              onClick={() => {
+                window.location.hash = "#/projets";
+              }}
+              style={btnBackInline}
+              title="Retour au projet en cours"
+            >
+              ⬅️ Projet en cours
+            </button>
+          )}
 
-        <div style={{ fontSize: 12, color: "#6b7280" }}>
-          Connecté: <strong>{authUser?.email || "—"}</strong>
+          <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
+            Connecté: <strong>{authUser?.email || "—"}</strong>
+          </div>
         </div>
       </div>
 
@@ -384,6 +398,22 @@ const btnChipText = {
   fontWeight: 700,
 };
 
+/* ✅ NOUVEAU: bouton Accueil (JAUNE) */
+const btnAccueil = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 14px",
+  borderRadius: 14,
+  border: "1px solid #eab308",     // jaune (bordure)
+  background: "#facc15",           // ✅ jaune
+  color: "#111827",
+  textDecoration: "none",
+  fontWeight: 900,
+  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+};
+
+
 /* ✅ NOUVEAU: bouton retour GROS (très visible) */
 const btnBackBig = {
   border: "none",
@@ -397,7 +427,5 @@ const btnBackBig = {
   lineHeight: 1.1,
   boxShadow: "0 14px 34px rgba(0,0,0,0.28)",
   transform: "translateZ(0)",
-
-  // plus large visuellement
   minWidth: 340,
 };

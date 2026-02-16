@@ -11,6 +11,10 @@
 // ✅ AJOUT (2026-01-12):
 // - Si un employé est punché sur un projet et que ce projet se ferme (ou disparaît de la liste des projets ouverts),
 //   on le DÉPUNCH automatiquement + on clear lastProjectId/Name pour éviter un "retour auto" quand on réouvre.
+//
+// ✅ MODIF (toi, maintenant):
+// - Code par "Autre tâche" (champ `code` dans chaque doc autresProjets)
+// - Plus de code global config/punchCodes.autresProjetsCode
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -260,6 +264,7 @@ function useAutresProjets(setError) {
             projId: it.projId || null,
             nom: it.nom || "",
             ordre: it.ordre ?? null,
+            code: String(it.code || ""), // ✅ code par tâche
             note: it.note ?? null,
             createdAt: it.createdAt ?? null,
           });
@@ -277,23 +282,6 @@ function useAutresProjets(setError) {
     return () => unsub();
   }, [setError]);
   return rows;
-}
-
-function usePunchCodes(setError) {
-  const [codes, setCodes] = useState({ autresProjetsCode: "" });
-  useEffect(() => {
-    const ref = doc(db, "config", "punchCodes");
-    const unsub = onSnapshot(
-      ref,
-      (snap) => {
-        const data = snap.exists() ? snap.data() : {};
-        setCodes({ autresProjetsCode: String(data?.autresProjetsCode || "") });
-      },
-      (err) => setError?.(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [setError]);
-  return codes;
 }
 
 function useDay(empId, key, setError) {
@@ -495,9 +483,7 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
   const hasInitialProj = !!initialProj;
   if (!open) return null;
 
-  const confirmText = hasInitialProj
-    ? `Continuer projet : ${initialProj.nom || "(sans nom)"} ?`
-    : "Vous n'avez pas choisi de projet.";
+  const confirmText = hasInitialProj ? `Continuer projet : ${initialProj.nom || "(sans nom)"} ?` : "Vous n'avez pas choisi de projet.";
 
   const modal = (
     <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
@@ -634,9 +620,7 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
             </React.Fragment>
           ))}
 
-          {autresProjets.length === 0 && (
-            <div style={{ gridColumn: "1 / -1", color: "#64748b" }}>Aucun autre projet.</div>
-          )}
+          {autresProjets.length === 0 && <div style={{ gridColumn: "1 / -1", color: "#64748b" }}>Aucun autre projet.</div>}
         </div>
       </div>
     </div>
@@ -811,7 +795,7 @@ function ClockFloat({ now }) {
 }
 
 /* ---------------------- Lignes / Tableau ---------------------- */
-function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode }) {
+function LigneEmploye({ emp, setError, projets, autresProjets }) {
   const { sessions, totalMs, hasOpen } = usePresenceToday(emp.id, setError);
   const present = hasOpen;
 
@@ -943,8 +927,6 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
   const hoverBg = !present ? ROW_RED_HOVER : currentIsOther ? ROW_YELLOW_HOVER : currentIsProj ? ROW_GREEN_HOVER : ROW_RED_HOVER;
 
   const rowBg = isHovered ? hoverBg : baseBg;
-
-  const requireCode = String(autresProjetsCode || "").trim().length > 0;
 
   const proceedPunchOther = async (ap) => {
     await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
@@ -1108,7 +1090,8 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
         autresProjets={autresProjets}
         onChoose={async (ap) => {
           try {
-            if (requireCode) {
+            const taskCode = String(ap?.code || "").trim();
+            if (taskCode) {
               setPendingOther(ap);
               setCodeOpen(true);
               return;
@@ -1125,7 +1108,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, autresProjetsCode
 
       <CodeAutresProjetsModal
         open={codeOpen}
-        requiredCode={autresProjetsCode}
+        requiredCode={pendingOther?.code || ""}
         projetNom={pendingOther?.nom || "Autres tâches"}
         onConfirm={async () => {
           try {
@@ -1161,17 +1144,12 @@ export default function PageAccueil() {
   const employes = useEmployes(setError);
   const projetsOuverts = useOpenProjets(setError);
   const autresProjets = useAutresProjets(setError);
-  const { autresProjetsCode } = usePunchCodes(setError);
 
   const myEmploye = useMemo(() => {
     if (!user) return null;
     const uid = user.uid || "";
     const emailLower = (user.email || "").toLowerCase();
-    return (
-      employes.find((e) => e.uid === uid) ||
-      employes.find((e) => (e.emailLower || "") === emailLower) ||
-      null
-    );
+    return employes.find((e) => e.uid === uid) || employes.find((e) => (e.emailLower || "") === emailLower) || null;
   }, [user, employes]);
 
   const isAdmin = !!myEmploye?.isAdmin;
@@ -1229,16 +1207,13 @@ export default function PageAccueil() {
                       setError={setError}
                       projets={projetsOuverts}
                       autresProjets={autresProjets}
-                      autresProjetsCode={autresProjetsCode}
                     />
                   ))}
 
                   {visibleEmployes.length === 0 && (
                     <tr>
                       <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                        {isAdmin
-                          ? "Aucun employé(e) pour l’instant."
-                          : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
+                        {isAdmin ? "Aucun employé(e) pour l’instant." : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
                       </td>
                     </tr>
                   )}

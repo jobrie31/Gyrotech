@@ -533,10 +533,17 @@ export default function PageMateriels() {
 
   /* --- rendering --- */
   return (
-    <PageContainer>
+    <div style={{ width: "100%" }}>
+      {/* ✅ TopBar FULL WIDTH (dans la marge) */}
       <TopBar
         left={
-          <h1 style={{ margin: 0, fontSize: 25, fontWeight: 900 }}>
+          <a href="#/" style={btnAccueil} title="Retour à l'accueil">
+            ⬅ Accueil
+          </a>
+        }
+
+        center={
+          <h1 style={{ margin: 0, fontSize: 36, fontWeight: 900 }}>
             Matériels
           </h1>
         }
@@ -561,282 +568,274 @@ export default function PageMateriels() {
             </Button>
           </div>
         }
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          paddingLeft: 20,
+          paddingRight: 20,
+        }}
       />
 
-      <ErrorBanner error={error} onClose={() => setError(null)} />
+      {/* ✅ Le contenu reste dans PageContainer (comme avant) */}
+      <PageContainer>
+        <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      <Card>
-        <div style={{ ...styles.tableWrap, maxHeight: "unset", overflow: "visible" }}>
-          <table
-            style={{
-              ...styles.table,
-              borderCollapse: "separate",
-              borderSpacing: 0,
-              width: "100%",
-            }}
-          >
-            <thead>{/* volontairement vide */}</thead>
+        <Card>
+          <div style={{ ...styles.tableWrap, maxHeight: "unset", overflow: "visible" }}>
+            <table
+              style={{
+                ...styles.table,
+                borderCollapse: "separate",
+                borderSpacing: 0,
+                width: "100%",
+              }}
+            >
+              <thead>{/* volontairement vide */}</thead>
 
-            <tbody>
-              {term && totalVisibleItems === 0 && (
-                <tr>
-                  <td colSpan={3} style={{ padding: "8px 10px", color: "#64748b" }}>
-                    Aucun résultat pour “<strong>{q}</strong>”.
-                  </td>
-                </tr>
-              )}
-
-              {groups.map(({ cat, items }) => {
-                const key = cat ? cat.id : "__NONE__";
-
-                return (
-                  <React.Fragment key={key}>
-                    <CategoryHeaderRow cat={cat} onOpenCategory={openEditForCategory} />
-
-                    {items.map((r) => (
-                      <MaterielRow key={r.id} row={r} onOpen={openEditFor} />
-                    ))}
-
-                    {!term && items.length === 0 && (
-                      <tr>
-                        <td colSpan={3} style={{ padding: "8px 10px", color: "#94a3b8" }}>
-                          Aucun item dans cette catégorie.
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-
-              {!term &&
-                groups.length === 1 &&
-                groups[0].items.length === 0 &&
-                categories.length === 0 && (
+              <tbody>
+                {term && totalVisibleItems === 0 && (
                   <tr>
                     <td colSpan={3} style={{ padding: "8px 10px", color: "#64748b" }}>
-                      Aucune donnée pour l’instant — ajoute une catégorie ou un article.
+                      Aucun résultat pour “<strong>{q}</strong>”.
                     </td>
                   </tr>
                 )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
 
-      {/* Modale: Ajouter un article */}
-      <Modal
-        open={openAddItem}
-        title="Ajouter un article"
-        onClose={() => setOpenAddItem(false)}
-      >
-        <div style={{ display: "grid", gap: 10 }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Nom</span>
-            <input
-              value={mNom}
-              onChange={(e) => setMNom(e.target.value)}
-              style={{ ...styles.input }}
-            />
-          </label>
+                {groups.map(({ cat, items }) => {
+                  const key = cat ? cat.id : "__NONE__";
 
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Prix</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={mPrix}
-              onChange={(e) => setMPrix(e.target.value)}
-              placeholder="0.00"
-              style={{ ...styles.input, textAlign: "right" }}
-            />
-          </label>
+                  return (
+                    <React.Fragment key={key}>
+                      <CategoryHeaderRow cat={cat} onOpenCategory={openEditForCategory} />
 
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Catégorie</span>
-            <select
-              value={mCatId}
-              onChange={(e) => setMCatId(e.target.value)}
-              style={{ ...styles.input, height: 34 }}
-            >
-              <option value="">— Aucune —</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.nom}
-                </option>
-              ))}
-            </select>
-          </label>
+                      {items.map((r) => (
+                        <MaterielRow key={r.id} row={r} onOpen={openEditFor} />
+                      ))}
 
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-            <Button variant="neutral" onClick={() => setOpenAddItem(false)}>
-              Annuler
-            </Button>
-            <Button
-              variant="primary"
-              onClick={submitAddItem}
-              disabled={busyAdd || !mNom.trim()}
-            >
-              Ajouter
-            </Button>
+                      {!term && items.length === 0 && (
+                        <tr>
+                          <td colSpan={3} style={{ padding: "8px 10px", color: "#94a3b8" }}>
+                            Aucun item dans cette catégorie.
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+
+                {!term &&
+                  groups.length === 1 &&
+                  groups[0].items.length === 0 &&
+                  categories.length === 0 && (
+                    <tr>
+                      <td colSpan={3} style={{ padding: "8px 10px", color: "#64748b" }}>
+                        Aucune donnée pour l’instant — ajoute une catégorie ou un article.
+                      </td>
+                    </tr>
+                  )}
+              </tbody>
+            </table>
           </div>
-        </div>
-      </Modal>
+        </Card>
 
-      {/* Modale: Ajouter une catégorie */}
-      <Modal
-        open={openAddCat}
-        title="Ajouter une catégorie"
-        onClose={() => setOpenAddCat(false)}
-      >
-        <div style={{ display: "grid", gap: 10 }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Nom de la catégorie</span>
-            <input
-              value={cNom}
-              onChange={(e) => setCNom(e.target.value)}
-              style={{ ...styles.input }}
-            />
-          </label>
+        {/* Modale: Ajouter un article */}
+        <Modal open={openAddItem} title="Ajouter un article" onClose={() => setOpenAddItem(false)}>
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Nom</span>
+              <input
+                value={mNom}
+                onChange={(e) => setMNom(e.target.value)}
+                style={{ ...styles.input }}
+              />
+            </label>
 
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-            <Button variant="neutral" onClick={() => setOpenAddCat(false)}>
-              Annuler
-            </Button>
-            <Button
-              variant="primary"
-              onClick={submitAddCat}
-              disabled={busyCat || !cNom.trim()}
-            >
-              Ajouter
-            </Button>
-          </div>
-        </div>
-      </Modal>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Prix</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={mPrix}
+                onChange={(e) => setMPrix(e.target.value)}
+                placeholder="0.00"
+                style={{ ...styles.input, textAlign: "right" }}
+              />
+            </label>
 
-      {/* ✅ Modale: Modifier un article (clic sur la ligne) */}
-      <Modal
-        open={openEdit}
-        title={editRow?.nom ? `Modifier — ${editRow.nom}` : "Modifier l’article"}
-        onClose={closeEdit}
-      >
-        <div style={{ display: "grid", gap: 10 }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Nom</span>
-            <input
-              value={eNom}
-              onChange={(e) => setENom(e.target.value)}
-              placeholder="Nom de l’article"
-              style={{ ...styles.input }}
-              autoFocus
-            />
-          </label>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Catégorie</span>
+              <select
+                value={mCatId}
+                onChange={(e) => setMCatId(e.target.value)}
+                style={{ ...styles.input, height: 34 }}
+              >
+                <option value="">— Aucune —</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nom}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Prix (CAD)</span>
-            {/* ✅ ENLÈVE LES FLÈCHES: pas de type="number" */}
-            <input
-              type="text"
-              inputMode="decimal"
-              value={ePrix}
-              onChange={(e) => setEPrix(e.target.value)}
-              placeholder="0.00"
-              style={{ ...styles.input, textAlign: "right" }}
-            />
-          </label>
-
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Catégorie</span>
-            <select
-              value={eCatId}
-              onChange={(e) => setECatId(e.target.value)}
-              style={{ ...styles.input, height: 34 }}
-            >
-              <option value="">— Aucune —</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.nom}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 8,
-              marginTop: 6,
-            }}
-          >
-            <Button variant="danger" onClick={deleteItem} disabled={busyEdit}>
-              Supprimer
-            </Button>
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <Button variant="neutral" onClick={closeEdit} disabled={busyEdit}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+              <Button variant="neutral" onClick={() => setOpenAddItem(false)}>
                 Annuler
               </Button>
-              <Button
-                variant="primary"
-                onClick={saveEdit}
-                disabled={busyEdit || !eNom.trim()}
-              >
-                Sauvegarder
+              <Button variant="primary" onClick={submitAddItem} disabled={busyAdd || !mNom.trim()}>
+                Ajouter
               </Button>
             </div>
           </div>
-        </div>
-      </Modal>
+        </Modal>
 
-      {/* ✅ Modale: Modifier / Supprimer une catégorie (clic sur le header) */}
-      <Modal
-        open={openEditCat}
-        title={editCat?.nom ? `Catégorie — ${editCat.nom}` : "Modifier la catégorie"}
-        onClose={closeEditCat}
-      >
-        <div style={{ display: "grid", gap: 10 }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span>Nom de la catégorie</span>
-            <input
-              value={catNom}
-              onChange={(e) => setCatNom(e.target.value)}
-              placeholder="Nom de la catégorie"
-              style={{ ...styles.input }}
-              autoFocus
-            />
-          </label>
+        {/* Modale: Ajouter une catégorie */}
+        <Modal open={openAddCat} title="Ajouter une catégorie" onClose={() => setOpenAddCat(false)}>
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Nom de la catégorie</span>
+              <input
+                value={cNom}
+                onChange={(e) => setCNom(e.target.value)}
+                style={{ ...styles.input }}
+              />
+            </label>
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 8,
-              marginTop: 6,
-            }}
-          >
-            <Button variant="danger" onClick={deleteCategory} disabled={busyEditCat}>
-              Supprimer
-            </Button>
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <Button variant="neutral" onClick={closeEditCat} disabled={busyEditCat}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+              <Button variant="neutral" onClick={() => setOpenAddCat(false)}>
                 Annuler
               </Button>
-              <Button
-                variant="primary"
-                onClick={saveEditCategory}
-                disabled={busyEditCat || !catNom.trim()}
-              >
-                Sauvegarder
+              <Button variant="primary" onClick={submitAddCat} disabled={busyCat || !cNom.trim()}>
+                Ajouter
               </Button>
             </div>
           </div>
+        </Modal>
 
-          <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
-            Note: Renommer/Supprimer met à jour les items (car les items stockent le nom de catégorie).
+        {/* ✅ Modale: Modifier un article (clic sur la ligne) */}
+        <Modal
+          open={openEdit}
+          title={editRow?.nom ? `Modifier — ${editRow.nom}` : "Modifier l’article"}
+          onClose={closeEdit}
+        >
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Nom</span>
+              <input
+                value={eNom}
+                onChange={(e) => setENom(e.target.value)}
+                placeholder="Nom de l’article"
+                style={{ ...styles.input }}
+                autoFocus
+              />
+            </label>
+
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Prix (CAD)</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={ePrix}
+                onChange={(e) => setEPrix(e.target.value)}
+                placeholder="0.00"
+                style={{ ...styles.input, textAlign: "right" }}
+              />
+            </label>
+
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Catégorie</span>
+              <select
+                value={eCatId}
+                onChange={(e) => setECatId(e.target.value)}
+                style={{ ...styles.input, height: 34 }}
+              >
+                <option value="">— Aucune —</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nom}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 6 }}>
+              <Button variant="danger" onClick={deleteItem} disabled={busyEdit}>
+                Supprimer
+              </Button>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button variant="neutral" onClick={closeEdit} disabled={busyEdit}>
+                  Annuler
+                </Button>
+                <Button variant="primary" onClick={saveEdit} disabled={busyEdit || !eNom.trim()}>
+                  Sauvegarder
+                </Button>
+              </div>
+            </div>
           </div>
-        </div>
-      </Modal>
-    </PageContainer>
+        </Modal>
+
+        {/* ✅ Modale: Modifier / Supprimer une catégorie (clic sur le header) */}
+        <Modal
+          open={openEditCat}
+          title={editCat?.nom ? `Catégorie — ${editCat.nom}` : "Modifier la catégorie"}
+          onClose={closeEditCat}
+        >
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span>Nom de la catégorie</span>
+              <input
+                value={catNom}
+                onChange={(e) => setCatNom(e.target.value)}
+                placeholder="Nom de la catégorie"
+                style={{ ...styles.input }}
+                autoFocus
+              />
+            </label>
+
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 6 }}>
+              <Button variant="danger" onClick={deleteCategory} disabled={busyEditCat}>
+                Supprimer
+              </Button>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button variant="neutral" onClick={closeEditCat} disabled={busyEditCat}>
+                  Annuler
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={saveEditCategory}
+                  disabled={busyEditCat || !catNom.trim()}
+                >
+                  Sauvegarder
+                </Button>
+              </div>
+            </div>
+
+            <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
+              Note: Renommer/Supprimer met à jour les items (car les items stockent le nom de catégorie).
+            </div>
+          </div>
+        </Modal>
+      </PageContainer>
+    </div>
   );
+
 }
+
+const btnAccueil = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 14px",
+  borderRadius: 14,
+  border: "1px solid #eab308",
+  background: "#facc15",
+  color: "#111827",
+  textDecoration: "none",   // ✅ important pour <a>
+  fontWeight: 900,
+  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+  cursor: "pointer",
+};
+
+

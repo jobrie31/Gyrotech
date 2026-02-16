@@ -1,11 +1,4 @@
 // src/PageReglagesAdmin.jsx — Réglages ADMIN
-// ✅ UI: tableaux encadrés noir + titres en gras
-// ✅ Ordre: Gestion du temps → Facturation → Travailleurs → Code — Autres projets → Autres projets
-// ✅ Accès: admin + code (config/adminAccess.reglagesAdminCode)
-// ✅ Rebarre automatiquement dès qu'on quitte la page (hash change) + au refresh
-//
-// ✅ DEMANDE (toi): pour "Autre projet" dans Gestion du temps, on enlève l'action poubelle (Supprimer).
-// => Le bouton "Supprimer" n'apparait QUE quand Type = "Projet".
 
 import React, { useMemo, useState, useEffect } from "react";
 import { db, auth } from "./firebaseConfig";
@@ -26,8 +19,6 @@ import {
   addDoc,
   limit,
 } from "firebase/firestore";
-
-import AutresProjetsSection from "./AutresProjetsSection";
 
 export default function PageReglagesAdmin() {
   /* ============================================================
@@ -56,11 +47,9 @@ export default function PageReglagesAdmin() {
         const uid = authUser.uid;
         const emailLower = String(authUser.email || "").trim().toLowerCase();
 
-        // 1) uid
         let q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
         let snap = await getDocs(q1);
 
-        // 2) fallback emailLower
         if (snap.empty && emailLower) {
           q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
           snap = await getDocs(q1);
@@ -96,7 +85,6 @@ export default function PageReglagesAdmin() {
   const isAdmin = me?.isAdmin === true;
   const canShowAdmin = isAdmin === true;
 
-  // 👉 Savoir si on a un brouillon de projet en cours (pour afficher le bouton Retour)
   const [hasDraftProjet, setHasDraftProjet] = useState(false);
   useEffect(() => {
     try {
@@ -109,8 +97,6 @@ export default function PageReglagesAdmin() {
 
   /* ============================================================
      🔒 Code d'accès à la page Réglages Admin
-     - Source: config/adminAccess.reglagesAdminCode
-     - Rebarre automatiquement dès qu'on quitte la page
   ============================================================ */
   const [expectedAdminCode, setExpectedAdminCode] = useState("");
   const [adminCodeInput, setAdminCodeInput] = useState("");
@@ -118,14 +104,13 @@ export default function PageReglagesAdmin() {
   const [adminCodeError, setAdminCodeError] = useState("");
   const [adminAccessGranted, setAdminAccessGranted] = useState(false);
 
-  // Charger le code (admin seulement)
   useEffect(() => {
     (async () => {
       try {
         setAdminCodeLoading(true);
         setAdminCodeError("");
         setExpectedAdminCode("");
-        setAdminAccessGranted(false); // ✅ lock au (re)mount
+        setAdminAccessGranted(false);
 
         if (!canShowAdmin) return;
 
@@ -144,7 +129,6 @@ export default function PageReglagesAdmin() {
     })();
   }, [canShowAdmin]);
 
-  // ✅ Rebarre dès qu'on quitte la page (navigation hash)
   useEffect(() => {
     const lockIfLeft = () => {
       const h = String(window.location.hash || "").toLowerCase();
@@ -190,23 +174,35 @@ export default function PageReglagesAdmin() {
   const [factureError, setFactureError] = useState(null);
   const [factureSaved, setFactureSaved] = useState(false);
 
-  // ✅ Code requis pour "Autres projets"
-  const [autresCode, setAutresCode] = useState("");
-  const [autresCodeLoading, setAutresCodeLoading] = useState(true);
-  const [autresCodeError, setAutresCodeError] = useState(null);
-  const [autresCodeSaved, setAutresCodeSaved] = useState(false);
+  // ✅ NEW: emails destinataires facture (admin)
+  const [invoiceToRaw, setInvoiceToRaw] = useState("jlabrie@styro.ca");
+  const [invoiceEmailLoading, setInvoiceEmailLoading] = useState(true);
+  const [invoiceEmailError, setInvoiceEmailError] = useState("");
+  const [invoiceEmailSaved, setInvoiceEmailSaved] = useState(false);
 
-  // 🔁 Charger config facture (ADMIN + page déverrouillée)
+  function parseEmails(raw) {
+    const parts = String(raw || "")
+      .split(/[\n,;]+/g)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => s.toLowerCase());
+
+    const ok = parts.filter((s) => s.includes("@") && s.includes("."));
+    return Array.from(new Set(ok));
+  }
+
   useEffect(() => {
     (async () => {
       try {
         if (!canUseAdminPage) {
           setFactureLoading(false);
+          setInvoiceEmailLoading(false);
           return;
         }
 
         setFactureLoading(true);
         setFactureError(null);
+
         const ref = doc(db, "config", "facture");
         const snap = await getDoc(ref);
         if (snap.exists()) {
@@ -226,30 +222,31 @@ export default function PageReglagesAdmin() {
     })();
   }, [canUseAdminPage]);
 
-  // 🔁 Charger config "code Autres projets" (ADMIN + page déverrouillée)
+  // ✅ Load invoice email recipients
   useEffect(() => {
     (async () => {
       try {
         if (!canUseAdminPage) {
-          setAutresCodeLoading(false);
+          setInvoiceEmailLoading(false);
           return;
         }
+        setInvoiceEmailLoading(true);
+        setInvoiceEmailError("");
+        setInvoiceEmailSaved(false);
 
-        setAutresCodeLoading(true);
-        setAutresCodeError(null);
-        const ref = doc(db, "config", "punchCodes");
+        const ref = doc(db, "config", "email");
         const snap = await getDoc(ref);
         if (snap.exists()) {
           const data = snap.data() || {};
-          if (data.autresProjetsCode != null) {
-            setAutresCode(String(data.autresProjetsCode || ""));
-          }
+          const arr = Array.isArray(data.invoiceTo) ? data.invoiceTo : parseEmails(data.invoiceTo || "");
+          const txt = (arr || []).map((e) => String(e || "").trim()).filter(Boolean).join("\n");
+          if (txt) setInvoiceToRaw(txt);
         }
       } catch (e) {
         console.error(e);
-        setAutresCodeError(e?.message || String(e));
+        setInvoiceEmailError(e?.message || String(e));
       } finally {
-        setAutresCodeLoading(false);
+        setInvoiceEmailLoading(false);
       }
     })();
   }, [canUseAdminPage]);
@@ -279,17 +276,33 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  const saveAutresCode = async () => {
+  // ✅ NEW: save invoice recipients
+  const saveInvoiceEmails = async () => {
     if (!canUseAdminPage) return;
     try {
-      setAutresCodeError(null);
-      setAutresCodeSaved(false);
-      const ref = doc(db, "config", "punchCodes");
-      await setDoc(ref, { autresProjetsCode: (autresCode || "").trim() }, { merge: true });
-      setAutresCodeSaved(true);
+      setInvoiceEmailError("");
+      setInvoiceEmailSaved(false);
+
+      const list = parseEmails(invoiceToRaw);
+      if (!list.length) {
+        setInvoiceEmailError("Ajoute au moins 1 email valide.");
+        return;
+      }
+
+      await setDoc(
+        doc(db, "config", "email"),
+        {
+          invoiceTo: list,
+          updatedAt: serverTimestamp(),
+          updatedBy: authUser?.email || null,
+        },
+        { merge: true }
+      );
+
+      setInvoiceEmailSaved(true);
     } catch (e) {
       console.error(e);
-      setAutresCodeError(e?.message || String(e));
+      setInvoiceEmailError(e?.message || String(e));
     }
   };
 
@@ -377,12 +390,7 @@ export default function PageReglagesAdmin() {
     if (!canUseAdminPage) return;
 
     const label = nom || "cet employé ";
-    if (
-      !window.confirm(
-        `Supprimer définitivement ${label} ? (Le punch / historique lié ne sera plus visible dans l'application.)`
-      )
-    )
-      return;
+    if (!window.confirm(`Supprimer définitivement ${label} ? (Le punch / historique lié ne sera plus visible dans l'application.)`)) return;
     try {
       await deleteDoc(doc(db, "employes", id));
     } catch (e) {
@@ -412,12 +420,12 @@ export default function PageReglagesAdmin() {
 
   /* ================== GESTION DU TEMPS (ADMIN) ================== */
   const [timeDate, setTimeDate] = useState("");
-  const [timeJobType, setTimeJobType] = useState("projet"); // ✅ "projet" | "autre"
+  const [timeJobType, setTimeJobType] = useState("projet");
   const [timeProjId, setTimeProjId] = useState("");
-  const [timeOtherId, setTimeOtherId] = useState(""); // ✅ autre projet
+  const [timeOtherId, setTimeOtherId] = useState("");
   const [timeEmpId, setTimeEmpId] = useState("");
   const [timeProjets, setTimeProjets] = useState([]);
-  const [timeAutresProjets, setTimeAutresProjets] = useState([]); // ✅ liste autres projets
+  const [timeAutresProjets, setTimeAutresProjets] = useState([]);
   const [timeEmployes, setTimeEmployes] = useState([]);
   const [timeSegments, setTimeSegments] = useState([]);
   const [timeLoading, setTimeLoading] = useState(false);
@@ -427,8 +435,6 @@ export default function PageReglagesAdmin() {
   const [massDepunchLoading, setMassDepunchLoading] = useState(false);
   const [massDepunchMsg, setMassDepunchMsg] = useState("");
 
-  // Projets (liste simple) — ADMIN ONLY
-  // ✅ On veut seulement les projets OUVERTS dans Gestion du temps
   useEffect(() => {
     if (!canUseAdminPage) {
       setTimeProjets([]);
@@ -442,21 +448,16 @@ export default function PageReglagesAdmin() {
 
         snap.forEach((d) => {
           const data = d.data() || {};
-
           const nom = data.nom || "(sans nom)";
 
-          // 🔎 Détection "fermé" robuste (supporte plusieurs anciens formats)
           const isClosed =
             data.isClosed === true ||
             !!data.closedAt ||
             String(data.statut || data.status || data.etat || "")
               .toLowerCase()
-              .includes("ferm"); // "ferme", "fermé", "fermée"
+              .includes("ferm");
 
-          // ✅ On garde seulement ceux qui ne sont PAS fermés
-          if (!isClosed) {
-            rows.push({ id: d.id, nom });
-          }
+          if (!isClosed) rows.push({ id: d.id, nom });
         });
 
         rows.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
@@ -468,7 +469,6 @@ export default function PageReglagesAdmin() {
     })();
   }, [canUseAdminPage]);
 
-  // ✅ Autres projets (liste simple) — ADMIN ONLY
   useEffect(() => {
     if (!canUseAdminPage) {
       setTimeAutresProjets([]);
@@ -478,9 +478,14 @@ export default function PageReglagesAdmin() {
       try {
         const snap = await getDocs(collection(db, "autresProjets"));
         const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, nom: d.data().nom || "(sans nom)", ordre: d.data().ordre ?? null }));
+        snap.forEach((d) =>
+          rows.push({
+            id: d.id,
+            nom: d.data().nom || "(sans nom)",
+            ordre: d.data().ordre ?? null,
+          })
+        );
         rows.sort((a, b) => {
-          // tri ordre puis nom
           if (a.ordre == null && b.ordre == null) return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
           if (a.ordre == null) return 1;
           if (b.ordre == null) return -1;
@@ -495,7 +500,6 @@ export default function PageReglagesAdmin() {
     })();
   }, [canUseAdminPage]);
 
-  // Employés (liste simple pour le filtre temps) — ADMIN ONLY
   useEffect(() => {
     if (!canUseAdminPage) {
       setTimeEmployes([]);
@@ -515,7 +519,6 @@ export default function PageReglagesAdmin() {
     })();
   }, [canUseAdminPage]);
 
-  // Charger les segments du job + date (ADMIN ONLY)
   useEffect(() => {
     if (!canUseAdminPage) {
       setTimeSegments([]);
@@ -542,11 +545,7 @@ export default function PageReglagesAdmin() {
       (snap) => {
         const rows = [];
         snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
-        rows.sort((a, b) => {
-          const sa = toMillis(a.start);
-          const sb = toMillis(b.start);
-          return sa - sb;
-        });
+        rows.sort((a, b) => toMillis(a.start) - toMillis(b.start));
         setTimeSegments(rows);
         setTimeLoading(false);
       },
@@ -559,54 +558,37 @@ export default function PageReglagesAdmin() {
     return () => unsub();
   }, [canUseAdminPage, timeDate, timeJobType, timeProjId, timeOtherId]);
 
-  // Initialiser les valeurs HH:MM quand les segments changent
   useEffect(() => {
     const initial = {};
     timeSegments.forEach((s) => {
-      initial[s.id] = {
-        startTime: tsToTimeStr(s.start),
-        endTime: tsToTimeStr(s.end),
-      };
+      initial[s.id] = { startTime: tsToTimeStr(s.start), endTime: tsToTimeStr(s.end) };
     });
     setTimeRowEdits(initial);
   }, [timeSegments]);
 
-  const displayedSegments = useMemo(
-    () => (timeEmpId ? timeSegments.filter((s) => s.empId === timeEmpId) : timeSegments),
-    [timeSegments, timeEmpId]
-  );
+  const displayedSegments = useMemo(() => (timeEmpId ? timeSegments.filter((s) => s.empId === timeEmpId) : timeSegments), [timeSegments, timeEmpId]);
 
   const updateRowEdit = (id, field, value) => {
-    setTimeRowEdits((prev) => ({
-      ...prev,
-      [id]: { ...(prev[id] || {}), [field]: value },
-    }));
+    setTimeRowEdits((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }));
   };
 
   function normalizeJobIdForEmpMatch(jobType, id) {
     const s = String(id || "").trim();
     if (!s) return [];
-    if (jobType === "projet") {
-      return [s, `proj:${s}`];
-    }
-    // autres projets: on accepte plusieurs variantes au cas où ton app a déjà évolué
+    if (jobType === "projet") return [s, `proj:${s}`];
     return [s, `other:${s}`, `autre:${s}`, `autres:${s}`];
   }
 
   async function findEmployeeSegmentForJob(seg, dateKey, jobType, jobId) {
-    // ✅ On cherche le segment employé correspondant (même empId, même job, start le plus proche)
     if (!seg.empId || !jobId || !dateKey) return null;
 
     const empSegCol = collection(db, "employes", seg.empId, "timecards", dateKey, "segments");
-
-    // 🔍 On lit tous les segments du jour pour cet employé (plus robuste que where(jobId==...))
     const snap = await getDocs(empSegCol);
     if (snap.empty) return null;
 
     const targetStartMs = toMillis(seg.start);
     const allowed = new Set(normalizeJobIdForEmpMatch(jobType, jobId));
 
-    // 1) on filtre sur jobId si possible
     let candidates = [];
     snap.forEach((d) => {
       const data = d.data() || {};
@@ -614,7 +596,6 @@ export default function PageReglagesAdmin() {
       if (allowed.has(jid)) candidates.push({ ref: d.ref, startMs: toMillis(data.start) });
     });
 
-    // 2) fallback si on n’a rien trouvé → on prend tous les segments (on matchera au start)
     if (candidates.length === 0) {
       snap.forEach((d) => {
         const data = d.data() || {};
@@ -666,12 +647,7 @@ export default function PageReglagesAdmin() {
           ? doc(db, "projets", jobId, "timecards", timeDate, "segments", seg.id)
           : doc(db, "autresProjets", jobId, "timecards", timeDate, "segments", seg.id);
 
-      const updates = {
-        start: newStart,
-        end: newEnd,
-        updatedAt: serverTimestamp(),
-      };
-
+      const updates = { start: newStart, end: newEnd, updatedAt: serverTimestamp() };
       const promises = [updateDoc(segRef, updates)];
 
       const empRef = await findEmployeeSegmentForJob(seg, timeDate, timeJobType, jobId);
@@ -729,7 +705,6 @@ export default function PageReglagesAdmin() {
       if (s.startsWith("other:")) return { kind: "autre", id: s.slice(6) };
       if (s.startsWith("autre:")) return { kind: "autre", id: s.slice(6) };
       if (s.startsWith("autres:")) return { kind: "autre", id: s.slice(7) };
-      // compat: si pas de préfixe → on assume projet (comme ton ancien code)
       return { kind: "projet", id: s };
     };
 
@@ -780,27 +755,19 @@ export default function PageReglagesAdmin() {
                   const projSegCol = collection(db, "projets", parsed.id, "timecards", dKey, "segments");
                   const qProj = query(projSegCol, where("empId", "==", empId), where("start", "==", startTs));
                   const projSnap = await getDocs(qProj);
-                  for (const pDoc of projSnap.docs) {
-                    await updateDoc(pDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
-                  }
+                  for (const pDoc of projSnap.docs) await updateDoc(pDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
                 } else if (parsed.kind === "autre") {
                   const otherSegCol = collection(db, "autresProjets", parsed.id, "timecards", dKey, "segments");
                   const qOther = query(otherSegCol, where("empId", "==", empId), where("start", "==", startTs));
                   const otherSnap = await getDocs(qOther);
-                  for (const oDoc of otherSnap.docs) {
-                    await updateDoc(oDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
-                  }
+                  for (const oDoc of otherSnap.docs) await updateDoc(oDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
                 }
               }
             }
           }
 
           window.localStorage?.setItem("massDepunchLastDate", dKey);
-          setMassDepunchMsg(
-            countSegs
-              ? `Dé-punch auto terminé : ${countSegs} punch(s) fermés à 17h.`
-              : "Dé-punch auto : aucun punch ouvert trouvé pour aujourd'hui."
-          );
+          setMassDepunchMsg(countSegs ? `Dé-punch auto terminé : ${countSegs} punch(s) fermés à 17h.` : "Dé-punch auto : aucun punch ouvert trouvé pour aujourd'hui.");
         }
       } catch (e) {
         console.error(e);
@@ -819,29 +786,189 @@ export default function PageReglagesAdmin() {
     };
   }, [canUseAdminPage]);
 
+  /* ================== AUTRES TÂCHES (ADMIN) — gestion + code par item ================== */
+  const [autresAdminRows, setAutresAdminRows] = useState([]);
+  const [autresAdminLoading, setAutresAdminLoading] = useState(false);
+  const [autresAdminError, setAutresAdminError] = useState("");
+  const [autresRowEdits, setAutresRowEdits] = useState({});
+
+  const [newAutreNom, setNewAutreNom] = useState("");
+  const [newAutreOrdre, setNewAutreOrdre] = useState("");
+  const [newAutreCode, setNewAutreCode] = useState("");
+
+  useEffect(() => {
+    if (!canUseAdminPage) {
+      setAutresAdminRows([]);
+      setAutresRowEdits({});
+      return;
+    }
+
+    setAutresAdminError("");
+    setAutresAdminLoading(true);
+
+    const c = collection(db, "autresProjets");
+    const q1 = query(c, orderBy("ordre", "asc"));
+    const unsub = onSnapshot(
+      q1,
+      (snap) => {
+        const list = [];
+        snap.forEach((d) => {
+          const data = d.data() || {};
+          list.push({
+            id: d.id,
+            nom: data.nom || "",
+            ordre: data.ordre ?? null,
+            code: data.code ?? "",
+            note: data.note ?? null,
+            createdAt: data.createdAt ?? null,
+          });
+        });
+
+        list.sort((a, b) => {
+          if (a.ordre == null && b.ordre == null) return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+          if (a.ordre == null) return 1;
+          if (b.ordre == null) return -1;
+          if (a.ordre !== b.ordre) return (a.ordre ?? 0) - (b.ordre ?? 0);
+          return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+        });
+
+        setAutresAdminRows(list);
+
+        setAutresRowEdits((prev) => {
+          const next = { ...prev };
+          for (const r of list) {
+            if (!next[r.id]) next[r.id] = { nom: r.nom || "", ordre: r.ordre == null ? "" : String(r.ordre), code: String(r.code || "") };
+          }
+          return next;
+        });
+
+        setAutresAdminLoading(false);
+      },
+      (err) => {
+        console.error(err);
+        setAutresAdminError(err?.message || String(err));
+        setAutresAdminLoading(false);
+      }
+    );
+
+    return () => unsub();
+  }, [canUseAdminPage]);
+
+  const setAutresEdit = (id, field, value) => {
+    setAutresRowEdits((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }));
+  };
+
+  const saveAutreRow = async (row) => {
+    if (!canUseAdminPage) return;
+    try {
+      setAutresAdminError("");
+      setAutresAdminLoading(true);
+
+      const edit = autresRowEdits[row.id] || {};
+      const nom = String(edit.nom || "").trim();
+      const code = String(edit.code || "").trim();
+      const ordreRaw = String(edit.ordre ?? "").trim();
+
+      if (!nom) throw new Error("Nom requis (Autres tâches).");
+
+      let ordre = null;
+      if (ordreRaw !== "") {
+        const n = Number(ordreRaw);
+        if (isNaN(n)) throw new Error("Ordre invalide (doit être un nombre).");
+        ordre = n;
+      }
+
+      await updateDoc(doc(db, "autresProjets", row.id), { nom, code, ordre, updatedAt: serverTimestamp() });
+    } catch (e) {
+      console.error(e);
+      setAutresAdminError(e?.message || String(e));
+    } finally {
+      setAutresAdminLoading(false);
+    }
+  };
+
+  const deleteAutreRow = async (row) => {
+    if (!canUseAdminPage) return;
+    if (!window.confirm(`Supprimer "${row.nom || "cette tâche"}" ?`)) return;
+    try {
+      setAutresAdminError("");
+      setAutresAdminLoading(true);
+      await deleteDoc(doc(db, "autresProjets", row.id));
+    } catch (e) {
+      console.error(e);
+      setAutresAdminError(e?.message || String(e));
+    } finally {
+      setAutresAdminLoading(false);
+    }
+  };
+
+  const addAutreRow = async () => {
+    if (!canUseAdminPage) return;
+
+    const nom = String(newAutreNom || "").trim();
+    const code = String(newAutreCode || "").trim();
+    const ordreRaw = String(newAutreOrdre ?? "").trim();
+
+    if (!nom) return alert("Nom requis.");
+
+    let ordre = null;
+    if (ordreRaw !== "") {
+      const n = Number(ordreRaw);
+      if (isNaN(n)) return alert("Ordre invalide (doit être un nombre).");
+      ordre = n;
+    }
+
+    try {
+      setAutresAdminError("");
+      setAutresAdminLoading(true);
+
+      await addDoc(collection(db, "autresProjets"), { nom, code, ordre, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+
+      setNewAutreNom("");
+      setNewAutreCode("");
+      setNewAutreOrdre("");
+    } catch (e) {
+      console.error(e);
+      setAutresAdminError(e?.message || String(e));
+    } finally {
+      setAutresAdminLoading(false);
+    }
+  };
+
+  /* ================== HEADER ================== */
+  const HeaderRow = ({ title = "🛠️ Réglages Admin" }) => (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 10, marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-start" }}>
+        <a href="#/" style={btnAccueil} title="Retour à l'accueil">
+          ⬅ Accueil
+        </a>
+      </div>
+
+      <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.15, fontWeight: 900, textAlign: "center", whiteSpace: "nowrap" }}>{title}</h1>
+
+      <div />
+    </div>
+  );
+
   /* ================== UI access ================== */
-  if (meLoading) {
-    return <div style={{ padding: 24 }}>Chargement…</div>;
-  }
+  if (meLoading) return <div style={{ padding: 24 }}>Chargement…</div>;
 
   if (!canShowAdmin) {
     return (
       <div style={{ padding: 24, fontFamily: "Arial, system-ui, -apple-system" }}>
+        <HeaderRow title="🛠️ Réglages Admin" />
         <h2 style={{ marginTop: 0, fontWeight: 900 }}>Accès refusé</h2>
         <div style={{ color: "#6b7280" }}>Cette page est réservée aux administrateurs.</div>
-        <button type="button" onClick={() => (window.location.hash = "#/reglages")} style={{ ...btnSecondary, marginTop: 14 }}>
-          Retour Réglages
-        </button>
       </div>
     );
   }
 
-  // ✅ Admin mais pas encore déverrouillé par code
   if (!adminAccessGranted) {
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+        <HeaderRow title="🛠️ Réglages Admin" />
+
         <div style={{ maxWidth: 520, margin: "0 auto" }}>
-          <h1 style={{ margin: "0 0 10px 0", fontSize: 28, fontWeight: 900 }}>🛠️ Réglages Admin</h1>
           <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
             Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — (Admin)
           </div>
@@ -850,7 +977,6 @@ export default function PageReglagesAdmin() {
             <h3 style={h3Bold}>Code d’accès</h3>
 
             {adminCodeLoading && <div style={{ fontSize: 12, color: "#6b7280" }}>Chargement du code…</div>}
-
             {adminCodeError && <div style={alertErr}>{adminCodeError}</div>}
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
@@ -862,20 +988,12 @@ export default function PageReglagesAdmin() {
                   type="password"
                   style={{ ...input, width: "100%" }}
                   disabled={adminCodeLoading}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") tryUnlockAdmin();
-                  }}
+                  onKeyDown={(e) => e.key === "Enter" && tryUnlockAdmin()}
                 />
               </div>
 
               <button type="button" onClick={tryUnlockAdmin} disabled={adminCodeLoading} style={btnPrimary}>
                 Déverrouiller
-              </button>
-            </div>
-
-            <div style={{ marginTop: 10 }}>
-              <button type="button" onClick={() => (window.location.hash = "#/reglages")} style={btnSecondary}>
-                Retour Réglages
               </button>
             </div>
           </section>
@@ -884,12 +1002,11 @@ export default function PageReglagesAdmin() {
     );
   }
 
-  /* ================== PAGE DÉVERROUILLÉE ================== */
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginBottom: 16 }}>
-        <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.15, fontWeight: 900, textAlign: "center" }}>🛠️ Réglages Admin</h1>
+      <HeaderRow title="🛠️ Réglages Admin" />
 
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginBottom: 16 }}>
         {hasDraftProjet && (
           <button type="button" onClick={() => (window.location.hash = "#/projets")} style={btnSecondary}>
             ⬅️ Retour au projet en cours
@@ -905,25 +1022,13 @@ export default function PageReglagesAdmin() {
       <section style={section}>
         <h3 style={h3Bold}>Gestion du temps (admin)</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Choisis une date, un type (Projet / Autre tâche) et (optionnel) un employé pour voir les blocs de temps, puis les modifier.
-          Les changements sont appliqués au job (projet/autre tâche) et à l&apos;employé.
+          Choisis une date, un type (Projet / Autre tâche) et (optionnel) un employé pour voir les blocs de temps, puis les modifier. Les changements sont appliqués au job (projet/autre tâche) et à l&apos;employé.
           <br />
           <strong>Note:</strong> le bouton poubelle (Supprimer) est disponible seulement pour <strong>Projet</strong>.
         </div>
 
         {massDepunchMsg && (
-          <div
-            style={{
-              marginBottom: 8,
-              padding: 6,
-              borderRadius: 8,
-              background: "#ecfdf3",
-              border: "1px solid #bbf7d0",
-              fontSize: 12,
-              color: "#166534",
-              fontWeight: 800,
-            }}
-          >
+          <div style={{ marginBottom: 8, padding: 6, borderRadius: 8, background: "#ecfdf3", border: "1px solid #bbf7d0", fontSize: 12, color: "#166534", fontWeight: 800 }}>
             {massDepunchMsg}
           </div>
         )}
@@ -936,7 +1041,6 @@ export default function PageReglagesAdmin() {
             <input type="date" value={timeDate} onChange={(e) => setTimeDate(e.target.value)} style={input} />
           </div>
 
-          {/* ✅ Type */}
           <div>
             <label style={label}>Type</label>
             <select
@@ -944,7 +1048,6 @@ export default function PageReglagesAdmin() {
               onChange={(e) => {
                 const v = e.target.value;
                 setTimeJobType(v);
-                // reset sélection pour éviter incohérence
                 setTimeProjId("");
                 setTimeOtherId("");
               }}
@@ -955,7 +1058,6 @@ export default function PageReglagesAdmin() {
             </select>
           </div>
 
-          {/* ✅ Projet OU Autre projet */}
           {timeJobType === "projet" ? (
             <div>
               <label style={label}>Projet</label>
@@ -997,9 +1099,7 @@ export default function PageReglagesAdmin() {
 
         {(() => {
           const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
-          if (!timeDate || !jobId) {
-            return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre tâche.</div>;
-          }
+          if (!timeDate || !jobId) return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre tâche.</div>;
 
           return (
             <div style={{ marginTop: 8 }}>
@@ -1022,20 +1122,10 @@ export default function PageReglagesAdmin() {
                       return (
                         <tr key={seg.id}>
                           <td style={tdTime}>
-                            <input
-                              type="time"
-                              value={edit.startTime || ""}
-                              onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)}
-                              style={{ ...input, width: 110, padding: "4px 6px" }}
-                            />
+                            <input type="time" value={edit.startTime || ""} onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)} style={{ ...input, width: 110, padding: "4px 6px" }} />
                           </td>
                           <td style={tdTime}>
-                            <input
-                              type="time"
-                              value={edit.endTime || ""}
-                              onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)}
-                              style={{ ...input, width: 110, padding: "4px 6px" }}
-                            />
+                            <input type="time" value={edit.endTime || ""} onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)} style={{ ...input, width: 110, padding: "4px 6px" }} />
                           </td>
                           <td style={tdTime}>{empName}</td>
                           <td style={tdTime}>
@@ -1044,7 +1134,6 @@ export default function PageReglagesAdmin() {
                                 Enregistrer
                               </button>
 
-                              {/* ✅ SUPPRIMER (poubelle) seulement pour Projet */}
                               {timeJobType === "projet" && (
                                 <button type="button" onClick={() => deleteSegment(seg)} disabled={timeLoading} style={btnDangerSmall}>
                                   Supprimer
@@ -1075,9 +1164,7 @@ export default function PageReglagesAdmin() {
       {/* ===================== 2) FACTURATION ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Facturation</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ces informations sont utilisées en haut de la facture et pour le prix unitaire de la main-d&apos;œuvre.
-        </div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>Ces informations sont utilisées en haut de la facture et pour le prix unitaire de la main-d&apos;œuvre.</div>
 
         {factureError && <div style={alertErr}>{factureError}</div>}
         {factureSaved && !factureError && <div style={alertOk}>Réglages de facturation enregistrés.</div>}
@@ -1107,12 +1194,7 @@ export default function PageReglagesAdmin() {
 
           <div style={{ maxWidth: 260 }}>
             <label style={label}>Taux horaire (main-d&apos;œuvre)</label>
-            <input
-              value={factureTauxHoraire}
-              onChange={(e) => setFactureTauxHoraire(e.target.value)}
-              inputMode="decimal"
-              style={{ ...input, width: "100%" }}
-            />
+            <input value={factureTauxHoraire} onChange={(e) => setFactureTauxHoraire(e.target.value)} inputMode="decimal" style={{ ...input, width: "100%" }} />
           </div>
 
           <div style={{ marginTop: 4 }}>
@@ -1120,25 +1202,42 @@ export default function PageReglagesAdmin() {
               {factureLoading ? "Chargement..." : "Enregistrer la facture"}
             </button>
           </div>
+
+          {/* ✅ NEW: emails destinataires facture */}
+          <div style={{ marginTop: 12, borderTop: "2px solid #111", paddingTop: 10 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Emails — destinataires facture</div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>1 email par ligne (ou séparé par virgules).</div>
+
+            {invoiceEmailError && <div style={alertErr}>{invoiceEmailError}</div>}
+            {invoiceEmailSaved && !invoiceEmailError && <div style={alertOk}>Emails enregistrés.</div>}
+
+            <textarea
+              value={invoiceToRaw}
+              onChange={(e) => setInvoiceToRaw(e.target.value)}
+              rows={4}
+              style={{ width: "100%", border: "2px solid #111", borderRadius: 10, padding: 10, fontWeight: 800, fontSize: 13 }}
+              placeholder="ex: jlabrie@styro.ca&#10;compta@domaine.com"
+              disabled={invoiceEmailLoading}
+            />
+
+            <div style={{ marginTop: 8 }}>
+              <button onClick={saveInvoiceEmails} disabled={invoiceEmailLoading} style={btnPrimary}>
+                {invoiceEmailLoading ? "Chargement..." : "Enregistrer les emails"}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 
       {/* ===================== 3) TRAVAILLEURS ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Employés</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ajoute un employé avec son email + un code d’activation (utilisé dans “Activer mon compte”).
-        </div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>Ajoute un employé avec son email + un code d’activation (utilisé dans “Activer mon compte”).</div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "end" }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <label style={label}>Nom</label>
-            <input
-              value={employeNomInput}
-              onChange={(e) => setEmployeNomInput(e.target.value)}
-              placeholder="Nom de l'employé"
-              style={{ ...input, width: "100%" }}
-            />
+            <input value={employeNomInput} onChange={(e) => setEmployeNomInput(e.target.value)} placeholder="Nom de l'employé" style={{ ...input, width: "100%" }} />
           </div>
 
           <div style={{ flex: 1, minWidth: 260 }}>
@@ -1148,11 +1247,7 @@ export default function PageReglagesAdmin() {
 
           <div style={{ flex: 1, minWidth: 240 }}>
             <label style={label}>Code activation</label>
-            <input
-              value={employeCodeInput}
-              onChange={(e) => setEmployeCodeInput(e.target.value)}
-              style={{ ...input, width: "100%" }}
-            />
+            <input value={employeCodeInput} onChange={(e) => setEmployeCodeInput(e.target.value)} style={{ ...input, width: "100%" }} />
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1221,44 +1316,86 @@ export default function PageReglagesAdmin() {
         </div>
       </section>
 
-      {/* ===================== 4) CODE AUTRES PROJETS ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Code — Autres tâches</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ce code sera demandé quand quelqu&apos;un choisit un item dans “Autres tâches” avant de puncher.
-          <br />
-          Laisse vide pour ne pas demander de code.
-        </div>
-
-        {autresCodeError && <div style={alertErr}>{autresCodeError}</div>}
-        {autresCodeSaved && !autresCodeError && <div style={alertOk}>Code “Autres tâches” enregistré.</div>}
-
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <label style={label}>Code</label>
-            <input
-              value={autresCode}
-              onChange={(e) => setAutresCode(e.target.value)}
-              type="password"
-              style={{ ...input, width: "100%" }}
-              disabled={autresCodeLoading}
-            />
-          </div>
-
-          <button onClick={saveAutresCode} disabled={autresCodeLoading} style={btnPrimary}>
-            {autresCodeLoading ? "Chargement..." : "Enregistrer le code"}
-          </button>
-        </div>
-      </section>
-
-      {/* ===================== 5) AUTRES PROJETS (ADMIN) ===================== */}
+      {/* ===================== 4) AUTRES TÂCHES (ADMIN) ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Autres tâches (admin)</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Gestion de la banque “Autres tâches”. Ici tu peux ajouter / modifier / supprimer.
+          Gestion de la banque “Autres tâches”. <strong>Chaque tâche peut avoir son propre code</strong> (laisser vide = aucun code).
         </div>
 
-        <AutresProjetsSection allowEdit={true} />
+        {autresAdminError && <div style={alertErr}>{autresAdminError}</div>}
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", marginBottom: 10 }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <label style={label}>Nom</label>
+            <input value={newAutreNom} onChange={(e) => setNewAutreNom(e.target.value)} style={{ ...input, width: "100%" }} />
+          </div>
+
+          <div style={{ width: 120 }}>
+            <label style={label}>Ordre</label>
+            <input value={newAutreOrdre} onChange={(e) => setNewAutreOrdre(e.target.value)} inputMode="numeric" style={{ ...input, width: "100%" }} />
+          </div>
+
+          <div style={{ width: 220 }}>
+            <label style={label}>Code (optionnel)</label>
+            <input value={newAutreCode} onChange={(e) => setNewAutreCode(e.target.value)} style={{ ...input, width: "100%" }} />
+          </div>
+
+          <button onClick={addAutreRow} disabled={autresAdminLoading} style={btnPrimary}>
+            Ajouter
+          </button>
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={tableBlack}>
+            <thead>
+              <tr style={{ background: "#f9fafb" }}>
+                <th style={thTimeBold}>Nom</th>
+                <th style={thTimeBold}>Ordre</th>
+                <th style={thTimeBold}>Code</th>
+                <th style={thTimeBold}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {autresAdminRows.map((r) => {
+                const edit = autresRowEdits[r.id] || { nom: r.nom, ordre: r.ordre, code: r.code };
+                return (
+                  <tr key={r.id}>
+                    <td style={tdTime}>
+                      <input value={edit.nom ?? ""} onChange={(e) => setAutresEdit(r.id, "nom", e.target.value)} style={{ ...input, width: 320, padding: "6px 10px" }} />
+                    </td>
+                    <td style={tdTime}>
+                      <input value={edit.ordre ?? ""} onChange={(e) => setAutresEdit(r.id, "ordre", e.target.value)} inputMode="numeric" style={{ ...input, width: 110, padding: "6px 10px" }} />
+                    </td>
+                    <td style={tdTime}>
+                      <input value={edit.code ?? ""} onChange={(e) => setAutresEdit(r.id, "code", e.target.value)} style={{ ...input, width: 220, padding: "6px 10px" }} placeholder="(vide = aucun code)" />
+                    </td>
+                    <td style={tdTime}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button type="button" onClick={() => saveAutreRow(r)} disabled={autresAdminLoading} style={btnPrimarySmall}>
+                          Enregistrer
+                        </button>
+                        <button type="button" onClick={() => deleteAutreRow(r)} disabled={autresAdminLoading} style={btnDangerSmall}>
+                          Supprimer
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {!autresAdminLoading && autresAdminRows.length === 0 && (
+                <tr>
+                  <td colSpan={4} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+                    Aucune autre tâche pour l’instant.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {autresAdminLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Chargement…</div>}
       </section>
     </div>
   );
@@ -1270,10 +1407,7 @@ function toMillis(v) {
     if (!v) return 0;
     if (v.toDate) return v.toDate().getTime();
     if (v instanceof Date) return v.getTime();
-    if (typeof v === "string") {
-      const d = new Date(v);
-      return d.getTime() || 0;
-    }
+    if (typeof v === "string") return new Date(v).getTime() || 0;
     return 0;
   } catch {
     return 0;
@@ -1306,108 +1440,22 @@ function buildDateTime(dateStr, timeStr) {
 }
 
 /* ================== Styles locaux ================== */
-const section = {
-  border: "1px solid #111",
-  borderRadius: 12,
-  padding: 12,
-  marginBottom: 16,
-  background: "#fff",
-};
+const section = { border: "1px solid #111", borderRadius: 12, padding: 12, marginBottom: 16, background: "#fff" };
 const h3Bold = { margin: "0 0 10px 0", fontWeight: 900 };
-const label = {
-  display: "block",
-  fontSize: 11,
-  color: "#444",
-  marginBottom: 4,
-  fontWeight: 900,
-};
-const input = {
-  width: 240,
-  padding: "8px 10px",
-  border: "1px solid #111",
-  borderRadius: 8,
-  background: "#fff",
-};
-const btnPrimary = {
-  border: "none",
-  background: "#2563eb",
-  color: "#fff",
-  borderRadius: 10,
-  padding: "8px 14px",
-  cursor: "pointer",
-  fontWeight: 900,
-  boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
-};
-const btnPrimarySmall = {
-  ...btnPrimary,
-  padding: "4px 10px",
-  boxShadow: "none",
-  fontSize: 12,
-};
-const btnDangerSmall = {
-  border: "1px solid #111",
-  background: "#fee2e2",
-  color: "#111",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 900,
-  fontSize: 12,
-};
+const label = { display: "block", fontSize: 11, color: "#444", marginBottom: 4, fontWeight: 900 };
+const input = { width: 240, padding: "8px 10px", border: "1px solid #111", borderRadius: 8, background: "#fff" };
+const btnPrimary = { border: "none", background: "#2563eb", color: "#fff", borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontWeight: 900, boxShadow: "0 8px 18px rgba(37,99,235,0.25)" };
+const btnPrimarySmall = { ...btnPrimary, padding: "4px 10px", boxShadow: "none", fontSize: 12 };
+const btnDangerSmall = { border: "1px solid #111", background: "#fee2e2", color: "#111", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 900, fontSize: 12 };
 
-const btnSecondary = {
-  border: "1px solid #111",
-  background: "#fff",
-  color: "#111",
-  borderRadius: 10,
-  padding: "6px 12px",
-  cursor: "pointer",
-  fontWeight: 900,
-};
-const btnSecondarySmall = {
-  ...btnSecondary,
-  padding: "4px 10px",
-  fontSize: 12,
-};
+const btnSecondary = { border: "1px solid #111", background: "#fff", color: "#111", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontWeight: 900 };
+const btnSecondarySmall = { ...btnSecondary, padding: "4px 10px", fontSize: 12 };
 
-const tableBlack = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: 12,
-  border: "2px solid #111",
-  borderRadius: 8,
-};
+const tableBlack = { width: "100%", borderCollapse: "collapse", fontSize: 12, border: "2px solid #111", borderRadius: 8 };
+const thTimeBold = { textAlign: "left", padding: 8, borderBottom: "2px solid #111", fontWeight: 900 };
+const tdTime = { padding: 8, borderBottom: "1px solid #111" };
 
-const thTimeBold = {
-  textAlign: "left",
-  padding: 8,
-  borderBottom: "2px solid #111",
-  fontWeight: 900,
-};
+const alertErr = { background: "#fee2e2", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };
+const alertOk = { background: "#dcfce7", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };
 
-const tdTime = {
-  padding: 8,
-  borderBottom: "1px solid #111",
-};
-
-const alertErr = {
-  background: "#fee2e2",
-  color: "#111",
-  border: "2px solid #111",
-  padding: "6px 8px",
-  borderRadius: 8,
-  fontSize: 12,
-  marginBottom: 8,
-  fontWeight: 900,
-};
-
-const alertOk = {
-  background: "#dcfce7",
-  color: "#111",
-  border: "2px solid #111",
-  padding: "6px 8px",
-  borderRadius: 8,
-  fontSize: 12,
-  marginBottom: 8,
-  fontWeight: 900,
-};
+const btnAccueil = { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 14, border: "1px solid #eab308", background: "#facc15", color: "#111827", textDecoration: "none", fontWeight: 900, boxShadow: "0 10px 24px rgba(0,0,0,0.10)" };

@@ -657,7 +657,7 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
             <div style={{ fontWeight: 1000, fontSize: 18 }}>{projet.clientNom || "—"}</div>
           </div>
           <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
-            <div style={{ color: "#64748b", fontWeight: 900 }}>Unité</div>
+            <div style={{ color: "#64748b", fontWeight: 900 }}># d'Unité</div>
             <div style={{ fontWeight: 1000, fontSize: 18 }}>{projet.numeroUnite || "—"}</div>
           </div>
           <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
@@ -825,7 +825,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
               <tr style={{ background: "#f6f7f8" }}>
                 <th style={th}>BT</th>
                 <th style={th}>Client</th>
-                <th style={th}>Unité</th>
+                <th style={th}># d'Unité</th>
                 <th style={th}>Date fermeture</th>
                 <th style={th}>Remarque</th>
                 <th style={th}>Actions</th>
@@ -1115,7 +1115,7 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 1000, fontSize: 24 }}>Fermer le BT</div>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>Fermer le Bon de Travail</div>
           <button
             onClick={onClose}
             title="Fermer"
@@ -1128,7 +1128,7 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice, onDeleteProject
         <div style={{ fontSize: 18, color: "#111827", marginBottom: 12 }}>
           <div style={{ fontWeight: 1000 }}>{title}</div>
           <div style={{ color: "#6b7280" }}>
-            Unité: {unite} • Modèle: {modele}
+            # d'Unité: {unite} • Modèle: {modele}
           </div>
         </div>
 
@@ -1399,7 +1399,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
               </div>
 
               <div>
-                <div style={labelMini}>Unité</div>
+                <div style={labelMini}># d'Unité</div>
                 <input
                   value={p.numeroUnite ?? ""}
                   onChange={(e) => {
@@ -1533,7 +1533,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
               </PDFButton>
 
               <button onClick={onCloseBT} style={btnCloseBT}>
-                Fermer le BT
+                Fermer le Bon de Travail
               </button>
             </div>
 
@@ -2285,9 +2285,28 @@ export default function PageListeProjet({ isAdmin = false }) {
 
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", marginBottom: 12, gap: 10 }}>
-        <div />
-        <h1 style={{ margin: 0, textAlign: "center", fontSize: 36, fontWeight: 1000, lineHeight: 1.2 }}>📁 Projets</h1>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
+          alignItems: "center",
+          marginBottom: 12,
+          gap: 10,
+        }}
+      >
+        {/* Gauche */}
+        <div style={{ display: "flex", justifyContent: "flex-start" }}>
+          <a href="#/" style={btnAccueil} title="Retour à l'accueil">
+            ⬅ Accueil
+          </a>
+        </div>
+
+        {/* Centre */}
+        <h1 style={{ margin: 0, textAlign: "center", fontSize: 36, fontWeight: 1000, lineHeight: 1.2 }}>
+          📁 Projets
+        </h1>
+
+        {/* Droite */}
         <div className="plp-top-actions" style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <a href="#/reglages" style={btnSecondary}>
             Réglages
@@ -2308,7 +2327,7 @@ export default function PageListeProjet({ isAdmin = false }) {
               {/* ✅ No de dossier AVANT client */}
               <th style={th}>BT</th>
               <th style={th}>Client</th>
-              <th style={th}>Unité</th>
+              <th style={th}># d'Unité</th>
               <th style={th}>Modèle</th>
               <th style={th}>Année</th>
               <th style={th}>Marque</th>
@@ -2572,4 +2591,20 @@ const btnTrash = {
   fontWeight: 1000,
   fontSize: 16,
   lineHeight: 1,
+};
+
+const btnAccueil = {
+  border: "1px solid #eab308",
+  background: "#fde047",      // jaune
+  color: "#111827",
+  borderRadius: 14,
+  padding: "12px 18px",       // assez gros
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 18,
+  textDecoration: "none",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  boxShadow: "0 10px 22px rgba(234, 179, 8, 0.25)",
 };

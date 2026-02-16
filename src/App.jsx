@@ -194,7 +194,7 @@ export default function App() {
             lineHeight: 1.2,
           }}
         >
-          Connecté comme : {user.email}
+          Connecté comme: {user.email}
           {isAdmin ? " — Admin" : ""}
         </div>
 

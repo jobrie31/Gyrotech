@@ -4,6 +4,16 @@
 // Route supportée:
 //   #/historique            -> ouvre sur moi (ou 1er visible)
 //   #/historique/<empId>    -> ouvre sur l'employé (si permis)
+//
+// ✅ UI comme PageReglages.jsx:
+// - Top bar inline (Accueil gauche, titre centré, espace/infos droite)
+// - Titre sur toute la largeur (pas dans une card)
+// - Bouton Accueil jaune identique
+//
+// ✅ Sécurité:
+// - Code requis (config/adminAccess.historiqueCode)
+// - Re-barré dès qu'on quitte la page (hash change)
+// - Re-barré au refresh (pas de persistance)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
@@ -81,21 +91,14 @@ function computeDayTotal(segments) {
     totalMs += Math.max(0, (en ?? now.getTime()) - st);
   }
 
-  return {
-    totalHours: round2(msToHours(totalMs)),
-  };
+  return { totalHours: round2(msToHours(totalMs)) };
 }
 
 function build14Days(sundayStart) {
   const days = [];
   for (let i = 0; i < 14; i++) {
     const d = addDays(sundayStart, i);
-    days.push({
-      date: d,
-      key: dayKey(d),
-      weekday: weekdayFR(d),
-      dateStr: formatDateFR(d),
-    });
+    days.push({ date: d, key: dayKey(d), weekday: weekdayFR(d), dateStr: formatDateFR(d) });
   }
   return days;
 }
@@ -117,7 +120,7 @@ function sumHours(arr) {
 
 // #/historique/<empId> -> empId (ou "")
 function getEmpIdFromHash() {
-  const raw = (window.location.hash || "").replace(/^#\//, ""); // ex: "historique/abc"
+  const raw = (window.location.hash || "").replace(/^#\//, "");
   const parts = raw.split("/");
   if (parts[0] !== "historique") return "";
   return parts[1] || "";
@@ -127,7 +130,7 @@ function getEmpIdFromHash() {
 export default function HistoriqueEmploye() {
   const [error, setError] = useState(null);
 
-  // user auth
+  // auth user
   const [user, setUser] = useState(null);
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u || null));
@@ -166,14 +169,7 @@ export default function HistoriqueEmploye() {
   const [codeLoading, setCodeLoading] = useState(true);
   const [codeInput, setCodeInput] = useState("");
   const [codeErr, setCodeErr] = useState("");
-
-  const [unlocked, setUnlocked] = useState(() => {
-    try {
-      return window.sessionStorage?.getItem("historiqueUnlocked") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [unlocked, setUnlocked] = useState(false); // ✅ pas persistant
 
   // Charge le code attendu depuis Firestore (ADMIN seulement)
   useEffect(() => {
@@ -183,6 +179,8 @@ export default function HistoriqueEmploye() {
       try {
         setCodeLoading(true);
         setCodeErr("");
+        setUnlocked(false); // ✅ lock au refresh
+        setCodeInput("");
 
         if (!isAdmin) {
           setExpectedCode("");
@@ -192,7 +190,6 @@ export default function HistoriqueEmploye() {
         const ref = doc(db, "config", "adminAccess");
         const snap = await getDoc(ref);
         const data = snap.exists() ? snap.data() || {} : {};
-
         const v = String(data.historiqueCode || "").trim();
         if (!cancelled) setExpectedCode(v);
       } catch (e) {
@@ -223,27 +220,27 @@ export default function HistoriqueEmploye() {
 
     setCodeErr("");
     setUnlocked(true);
-    try {
-      window.sessionStorage?.setItem("historiqueUnlocked", "1");
-    } catch {}
+    setCodeInput("");
   };
 
-  // ✅ Re-barre automatiquement quand on quitte la page
+  // ✅ Re-barre automatiquement quand on quitte la page (hash change)
   useEffect(() => {
-    return () => {
-      try {
-        window.sessionStorage?.removeItem("historiqueUnlocked");
-      } catch {}
+    const lockIfLeft = () => {
+      const h = String(window.location.hash || "").toLowerCase();
+      if (!h.includes("historique")) {
+        setUnlocked(false);
+        setCodeInput("");
+        setCodeErr("");
+      }
     };
+    window.addEventListener("hashchange", lockIfLeft);
+    return () => window.removeEventListener("hashchange", lockIfLeft);
   }, []);
 
-  // employés visibles (admin seulement — sinon vide)
-  const visibleEmployes = useMemo(() => {
-    if (!isAdmin) return [];
-    return employes;
-  }, [employes, isAdmin]);
+  // employés visibles (admin seulement)
+  const visibleEmployes = useMemo(() => (isAdmin ? employes : []), [employes, isAdmin]);
 
-  // empId venant du hash (optionnel)
+  // empId venant du hash
   const [routeEmpId, setRouteEmpId] = useState(getEmpIdFromHash());
   useEffect(() => {
     const onHash = () => setRouteEmpId(getEmpIdFromHash());
@@ -251,18 +248,15 @@ export default function HistoriqueEmploye() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // ✅ pas d'employé par défaut -> force sélectionner
   const [empId, setEmpId] = useState(() => (routeEmpId ? routeEmpId : ""));
-  useEffect(() => {
-    setEmpId(routeEmpId || "");
-  }, [routeEmpId]);
+  useEffect(() => setEmpId(routeEmpId || ""), [routeEmpId]);
 
   const empObj = useMemo(() => visibleEmployes.find((e) => e.id === empId) || null, [visibleEmployes, empId]);
-  const employeeNameBottom = empObj?.nom || ""; // ✅ lié au dropdown
+  const employeeNameBottom = empObj?.nom || "";
 
-  // ✅ Période = TOUJOURS 2 semaines (groupe de paie), alignées au dimanche
+  // ✅ Période = 2 semaines alignées au dimanche
   const [anchorDate, setAnchorDate] = useState(() => new Date());
-  const payPeriodStart = useMemo(() => startOfSunday(anchorDate), [anchorDate]); // début du bloc 2 semaines
+  const payPeriodStart = useMemo(() => startOfSunday(anchorDate), [anchorDate]);
   const days14 = useMemo(() => build14Days(payPeriodStart), [payPeriodStart]);
 
   const startDate = days14[0]?.date;
@@ -274,7 +268,6 @@ export default function HistoriqueEmploye() {
     return x;
   }, [endDate]);
 
-  // ✅ bornes de semaine
   const week1Start = days14[0]?.date;
   const week1End = days14[6]?.date;
   const week2Start = days14[7]?.date;
@@ -295,21 +288,15 @@ export default function HistoriqueEmploye() {
     return `Bloc de paie : Du ${fmtISODate(week1Start)} au ${fmtISODate(week2End)}`;
   }, [week1Start, week2End]);
 
-  const goPrevPayBlock = () => {
-    const newAnchor = addDays(payPeriodStart, -14);
-    setAnchorDate(newAnchor);
-  };
-  const goNextPayBlock = () => {
-    const newAnchor = addDays(payPeriodStart, +14);
-    setAnchorDate(newAnchor);
-  };
+  const goPrevPayBlock = () => setAnchorDate(addDays(payPeriodStart, -14));
+  const goNextPayBlock = () => setAnchorDate(addDays(payPeriodStart, +14));
 
   const [responsable, setResponsable] = useState("");
   const [pp, setPp] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
-  const [notes, setNotes] = useState({}); // local only
+  const [notes, setNotes] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -429,7 +416,6 @@ export default function HistoriqueEmploye() {
     justifyContent: "center",
   };
 
-  // ✅ nom employé en bas: un peu plus au centre (pas collé à gauche)
   const bottomNameStyle = {
     fontWeight: 1000,
     minWidth: 260,
@@ -441,356 +427,365 @@ export default function HistoriqueEmploye() {
   };
 
   /* ===================== UI ===================== */
-  if (!isAdmin) {
-    return (
-      <PageContainer>
-        <Card>
-          <div style={{ fontSize: 20, fontWeight: 1000, marginBottom: 6 }}>Accès refusé</div>
-          <div style={{ color: "#64748b", fontWeight: 800 }}>Cette page Historique est réservée aux administrateurs.</div>
-          <div style={{ marginTop: 12 }}>
-            <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
-              Retour
-            </Button>
-          </div>
-        </Card>
-      </PageContainer>
-    );
-  }
-
-  if (!unlocked) {
-    return (
-      <PageContainer>
-        <Card>
-          <div style={{ fontSize: 22, fontWeight: 1000, marginBottom: 8 }}>🔒 Historique — Code requis</div>
-
-          {codeErr && (
-            <div
-              style={{
-                background: "#fdecea",
-                color: "#7f1d1d",
-                border: "1px solid #f5c6cb",
-                padding: "10px 14px",
-                borderRadius: 10,
-                marginBottom: 12,
-                fontSize: 14,
-                fontWeight: 800,
-              }}
-            >
-              {codeErr}
-            </div>
-          )}
-
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>Code</div>
-              <input
-                type="password"
-                value={codeInput}
-                onChange={(e) => setCodeInput(e.target.value)}
-                style={smallInput}
-                disabled={codeLoading}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") tryUnlock();
-                }}
-              />
-            </div>
-
-            <Button onClick={tryUnlock} disabled={codeLoading} variant="primary">
-              {codeLoading ? "Chargement…" : "Déverrouiller"}
-            </Button>
-
-            <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
-              Retour
-            </Button>
-          </div>
-        </Card>
-      </PageContainer>
-    );
-  }
-
-  return (
-    <PageContainer>
-      {/* Header page */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
-        <div style={{ fontSize: 22, fontWeight: 1000 }}>📄 Historique — Feuille d’heures</div>
-
-        <div style={{ display: "flex", gap: 10 }}>
-          <Button variant="neutral" onClick={() => (window.location.hash = "#/accueil")}>
-            Retour
-          </Button>
-        </div>
+  // ✅ TOP BAR INLINE (comme ton exemple Réglages)
+  const TopBar = ({ title, rightSlot = null }) => (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1fr auto 1fr",
+        alignItems: "center",
+        marginBottom: 16,
+        gap: 10,
+      }}
+    >
+      {/* Gauche */}
+      <div style={{ display: "flex", justifyContent: "flex-start" }}>
+        <a href="#/" style={btnAccueil} title="Retour à l'accueil">
+          ⬅ Accueil
+        </a>
       </div>
 
-      {error && (
-        <div
-          style={{
-            background: "#fdecea",
-            color: "#7f1d1d",
-            border: "1px solid #f5c6cb",
-            padding: "10px 14px",
-            borderRadius: 10,
-            marginBottom: 12,
-            fontSize: 14,
-            fontWeight: 800,
-          }}
-        >
-          Erreur: {error}
-        </div>
-      )}
+      {/* Centre */}
+      <h1
+        style={{
+          margin: 0,
+          fontSize: 32,
+          lineHeight: 1.15,
+          fontWeight: 900,
+          textAlign: "center",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {title}
+      </h1>
 
-      <Card>
-        {/* top bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
-          <div style={{ fontSize: 18, fontWeight: 1000 }}>Employé: {empObj?.nom || "—"}</div>
-          <div style={{ color: "#64748b", fontSize: 13, fontWeight: 800 }}>{loading ? "Chargement…" : ""}</div>
-        </div>
+      {/* Droite */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
+        {rightSlot}
+      </div>
+    </div>
+  );
 
-        {/* Head blocks */}
-        <div style={headerStyle}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div style={labelBox}>
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Nom de l’employé(e)</div>
+  if (!isAdmin) {
+    return (
+      <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+        <TopBar title="⛔ Accès refusé" rightSlot={<div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>Connecté: <strong>{user?.email || "—"}</strong></div>} />
+        <Card>
+          <div style={{ color: "#64748b", fontWeight: 800 }}>Cette page Historique est réservée aux administrateurs.</div>
+        </Card>
+      </div>
+    );
+  }
 
-              <select
-                value={empId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setEmpId(id);
-                  window.location.hash = id ? `#/historique/${id}` : "#/historique";
+  // 🔒 Code requis (page non unlock)
+  if (!unlocked) {
+    return (
+      <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+        <TopBar
+          title="🔒 Historique — Code requis"
+          rightSlot={<div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>Connecté: <strong>{user?.email || "—"}</strong> — Admin</div>}
+        />
+
+        <PageContainer>
+          <Card>
+            {codeErr && (
+              <div
+                style={{
+                  background: "#fdecea",
+                  color: "#7f1d1d",
+                  border: "1px solid #f5c6cb",
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  marginBottom: 12,
+                  fontSize: 14,
+                  fontWeight: 800,
                 }}
-                style={smallInput}
               >
-                <option value="">— Sélectionner —</option>
-                {visibleEmployes.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.nom || "(sans nom)"}
-                  </option>
-                ))}
-              </select>
-            </div>
+                {codeErr}
+              </div>
+            )}
 
-            <div style={labelBox}>
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Nom du responsable</div>
-              <input value={responsable} onChange={(e) => setResponsable(e.target.value)} style={smallInput} />
-            </div>
-
-            <div style={labelBox}>
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Période (choisir une date)</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>Code</div>
                 <input
-                  type="date"
-                  value={isoInputValue(anchorDate)}
-                  onChange={(e) => {
-                    const dt = parseISOInput(e.target.value);
-                    if (dt) setAnchorDate(dt);
+                  type="password"
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value)}
+                  style={smallInput}
+                  disabled={codeLoading}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") tryUnlock();
                   }}
-                  style={{ ...smallInput, width: 190 }}
                 />
-                <div style={{ color: "#475569", fontWeight: 800 }}>(Bloc de paie = 2 semaines)</div>
               </div>
-            </div>
 
-            <div style={labelBox}>
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>PP</div>
-              <input value={pp} onChange={(e) => setPp(e.target.value)} style={smallInput} />
+              <Button onClick={tryUnlock} disabled={codeLoading} variant="primary">
+                {codeLoading ? "Chargement…" : "Déverrouiller"}
+              </Button>
             </div>
+          </Card>
+        </PageContainer>
+      </div>
+    );
+  }
+
+  // ✅ Page déverrouillée
+  return (
+    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+      <TopBar
+        title="📄 Historique — Feuille d’heures"
+        rightSlot={
+          <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
+            Connecté: <strong>{user?.email || "—"}</strong> — Admin
           </div>
+        }
+      />
 
-          <div style={{ display: "grid", gap: 8, alignContent: "start" }}>
-            <div style={labelBox}>
-              <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8 }}>
-                <div style={{ fontWeight: 900 }}>Début :</div>
-                <div style={{ fontWeight: 800 }}>{formatDateFR(startDate)}</div>
-                <div style={{ fontWeight: 900 }}>Fin :</div>
-                <div style={{ fontWeight: 800 }}>{formatDateFR(endDate)}</div>
-                <div style={{ fontWeight: 900 }}>Payable :</div>
-                <div style={{ fontWeight: 800 }}>{formatDateFR(payableDate)}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ✅ NAV 2 SEMAINES (grosses flèches) */}
-        <div style={navWrap} className="no-print">
-          <button type="button" onClick={goPrevPayBlock} style={bigArrowBtn} title="Bloc précédent">
-            ‹
-          </button>
-
-          <div style={{ textAlign: "center", flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 1000, fontSize: 16, color: "#0f172a" }}>{payBlockLabel}</div>
-            <div style={{ color: "#64748b", fontWeight: 800, fontSize: 12, marginTop: 2 }}>
-              (déplacement par blocs de 2 semaines)
-            </div>
-          </div>
-
-          <button type="button" onClick={goNextPayBlock} style={bigArrowBtn} title="Bloc suivant">
-            ›
-          </button>
-        </div>
-
-        {/* ✅ si aucun employé sélectionné */}
-        {!empId ? (
+      <PageContainer>
+        {error && (
           <div
             style={{
-              marginTop: 12,
-              padding: 12,
-              border: "1px solid #e2e8f0",
+              background: "#fdecea",
+              color: "#7f1d1d",
+              border: "1px solid #f5c6cb",
+              padding: "10px 14px",
               borderRadius: 10,
-              background: "#f8fafc",
+              marginBottom: 12,
+              fontSize: 14,
               fontWeight: 800,
-              color: "#334155",
             }}
           >
-            Sélectionne un employé pour afficher la feuille d’heures.
+            Erreur: {error}
           </div>
-        ) : (
-          <>
-            {/* WEEK 1 */}
-            <div style={{ marginTop: 12 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 1000, fontSize: 16 }}>Semaine 1</div>
-                <div
-                  style={{
-                    fontWeight: 900,
-                    color: "#0f172a",
-                    background: "#eef2ff",
-                    border: "1px solid #c7d2fe",
-                    padding: "4px 10px",
-                    borderRadius: 999,
+        )}
+
+        <Card>
+          {/* top bar inside card */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{ fontSize: 18, fontWeight: 1000 }}>Employé: {empObj?.nom || "—"}</div>
+            <div style={{ color: "#64748b", fontSize: 13, fontWeight: 800 }}>{loading ? "Chargement…" : ""}</div>
+          </div>
+
+          {/* Head blocks */}
+          <div style={headerStyle}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={labelBox}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Nom de l’employé(e)</div>
+
+                <select
+                  value={empId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setEmpId(id);
+                    window.location.hash = id ? `#/historique/${id}` : "#/historique";
                   }}
+                  style={smallInput}
                 >
-                  {week1Label}
+                  <option value="">— Sélectionner —</option>
+                  {visibleEmployes.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.nom || "(sans nom)"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={labelBox}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Nom du responsable</div>
+                <input value={responsable} onChange={(e) => setResponsable(e.target.value)} style={smallInput} />
+              </div>
+
+              <div style={labelBox}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Période (choisir une date)</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    type="date"
+                    value={isoInputValue(anchorDate)}
+                    onChange={(e) => {
+                      const dt = parseISOInput(e.target.value);
+                      if (dt) setAnchorDate(dt);
+                    }}
+                    style={{ ...smallInput, width: 190 }}
+                  />
+                  <div style={{ color: "#475569", fontWeight: 800 }}>(Bloc de paie = 2 semaines)</div>
                 </div>
               </div>
 
-              <table style={table}>
-                <thead>
-                  <tr>
-                    <th style={th}>Jour</th>
-                    <th style={th}>Date</th>
-                    <th style={th}>Total (h)</th>
-                    <th style={th}>Notes</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {rows.slice(0, 7).map((r) => (
-                    <tr key={r.key}>
-                      <td style={tdLeft}>{r.weekday}</td>
-                      <td style={td}>{r.dateStr}</td>
-                      <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
-
-                      <td style={{ ...tdLeft, whiteSpace: "normal" }}>
-                        <input
-                          value={notes[r.key] || ""}
-                          onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
-                          style={{
-                            width: "100%",
-                            border: "1px solid #cbd5e1",
-                            borderRadius: 6,
-                            padding: "6px 8px",
-                            fontSize: 13,
-                          }}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-
-                  <tr>
-                    <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={2}>
-                      Total semaine 1
-                    </td>
-                    <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek1)}</td>
-                    <td style={td}></td>
-                  </tr>
-                </tbody>
-              </table>
+              <div style={labelBox}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>PP</div>
+                <input value={pp} onChange={(e) => setPp(e.target.value)} style={smallInput} />
+              </div>
             </div>
 
-            {/* WEEK 2 */}
-            <div style={{ marginTop: 14 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 1000, fontSize: 16 }}>Semaine 2</div>
-                <div
-                  style={{
-                    fontWeight: 900,
-                    color: "#0f172a",
-                    background: "#ecfeff",
-                    border: "1px solid #a5f3fc",
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                  }}
-                >
-                  {week2Label}
+            <div style={{ display: "grid", gap: 8, alignContent: "start" }}>
+              <div style={labelBox}>
+                <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8 }}>
+                  <div style={{ fontWeight: 900 }}>Début :</div>
+                  <div style={{ fontWeight: 800 }}>{formatDateFR(startDate)}</div>
+                  <div style={{ fontWeight: 900 }}>Fin :</div>
+                  <div style={{ fontWeight: 800 }}>{formatDateFR(endDate)}</div>
+                  <div style={{ fontWeight: 900 }}>Payable :</div>
+                  <div style={{ fontWeight: 800 }}>{formatDateFR(payableDate)}</div>
                 </div>
               </div>
+            </div>
+          </div>
 
-              <table style={table}>
-                <thead>
-                  <tr>
-                    <th style={th}>Jour</th>
-                    <th style={th}>Date</th>
-                    <th style={th}>Total (h)</th>
-                    <th style={th}>Notes</th>
-                  </tr>
-                </thead>
+          {/* NAV 2 semaines */}
+          <div style={navWrap} className="no-print">
+            <button type="button" onClick={goPrevPayBlock} style={bigArrowBtn} title="Bloc précédent">
+              ‹
+            </button>
 
-                <tbody>
-                  {rows.slice(7, 14).map((r) => (
-                    <tr key={r.key}>
-                      <td style={tdLeft}>{r.weekday}</td>
-                      <td style={td}>{r.dateStr}</td>
-                      <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
-
-                      <td style={{ ...tdLeft, whiteSpace: "normal" }}>
-                        <input
-                          value={notes[r.key] || ""}
-                          onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
-                          style={{
-                            width: "100%",
-                            border: "1px solid #cbd5e1",
-                            borderRadius: 6,
-                            padding: "6px 8px",
-                            fontSize: 13,
-                          }}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-
-                  <tr>
-                    <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={2}>
-                      Total semaine 2
-                    </td>
-                    <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek2)}</td>
-                    <td style={td}></td>
-                  </tr>
-                </tbody>
-              </table>
+            <div style={{ textAlign: "center", flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 1000, fontSize: 16, color: "#0f172a" }}>{payBlockLabel}</div>
+              <div style={{ color: "#64748b", fontWeight: 800, fontSize: 12, marginTop: 2 }}>(déplacement par blocs de 2 semaines)</div>
             </div>
 
-            {/* ✅ Totaux bas (nom lié au dropdown + un peu plus centré) */}
+            <button type="button" onClick={goNextPayBlock} style={bigArrowBtn} title="Bloc suivant">
+              ›
+            </button>
+          </div>
+
+          {!empId ? (
             <div
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 12,
                 marginTop: 12,
-                alignItems: "center",
+                padding: 12,
+                border: "1px solid #e2e8f0",
+                borderRadius: 10,
+                background: "#f8fafc",
+                fontWeight: 800,
+                color: "#334155",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "center", flex: 1 }}>
-                <div style={bottomNameStyle}>{employeeNameBottom || "—"}</div>
+              Sélectionne un employé pour afficher la feuille d’heures.
+            </div>
+          ) : (
+            <>
+              {/* WEEK 1 */}
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 1000, fontSize: 16 }}>Semaine 1</div>
+                  <div style={{ fontWeight: 900, color: "#0f172a", background: "#eef2ff", border: "1px solid #c7d2fe", padding: "4px 10px", borderRadius: 999 }}>
+                    {week1Label}
+                  </div>
+                </div>
+
+                <table style={table}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Jour</th>
+                      <th style={th}>Date</th>
+                      <th style={th}>Total (h)</th>
+                      <th style={th}>Notes</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {rows.slice(0, 7).map((r) => (
+                      <tr key={r.key}>
+                        <td style={tdLeft}>{r.weekday}</td>
+                        <td style={td}>{r.dateStr}</td>
+                        <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
+                        <td style={{ ...tdLeft, whiteSpace: "normal" }}>
+                          <input
+                            value={notes[r.key] || ""}
+                            onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
+                            style={{ width: "100%", border: "1px solid #cbd5e1", borderRadius: 6, padding: "6px 8px", fontSize: 13 }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+
+                    <tr>
+                      <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={2}>
+                        Total semaine 1
+                      </td>
+                      <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek1)}</td>
+                      <td style={td}></td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
 
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <div style={{ fontWeight: 1000 }}>Total heures travaillées :</div>
-                <div style={totalBox}>{fmtHoursComma(total2Weeks)}</div>
+              {/* WEEK 2 */}
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 1000, fontSize: 16 }}>Semaine 2</div>
+                  <div style={{ fontWeight: 900, color: "#0f172a", background: "#ecfeff", border: "1px solid #a5f3fc", padding: "4px 10px", borderRadius: 999 }}>
+                    {week2Label}
+                  </div>
+                </div>
+
+                <table style={table}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Jour</th>
+                      <th style={th}>Date</th>
+                      <th style={th}>Total (h)</th>
+                      <th style={th}>Notes</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {rows.slice(7, 14).map((r) => (
+                      <tr key={r.key}>
+                        <td style={tdLeft}>{r.weekday}</td>
+                        <td style={td}>{r.dateStr}</td>
+                        <td style={totalCell}>{fmtHoursComma(r.totalHours)}</td>
+                        <td style={{ ...tdLeft, whiteSpace: "normal" }}>
+                          <input
+                            value={notes[r.key] || ""}
+                            onChange={(e) => setNotes((p) => ({ ...p, [r.key]: e.target.value }))}
+                            style={{ width: "100%", border: "1px solid #cbd5e1", borderRadius: 6, padding: "6px 8px", fontSize: 13 }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+
+                    <tr>
+                      <td style={{ ...tdLeft, fontWeight: 1000 }} colSpan={2}>
+                        Total semaine 2
+                      </td>
+                      <td style={{ ...totalCell, background: "#fed7aa" }}>{fmtHoursComma(totalWeek2)}</td>
+                      <td style={td}></td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
-            </div>
-          </>
-        )}
-      </Card>
-    </PageContainer>
+
+              {/* Totaux bas */}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 12, alignItems: "center" }}>
+                <div style={{ display: "flex", justifyContent: "center", flex: 1 }}>
+                  <div style={bottomNameStyle}>{employeeNameBottom || "—"}</div>
+                </div>
+
+                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  <div style={{ fontWeight: 1000 }}>Total heures travaillées :</div>
+                  <div style={totalBox}>{fmtHoursComma(total2Weeks)}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </Card>
+      </PageContainer>
+    </div>
   );
 }
+
+/* ✅ Bouton Accueil IDENTIQUE à ton exemple */
+const btnAccueil = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 14px",
+  borderRadius: 14,
+  border: "1px solid #eab308",
+  background: "#facc15",
+  color: "#111827",
+  textDecoration: "none",
+  fontWeight: 900,
+  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+};

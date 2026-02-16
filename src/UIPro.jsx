@@ -184,7 +184,7 @@ export function Pill({ variant = "neutral", children }) {
   );
 }
 
-export function TopBar({ left, right }) {
+export function TopBar({ left, center, right, style }) {
   return (
     <div
       style={{
@@ -198,15 +198,37 @@ export function TopBar({ left, right }) {
         borderRadius: 14,
         padding: 10,
         boxShadow: palette.shadow,
+        width: "100%",
+        boxSizing: "border-box",
+        ...(style || {}),
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>{left}</div>
-        <div>{right}</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
+          alignItems: "center",
+          gap: 10,
+          width: "100%",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          {left}
+        </div>
+
+        <div style={{ justifySelf: "center", textAlign: "center", minWidth: 0 }}>
+          {center}
+        </div>
+
+        <div style={{ justifySelf: "end", minWidth: 0 }}>
+          {right}
+        </div>
       </div>
     </div>
   );
 }
+
+
 
 /* ===== Table helpers ===== */
 export function ProTable({ columns = [], rows = [], emptyText = "Aucune donnée." }) {

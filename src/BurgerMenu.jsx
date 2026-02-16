@@ -49,11 +49,11 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
         onClick={() => setOpen(true)}
         style={{
           position: "fixed",
-          top: 10,
+          top: 0,
           left: 10,
           zIndex: 12000,
-          width: 48,
-          height: 48,
+          width: 40,
+          height: 40,
           borderRadius: 12,
           border: "1px solid #e5e7eb",
           background: "#ffffff",
