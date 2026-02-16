@@ -16,15 +16,7 @@ import HistoriqueEmploye from "./HistoriqueEmploye";
 // ✅ AJOUT: page test OCR
 import Test from "./Test";
 
-import {
-  collection,
-  getDocs,
-  limit,
-  onSnapshot,
-  query,
-  where,
-  doc,
-} from "firebase/firestore";
+import { collection, getDocs, limit, onSnapshot, query, where, doc } from "firebase/firestore";
 
 // ➜ Supporte aussi les sous-chemins (#/historique/<empId>, etc.)
 function getRouteFromHash() {
@@ -74,19 +66,11 @@ export default function App() {
         const uid = user.uid;
         const emailLower = String(user.email || "").trim().toLowerCase();
 
-        let q1 = query(
-          collection(db, "employes"),
-          where("uid", "==", uid),
-          limit(1)
-        );
+        let q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
         let snap = await getDocs(q1);
 
         if (snap.empty && emailLower) {
-          q1 = query(
-            collection(db, "employes"),
-            where("emailLower", "==", emailLower),
-            limit(1)
-          );
+          q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
           snap = await getDocs(q1);
         }
 
@@ -124,11 +108,10 @@ export default function App() {
       window.location.hash = "#/reglages";
     }
 
-    if (route === "historique" && !isAdmin) {
-      window.location.hash = "#/accueil";
-    }
+    // ✅ IMPORTANT: historique est maintenant accessible aux non-admin (ils verront juste leurs heures)
+    // Donc: on NE redirige PLUS si !isAdmin
 
-    // ✅ AJOUT: protéger la page test OCR si tu veux la garder admin-only
+    // ✅ protéger la page test OCR (admin-only)
     if (route === "test-ocr" && !isAdmin) {
       window.location.hash = "#/accueil";
     }
@@ -147,28 +130,22 @@ export default function App() {
     return <Login />;
   }
 
-  // Menu (Historique visible SEULEMENT admin)
+  // Menu
   const pages = [
     { key: "accueil", label: "Accueil" },
     { key: "projets", label: "Projets" },
     { key: "materiels", label: "Matériels" },
     { key: "reglages", label: "Réglages" },
     ...(isAdmin ? [{ key: "reglages-admin", label: "Réglages Admin" }] : []),
-    ...(isAdmin ? [{ key: "historique", label: "Heures de travail" }] : []),
 
-    // ✅ AJOUT: Test OCR (admin-only ici)
+    // ✅ Heures de travail visible pour tout le monde
+    { key: "historique", label: isAdmin ? "Heures de travail" : "Mes heures" },
+
+    // ✅ Test OCR (admin-only)
     ...(isAdmin ? [{ key: "test-ocr", label: "Test OCR" }] : []),
   ];
 
-  const validRoutes = [
-    "accueil",
-    "projets",
-    "materiels",
-    "reglages",
-    "historique",
-    "reglages-admin",
-    "test-ocr",
-  ];
+  const validRoutes = ["accueil", "projets", "materiels", "reglages", "historique", "reglages-admin", "test-ocr"];
 
   return (
     <div>
@@ -210,9 +187,10 @@ export default function App() {
       {route === "materiels" && <PageMateriels />}
       {route === "reglages" && <PageReglages />}
       {route === "reglages-admin" && <PageReglagesAdmin />}
-      {route === "historique" && <HistoriqueEmploye />}
 
-      {/* ✅ AJOUT: page test OCR */}
+      {/* ✅ on passe isAdmin + meEmpId */}
+      {route === "historique" && <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />}
+
       {route === "test-ocr" && <Test />}
 
       {!validRoutes.includes(route) && <PageAccueil />}

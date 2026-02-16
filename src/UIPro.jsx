@@ -109,7 +109,14 @@ export function Card({ title, right, children, style }) {
   return (
     <div style={{ ...styles.card, ...style }}>
       {(title || right) && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 10,
+          }}
+        >
           {title ? <h3 style={styles.sectionTitle}>{title}</h3> : <div />}
           {right ? <div>{right}</div> : null}
         </div>
@@ -121,33 +128,46 @@ export function Card({ title, right, children, style }) {
 
 export function SectionHeader({ title, actions }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "0 0 12px" }}>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        margin: "0 0 12px",
+      }}
+    >
       <h2 style={{ ...styles.sectionTitle, fontSize: 20 }}>{title}</h2>
       <div>{actions}</div>
     </div>
   );
 }
 
-export function Button({ variant = "primary", children, style, ...props }) {
-  const map = {
+/* ✅ FIX: Button safe (fallback variant) */
+export function Button({ variant = "primary", children, style, disabled, ...props }) {
+  const themeMap = {
     primary: { bg: "#2563eb", fg: "#fff", bd: "#1d4ed8" },
     success: { bg: "#22c55e", fg: "#fff", bd: "#16a34a" },
     danger: { bg: "#ef4444", fg: "#fff", bd: "#dc2626" },
     neutral: { bg: "#fff", fg: "#0f172a", bd: palette.border },
-  }[variant];
+  };
+
+  // ✅ fallback: si variant inconnu, on tombe sur primary puis neutral
+  const theme = themeMap[variant] || themeMap.primary || themeMap.neutral;
 
   return (
     <button
       {...props}
+      disabled={!!disabled}
       style={{
-        border: `1px solid ${map.bd}`,
-        background: map.bg,
-        color: map.fg,
+        border: `1px solid ${theme.bd}`,
+        background: theme.bg,
+        color: theme.fg,
         borderRadius: 12,
         padding: "10px 14px",
         fontWeight: 800,
         fontSize: 14,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
         boxShadow: "0 8px 18px rgba(0,0,0,0.10)",
         ...style,
       }}
@@ -157,14 +177,17 @@ export function Button({ variant = "primary", children, style, ...props }) {
   );
 }
 
+/* ✅ FIX: Pill safe aussi (même principe) */
 export function Pill({ variant = "neutral", children }) {
-  const map = {
+  const themeMap = {
     success: { bg: "#dcfce7", bd: "#86efac", fg: "#166534" },
     warning: { bg: "#fff7ed", bd: "#fed7aa", fg: "#9a3412" },
     danger: { bg: "#fee2e2", bd: "#fecaca", fg: "#7f1d1d" },
     info: { bg: "#e0f2fe", bd: "#bae6fd", fg: "#0c4a6e" },
     neutral: { bg: "#f1f5f9", bd: "#e2e8f0", fg: "#334155" },
-  }[variant];
+  };
+
+  const theme = themeMap[variant] || themeMap.neutral;
 
   return (
     <span
@@ -172,9 +195,9 @@ export function Pill({ variant = "neutral", children }) {
         display: "inline-block",
         padding: "6px 10px",
         borderRadius: 9999,
-        background: map.bg,
-        border: `1px solid ${map.bd}`,
-        color: map.fg,
+        background: theme.bg,
+        border: `1px solid ${theme.bd}`,
+        color: theme.fg,
         fontWeight: 700,
         fontSize: 13,
       }}
@@ -216,19 +239,13 @@ export function TopBar({ left, center, right, style }) {
           {left}
         </div>
 
-        <div style={{ justifySelf: "center", textAlign: "center", minWidth: 0 }}>
-          {center}
-        </div>
+        <div style={{ justifySelf: "center", textAlign: "center", minWidth: 0 }}>{center}</div>
 
-        <div style={{ justifySelf: "end", minWidth: 0 }}>
-          {right}
-        </div>
+        <div style={{ justifySelf: "end", minWidth: 0 }}>{right}</div>
       </div>
     </div>
   );
 }
-
-
 
 /* ===== Table helpers ===== */
 export function ProTable({ columns = [], rows = [], emptyText = "Aucune donnée." }) {
