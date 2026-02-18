@@ -17,10 +17,10 @@ import {
   updateDoc,
   setDoc,
   serverTimestamp,
+  collectionGroup,
 } from "firebase/firestore";
 import { auth, db } from "./firebaseConfig";
 import { Card, Button, PageContainer } from "./UIPro";
-import MessagesSidebar, { upsertPayblockNotesMessages } from "./MessagesSidebar";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -64,6 +64,14 @@ function toJSDateMaybe(ts) {
   const d = new Date(ts);
   return isNaN(d.getTime()) ? null : d;
 }
+function safeToMs(ts) {
+  if (!ts) return 0;
+  if (typeof ts.toMillis === "function") return ts.toMillis();
+  if (typeof ts.toDate === "function") return ts.toDate().getTime();
+  const d = new Date(ts);
+  const ms = d.getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
 function round2(x) {
   return Math.round((x + Number.EPSILON) * 100) / 100;
 }
@@ -87,7 +95,6 @@ function parseMoneyInput(v) {
   return n;
 }
 
-// ✅ format: "15 fev au 28 fev 2026"
 const MONTHS_FR_SHORT_NOACC = [
   "jan",
   "fev",
@@ -117,6 +124,15 @@ function formatRangeFRShort(d1, d2) {
 
   if (yA === yB) return `${dA} ${mA} au ${dB} ${mB} ${yB}`;
   return `${dA} ${mA} ${yA} au ${dB} ${mB} ${yB}`;
+}
+
+function parseISOInput(v) {
+  if (!v) return null;
+  const [y, m, d] = v.split("-").map((x) => Number(x));
+  if (!y || !m || !d) return null;
+  const dt = new Date(y, m - 1, d);
+  dt.setHours(0, 0, 0, 0);
+  return dt;
 }
 
 function computeDayTotal(segments) {
@@ -160,14 +176,7 @@ function isoInputValue(date) {
     date.getDate()
   )}`;
 }
-function parseISOInput(v) {
-  if (!v) return null;
-  const [y, m, d] = v.split("-").map((x) => Number(x));
-  if (!y || !m || !d) return null;
-  const dt = new Date(y, m - 1, d);
-  dt.setHours(0, 0, 0, 0);
-  return dt;
-}
+
 async function mapLimit(items, limit, fn) {
   const list = items || [];
   const out = new Array(list.length);
@@ -191,6 +200,14 @@ function getEmpIdFromHash() {
   const parts = raw.split("/");
   if (parts[0] !== "historique") return "";
   return parts[1] || "";
+}
+
+/* ✅ label d’un bloc à partir de sa clé "YYYY-MM-DD" (dimanche) */
+function payBlockLabelFromKey(payKey) {
+  const start = parseISOInput(payKey);
+  if (!start) return payKey || "";
+  const end = addDays(start, 13);
+  return formatRangeFRShort(start, end);
 }
 
 /* ---------------------- Modal ---------------------- */
@@ -274,7 +291,7 @@ function Modal({ title, onClose, children, width = 980 }) {
   );
 }
 
-/* ---------------------- Styles (shared) ---------------------- */
+/* ---------------------- Styles ---------------------- */
 const btnAccueil = {
   display: "inline-flex",
   alignItems: "center",
@@ -353,8 +370,40 @@ const pill = (bg, bd, fg) => ({
   whiteSpace: "nowrap",
 });
 
+const replyBubbleInline = {
+  border: "1px solid #eab308",
+  background: "#fef08a",
+  borderRadius: 12,
+  padding: "8px 10px",
+  fontSize: 13,
+  whiteSpace: "pre-wrap",
+  lineHeight: 1.25,
+  minWidth: 160,
+  maxWidth: 320,
+};
+
+const linkBtn = {
+  border: "1px solid #e2e8f0",
+  background: "#ffffff",
+  borderRadius: 999,
+  padding: "6px 10px",
+  fontWeight: 1000,
+  cursor: "pointer",
+};
+
 /* ---------------------- Top bar ---------------------- */
-function TopBar({ title, rightSlot = null }) {
+function TopBar({ title, rightSlot = null, flashTitle = false }) {
+  const titleStyle = flashTitle
+    ? {
+        padding: "6px 14px",
+        borderRadius: 14,
+        border: "2px solid #ff0000",
+        animation: "histAdminTitleBlink 0.6s infinite",
+        boxShadow:
+          "0 0 0 2px rgba(255,0,0,0.15) inset, 0 0 26px rgba(255,0,0,0.25)",
+      }
+    : null;
+
   return (
     <div
       style={{
@@ -379,6 +428,7 @@ function TopBar({ title, rightSlot = null }) {
           fontWeight: 900,
           textAlign: "center",
           whiteSpace: "nowrap",
+          ...(titleStyle || {}),
         }}
       >
         {title}
@@ -557,7 +607,7 @@ export default function HistoriqueEmploye({
     return () => unsub();
   }, []);
 
-  // ✅ fallback: si App.jsx ne passe pas meEmpId, on le déduit ici
+  // fallback meEmpId
   const derivedMeEmpId = useMemo(() => {
     if (meEmpId) return meEmpId;
     if (!user) return "";
@@ -571,26 +621,22 @@ export default function HistoriqueEmploye({
   }, [meEmpId, user, employes]);
 
   /* ===================== Période (2 semaines) ===================== */
-  const ANCHOR_KEY = "historique_anchorDate_v1";
+  // ✅ CHANGEMENT #2: on ouvre TOUJOURS sur le bloc courant (aujourd’hui),
+  // peu importe ce qui était sélectionné avant.
   const [anchorDate, setAnchorDate] = useState(() => {
-    const saved = (() => {
-      try {
-        return localStorage.getItem(ANCHOR_KEY);
-      } catch {
-        return "";
-      }
-    })();
-    const parsed = parseISOInput(saved);
-    return parsed || new Date();
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
   });
 
+  const didInitToToday = useRef(false);
   useEffect(() => {
-    try {
-      localStorage.setItem(ANCHOR_KEY, isoInputValue(anchorDate));
-    } catch {
-      // ignore
-    }
-  }, [anchorDate]);
+    if (didInitToToday.current) return;
+    didInitToToday.current = true;
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    setAnchorDate(d);
+  }, []);
 
   const payPeriodStart = useMemo(() => startOfSunday(anchorDate), [anchorDate]);
   const days14 = useMemo(() => build14Days(payPeriodStart), [payPeriodStart]);
@@ -618,34 +664,49 @@ export default function HistoriqueEmploye({
 
   const payBlockKey = useMemo(() => dayKey(payPeriodStart), [payPeriodStart]);
 
-  /* ===================== NOTES (Firestore) ===================== */
-  // ✅ maintenant: 1 seule note (pas w1/w2)
-  const [notesFS, setNotesFS] = useState({}); // empId -> note
-  const [noteDrafts, setNoteDrafts] = useState({}); // empId -> note text
-  const [noteStatus, setNoteStatus] = useState({}); // empId -> { saving, savedAt, err }
+  /* ===================== NOTES + RÉPONSES (Firestore) ===================== */
+  const [notesFS, setNotesFS] = useState({}); // empId -> note (bloc courant)
+  const [repliesFS, setRepliesFS] = useState({}); // empId -> reply (bloc courant)
+  const [replyMeta, setReplyMeta] = useState({}); // empId -> { by, at(Date), atMs } (bloc courant)
 
-  const saveTimersRef = useRef({}); // empId -> timeout
+  const [noteDrafts, setNoteDrafts] = useState({});
+  const [replyDrafts, setReplyDrafts] = useState({});
 
-  const noteDocRef = (empId) =>
-    doc(db, "employes", empId, "payBlockNotes", payBlockKey);
+  const [noteStatus, setNoteStatus] = useState({});
+  const [replyStatus, setReplyStatus] = useState({});
+
+  const saveTimersRef = useRef({});
+  const replyTimersRef = useRef({});
+
+  const noteDocRef = (empId, blockKey = payBlockKey) =>
+    doc(db, "employes", empId, "payBlockNotes", blockKey);
 
   const getDraft = (empId) => {
     const d = noteDrafts?.[empId];
     if (d !== undefined) return d;
     return String(notesFS?.[empId] || "");
   };
-
   const setDraft = (empId, value) => {
     setNoteDrafts((prev) => ({ ...(prev || {}), [empId]: value }));
   };
-
   const primeDraftFromFS = (empId, noteValue) => {
-    setNoteDrafts((prev) => ({ ...(prev || {}), [empId]: String(noteValue || "") }));
+    setNoteDrafts((prev) => ({
+      ...(prev || {}),
+      [empId]: String(noteValue || ""),
+    }));
+  };
+
+  const getReplyDraft = (empId) => {
+    const d = replyDrafts?.[empId];
+    if (d !== undefined) return d;
+    return String(repliesFS?.[empId] || "");
+  };
+  const setReplyDraft = (empId, value) => {
+    setReplyDrafts((prev) => ({ ...(prev || {}), [empId]: value }));
   };
 
   const scheduleAutoSave = (empId) => {
     if (!empId) return;
-    // debounce
     const timers = saveTimersRef.current || {};
     if (timers[empId]) clearTimeout(timers[empId]);
 
@@ -656,9 +717,20 @@ export default function HistoriqueEmploye({
     saveTimersRef.current = timers;
   };
 
+  const scheduleAutoSaveReply = (empId) => {
+    if (!empId) return;
+    const timers = replyTimersRef.current || {};
+    if (timers[empId]) clearTimeout(timers[empId]);
+
+    timers[empId] = setTimeout(() => {
+      saveReplyForEmp(empId);
+    }, 700);
+
+    replyTimersRef.current = timers;
+  };
+
   const saveNoteForEmp = async (empId) => {
     if (!empId) return;
-
     const note = String(getDraft(empId) || "");
 
     setNoteStatus((p) => ({
@@ -671,32 +743,13 @@ export default function HistoriqueEmploye({
     }));
 
     try {
-      // 1) save notes (source of truth)
       await setDoc(
-        noteDocRef(empId),
-        {
-          note,
-          updatedAt: serverTimestamp(),
-          updatedBy: user?.email || "",
-        },
+        noteDocRef(empId, payBlockKey),
+        { note, updatedAt: serverTimestamp(), updatedBy: user?.email || "" },
         { merge: true }
       );
 
-      // 2) ✅ messages (pop dans la marge) — 1 seul message
-      await upsertPayblockNotesMessages({
-        empId,
-        payBlockKey,
-        payBlockLabel,
-        viewerEmail: user?.email || "",
-        note,
-      });
-
-      // local mirror
-      setNotesFS((prev) => ({
-        ...(prev || {}),
-        [empId]: note,
-      }));
-
+      setNotesFS((prev) => ({ ...(prev || {}), [empId]: note }));
       setNoteStatus((p) => ({
         ...(p || {}),
         [empId]: { saving: false, savedAt: Date.now(), err: "" },
@@ -716,7 +769,50 @@ export default function HistoriqueEmploye({
           err: msg,
         },
       }));
+      setError(msg);
+    }
+  };
 
+  const saveReplyForEmp = async (empId) => {
+    if (!empId) return;
+    const reply = String(getReplyDraft(empId) || "");
+
+    setReplyStatus((p) => ({
+      ...(p || {}),
+      [empId]: {
+        saving: true,
+        savedAt: p?.[empId]?.savedAt || null,
+        err: "",
+      },
+    }));
+
+    try {
+      await setDoc(
+        noteDocRef(empId, payBlockKey),
+        { reply, replyAt: serverTimestamp(), replyBy: user?.email || "" },
+        { merge: true }
+      );
+
+      setRepliesFS((prev) => ({ ...(prev || {}), [empId]: reply }));
+      setReplyStatus((p) => ({
+        ...(p || {}),
+        [empId]: { saving: false, savedAt: Date.now(), err: "" },
+      }));
+    } catch (e) {
+      console.error("❌ saveReplyForEmp failed:", e);
+      const msg =
+        e?.code === "permission-denied"
+          ? "Accès refusé: Firestore bloque l’enregistrement (rules)."
+          : e?.message || String(e);
+
+      setReplyStatus((p) => ({
+        ...(p || {}),
+        [empId]: {
+          saving: false,
+          savedAt: p?.[empId]?.savedAt || null,
+          err: msg,
+        },
+      }));
       setError(msg);
     }
   };
@@ -729,26 +825,39 @@ export default function HistoriqueEmploye({
     return "";
   };
 
+  const replyStatusLabel = (empId) => {
+    const s = replyStatus?.[empId] || {};
+    if (s.saving) return "Sauvegarde…";
+    if (s.err) return s.err;
+    if (s.savedAt) return "Réponse sauvegardée ✅";
+    return "";
+  };
+
   useEffect(() => {
     setNoteDrafts({});
+    setReplyDrafts({});
     setNoteStatus({});
-    // cleanup timers
+    setReplyStatus({});
+
     const timers = saveTimersRef.current || {};
     Object.keys(timers).forEach((k) => clearTimeout(timers[k]));
     saveTimersRef.current = {};
+
+    const rtimers = replyTimersRef.current || {};
+    Object.keys(rtimers).forEach((k) => clearTimeout(rtimers[k]));
+    replyTimersRef.current = {};
   }, [payBlockKey]);
 
-  // (A) NON-ADMIN: écoute seulement ma note
+  // NON-ADMIN: écoute seulement mon doc (bloc courant)
   useEffect(() => {
     if (isAdmin) return;
     if (!pwUnlocked) return;
     if (!derivedMeEmpId) return;
 
     const unsub = onSnapshot(
-      noteDocRef(derivedMeEmpId),
+      noteDocRef(derivedMeEmpId, payBlockKey),
       (snap) => {
         const data = snap.exists() ? snap.data() || {} : {};
-        // compat: si ancien schema w1/w2
         const note =
           data.note !== undefined
             ? String(data.note || "")
@@ -757,12 +866,27 @@ export default function HistoriqueEmploye({
                 .filter(Boolean)
                 .join("\n\n");
 
-        setNotesFS((prev) => ({
-          ...(prev || {}),
-          [derivedMeEmpId]: note,
-        }));
+        const reply = data.reply !== undefined ? String(data.reply || "") : "";
+
+        setNotesFS((prev) => ({ ...(prev || {}), [derivedMeEmpId]: note }));
+        setRepliesFS((prev) => ({ ...(prev || {}), [derivedMeEmpId]: reply }));
 
         primeDraftFromFS(derivedMeEmpId, note);
+
+        setReplyDrafts((prev) => {
+          if (prev?.[derivedMeEmpId] !== undefined) return prev;
+          return { ...(prev || {}), [derivedMeEmpId]: reply };
+        });
+
+        const atMs = safeToMs(data.replyAt);
+        setReplyMeta((prev) => ({
+          ...(prev || {}),
+          [derivedMeEmpId]: {
+            by: String(data.replyBy || ""),
+            at: toJSDateMaybe(data.replyAt),
+            atMs,
+          },
+        }));
       },
       (err) => setError(err?.message || String(err))
     );
@@ -771,19 +895,19 @@ export default function HistoriqueEmploye({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, pwUnlocked, derivedMeEmpId, payBlockKey]);
 
-  // (B) ADMIN: charge notes du bloc pour tous
+  // ADMIN: listeners (note + reply) pour tous (bloc courant)
   useEffect(() => {
-    let cancelled = false;
+    if (!isAdmin) return;
+    if (!unlocked) return;
 
-    async function loadAdminNotes() {
-      try {
-        if (!isAdmin) return;
-        if (!unlocked) return;
+    const list = (employes || []).filter((e) => e?.id);
+    const unsubs = [];
 
-        const list = (employes || []).filter((e) => e?.id);
-        const fetched = await mapLimit(list, 10, async (emp) => {
-          const empId = emp.id;
-          const snap = await getDoc(noteDocRef(empId));
+    for (const emp of list) {
+      const empId = emp.id;
+      const unsub = onSnapshot(
+        noteDocRef(empId, payBlockKey),
+        (snap) => {
           const data = snap.exists() ? snap.data() || {} : {};
           const note =
             data.note !== undefined
@@ -792,39 +916,147 @@ export default function HistoriqueEmploye({
                   .map((x) => x.trim())
                   .filter(Boolean)
                   .join("\n\n");
-          return [empId, note];
-        });
 
-        if (cancelled) return;
+          const reply = data.reply !== undefined ? String(data.reply || "") : "";
 
-        const map = {};
-        (fetched || []).forEach((pair) => {
-          if (!pair) return;
-          const [empId, note] = pair;
-          map[empId] = note;
-        });
+          setNotesFS((prev) => ({ ...(prev || {}), [empId]: note }));
+          setRepliesFS((prev) => ({ ...(prev || {}), [empId]: reply }));
 
-        setNotesFS(map);
+          const atMs = safeToMs(data.replyAt);
+          setReplyMeta((prev) => ({
+            ...(prev || {}),
+            [empId]: {
+              by: String(data.replyBy || ""),
+              at: toJSDateMaybe(data.replyAt),
+              atMs,
+            },
+          }));
 
-        // initialise drafts si vide
-        setNoteDrafts((prev) => {
-          const next = { ...(prev || {}) };
-          Object.keys(map).forEach((empId) => {
-            if (next[empId] === undefined) next[empId] = map[empId];
+          setNoteDrafts((prev) => {
+            if (prev?.[empId] !== undefined) return prev;
+            return { ...(prev || {}), [empId]: note };
           });
-          return next;
-        });
-      } catch (e) {
-        console.error(e);
-        if (!cancelled) setError(e?.message || String(e));
-      }
+        },
+        (err) => setError(err?.message || String(err))
+      );
+
+      unsubs.push(unsub);
     }
 
-    loadAdminNotes();
     return () => {
-      cancelled = true;
+      unsubs.forEach((fn) => {
+        try {
+          fn?.();
+        } catch {
+          // ignore
+        }
+      });
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, unlocked, payBlockKey, employes]);
+
+  /* ===================== ✅ ADMIN: "VU" + ALERTES (TOUS BLOCS) ===================== */
+  const [adminSeenBump, setAdminSeenBump] = useState(0);
+
+  const replySeenKey = (empId, blockKey) =>
+    `seen_reply_admin_${empId}_${blockKey}`;
+
+  const getReplySeenMs = (empId, blockKey) => {
+    try {
+      return (
+        Number(localStorage.getItem(replySeenKey(empId, blockKey)) || "0") || 0
+      );
+    } catch {
+      return 0;
+    }
+  };
+
+  const isReplySeen = (empId, blockKey, replyAtMs) => {
+    const seen = getReplySeenMs(empId, blockKey);
+    if (!replyAtMs) return true;
+    return replyAtMs <= seen;
+  };
+
+  const setReplySeen = (empId, blockKey, replyAtMs, checked) => {
+    try {
+      if (!checked) {
+        localStorage.removeItem(replySeenKey(empId, blockKey));
+      } else {
+        const v = Number(replyAtMs || Date.now()) || Date.now();
+        localStorage.setItem(replySeenKey(empId, blockKey), String(v));
+      }
+    } catch {
+      // ignore
+    }
+    setAdminSeenBump((x) => x + 1);
+  };
+
+  // ✅ CHANGEMENT #1: on écoute toutes les réponses (tous blocs) via collectionGroup
+  // et on fait flasher le titre si au moins une réponse est "non vue".
+  const [allRepliesByDoc, setAllRepliesByDoc] = useState({}); // docKey => {empId, blockKey, reply, atMs, by}
+  useEffect(() => {
+    if (!isAdmin || !unlocked) return;
+
+    const qAll = query(collectionGroup(db, "payBlockNotes"));
+    const unsub = onSnapshot(
+      qAll,
+      (snap) => {
+        const map = {};
+        snap.forEach((d) => {
+          const data = d.data() || {};
+          const reply = String(data.reply || "").trim();
+          const atMs = safeToMs(data.replyAt);
+          if (!reply || !atMs) return;
+
+          // path: employes/{empId}/payBlockNotes/{blockKey}
+          const parts = String(d.ref.path || "").split("/");
+          const empId = parts?.[1] || "";
+          const blockKey = parts?.[3] || "";
+          if (!empId || !blockKey) return;
+
+          const docKey = `${empId}__${blockKey}`;
+          map[docKey] = {
+            empId,
+            blockKey,
+            reply,
+            atMs,
+            by: String(data.replyBy || ""),
+          };
+        });
+        setAllRepliesByDoc(map);
+      },
+      (err) => setError(err?.message || String(err))
+    );
+
+    return () => unsub();
+  }, [isAdmin, unlocked]);
+
+  const adminAlertList = useMemo(() => {
+    if (!isAdmin || !unlocked) return [];
+    const arr = Object.values(allRepliesByDoc || []);
+    // seulement non-vues
+    return arr
+      .filter((x) => !isReplySeen(x.empId, x.blockKey, x.atMs))
+      .sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, unlocked, allRepliesByDoc, adminSeenBump]);
+
+  const adminUnseenReplyCount = adminAlertList.length;
+
+  const alertBlocks = useMemo(() => {
+    const groups = {};
+    for (const it of adminAlertList) {
+      const k = it.blockKey;
+      if (!groups[k]) groups[k] = { blockKey: k, count: 0, empIds: [] };
+      groups[k].count += 1;
+      groups[k].empIds.push(it.empId);
+    }
+    const out = Object.values(groups);
+    out.sort((a, b) => String(b.blockKey).localeCompare(String(a.blockKey)));
+    return out;
+  }, [adminAlertList]);
+
+  const flashAdminTitle = isAdmin && unlocked && adminUnseenReplyCount > 0;
 
   /* ===================== TAUX HORAIRE (ADMIN seul) ===================== */
   const [rateDrafts, setRateDrafts] = useState({});
@@ -951,14 +1183,10 @@ export default function HistoriqueEmploye({
       );
 
       const w1 = round2(
-        dayTotals
-          .slice(0, 7)
-          .reduce((a, b) => a + (Number(b) || 0), 0)
+        dayTotals.slice(0, 7).reduce((a, b) => a + (Number(b) || 0), 0)
       );
       const w2 = round2(
-        dayTotals
-          .slice(7, 14)
-          .reduce((a, b) => a + (Number(b) || 0), 0)
+        dayTotals.slice(7, 14).reduce((a, b) => a + (Number(b) || 0), 0)
       );
       const t = round2(w1 + w2);
 
@@ -966,7 +1194,7 @@ export default function HistoriqueEmploye({
         id: empIdLocal,
         nom: emp?.nom || "(sans nom)",
         email: emp?.email || "",
-        tauxHoraire: emp?.tauxHoraire ?? null, // gardé pour le détail
+        tauxHoraire: emp?.tauxHoraire ?? null,
         week1: w1,
         week2: w2,
         total: t,
@@ -1006,20 +1234,14 @@ export default function HistoriqueEmploye({
   const allWeek1Total = useMemo(
     () =>
       round2(
-        (summaryRows || []).reduce(
-          (acc, r) => acc + (Number(r.week1) || 0),
-          0
-        )
+        (summaryRows || []).reduce((acc, r) => acc + (Number(r.week1) || 0), 0)
       ),
     [summaryRows]
   );
   const allWeek2Total = useMemo(
     () =>
       round2(
-        (summaryRows || []).reduce(
-          (acc, r) => acc + (Number(r.week2) || 0),
-          0
-        )
+        (summaryRows || []).reduce((acc, r) => acc + (Number(r.week2) || 0), 0)
       ),
     [summaryRows]
   );
@@ -1092,16 +1314,12 @@ export default function HistoriqueEmploye({
   const detailWeek2 = detailRows.slice(7, 14);
   const detailTotalWeek1 = useMemo(
     () =>
-      round2(
-        detailWeek1.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)
-      ),
+      round2(detailWeek1.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)),
     [detailWeek1]
   );
   const detailTotalWeek2 = useMemo(
     () =>
-      round2(
-        detailWeek2.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)
-      ),
+      round2(detailWeek2.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)),
     [detailWeek2]
   );
   const detailTotal2Weeks = useMemo(
@@ -1263,11 +1481,9 @@ export default function HistoriqueEmploye({
     );
   };
 
-  /* ===================== Page layout ===================== */
   const rightSlot = (
     <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-      Connecté: <strong>{user?.email || "—"}</strong>{" "}
-      {isAdmin ? "— Admin" : ""}
+      Connecté: <strong>{user?.email || "—"}</strong> {isAdmin ? "— Admin" : ""}
     </div>
   );
 
@@ -1281,19 +1497,23 @@ export default function HistoriqueEmploye({
         <div style={{ fontWeight: 1000, fontSize: 18 }}>
           {isAdmin ? "Historique" : "Mes heures"}
         </div>
-        <div style={{ fontWeight: 900, color: "#334155" }}>
-          {payBlockLabel}
-        </div>
+        <div style={{ fontWeight: 900, color: "#334155" }}>{payBlockLabel}</div>
 
-        <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            justifyContent: "center",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
           <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>Sem1: {week1Label}</span>
           <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>Sem2: {week2Label}</span>
         </div>
 
         <div style={{ display: "flex", justifyContent: "center", gap: 10, alignItems: "center" }}>
-          <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
-            Ancrage
-          </div>
+          <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>Ancrage</div>
           <input
             type="date"
             value={isoInputValue(anchorDate)}
@@ -1309,6 +1529,13 @@ export default function HistoriqueEmploye({
             }}
           />
         </div>
+
+        {/* ✅ alertes globales (tous blocs) */}
+        {isAdmin && unlocked && adminUnseenReplyCount > 0 ? (
+          <div style={{ fontSize: 12, fontWeight: 1000, color: "#b91c1c" }}>
+            Réponses non vues (tous blocs): {adminUnseenReplyCount}
+          </div>
+        ) : null}
       </div>
 
       <button type="button" style={bigArrowBtn} onClick={goNextPayBlock} title="Bloc suivant">
@@ -1320,112 +1547,141 @@ export default function HistoriqueEmploye({
   /* ===================== NON-ADMIN VIEW ===================== */
   if (!isAdmin) {
     const myNote = getDraft(derivedMeEmpId);
+    const myReply = getReplyDraft(derivedMeEmpId);
+    const rs = replyStatusLabel(derivedMeEmpId);
+    const rst = replyStatus?.[derivedMeEmpId] || {};
 
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+        <style>{`
+          @keyframes histAdminTitleBlink {
+            0%   { background: #ffffff; color: #0f172a; }
+            50%  { background: #ff0000; color: #ffffff; }
+            100% { background: #ffffff; color: #0f172a; }
+          }
+        `}</style>
+
         <TopBar title="📒 Mes heures" rightSlot={rightSlot} />
 
-        <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <PageContainer>
-              {error && (
-                <div
-                  style={{
-                    background: "#fdecea",
-                    color: "#7f1d1d",
-                    border: "1px solid #f5c6cb",
-                    padding: "10px 14px",
-                    borderRadius: 12,
-                    marginBottom: 14,
-                    fontSize: 14,
-                    fontWeight: 800,
-                  }}
-                >
-                  Erreur: {String(error)}
+        <PageContainer>
+          {error && (
+            <div
+              style={{
+                background: "#fdecea",
+                color: "#7f1d1d",
+                border: "1px solid #f5c6cb",
+                padding: "10px 14px",
+                borderRadius: 12,
+                marginBottom: 14,
+                fontSize: 14,
+                fontWeight: 800,
+              }}
+            >
+              Erreur: {String(error)}
+            </div>
+          )}
+
+          {navBar}
+
+          <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 1000, fontSize: 16 }}>{myEmpObj?.nom || "Moi"}</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{user?.email || ""}</div>
                 </div>
-              )}
 
-              {navBar}
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={pill("#ecfdf3", "#bbf7d0", "#166534")}>
+                    Total 2 sem: {fmtHoursComma(myTotal2Weeks)} h
+                  </span>
+                  <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
+                    Taux: {fmtMoneyComma(myEmpObj?.tauxHoraire)} $
+                  </span>
+                </div>
+              </div>
 
-              <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
-                <Card>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                    <div>
-                      <div style={{ fontWeight: 1000, fontSize: 16 }}>
-                        {myEmpObj?.nom || "Moi"}
-                      </div>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                        {user?.email || ""}
-                      </div>
-                    </div>
+              <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1 — {week1Label}</div>
+                  {myLoading ? (
+                    <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
+                  ) : myErr ? (
+                    <div style={{ fontWeight: 900, color: "#b91c1c" }}>{myErr}</div>
+                  ) : (
+                    renderWeekTable(myWeek1, myTotalWeek1)
+                  )}
+                </div>
 
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={pill("#ecfdf3", "#bbf7d0", "#166534")}>
-                        Total 2 sem: {fmtHoursComma(myTotal2Weeks)} h
-                      </span>
-                      {/* ✅ non-admin voit le taux ici, mais pas modifiable */}
-                      <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
-                        Taux: {fmtMoneyComma(myEmpObj?.tauxHoraire)} $
-                      </span>
+                <div>
+                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 2 — {week2Label}</div>
+                  {myLoading ? (
+                    <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
+                  ) : myErr ? (
+                    <div style={{ fontWeight: 900, color: "#b91c1c" }}>{myErr}</div>
+                  ) : (
+                    renderWeekTable(myWeek2, myTotalWeek2)
+                  )}
+                </div>
+
+                <div style={{ marginTop: 6, display: "grid", gap: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (Admin)</div>
+                    <div
+                      style={{
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 12,
+                        background: "#f8fafc",
+                        padding: "10px 12px",
+                        whiteSpace: "pre-wrap",
+                        fontSize: 13,
+                      }}
+                    >
+                      {myNote || "—"}
                     </div>
                   </div>
 
-                  <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
-                    <div>
-                      <div style={{ fontWeight: 1000, marginBottom: 6 }}>
-                        Semaine 1 — {week1Label}
-                      </div>
-                      {myLoading ? (
-                        <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
-                      ) : myErr ? (
-                        <div style={{ fontWeight: 900, color: "#b91c1c" }}>{myErr}</div>
-                      ) : (
-                        renderWeekTable(myWeek1, myTotalWeek1)
-                      )}
-                    </div>
+                  <div>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Ma réponse (si je veux répondre)</div>
 
-                    <div>
-                      <div style={{ fontWeight: 1000, marginBottom: 6 }}>
-                        Semaine 2 — {week2Label}
-                      </div>
-                      {myLoading ? (
-                        <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
-                      ) : myErr ? (
-                        <div style={{ fontWeight: 900, color: "#b91c1c" }}>{myErr}</div>
-                      ) : (
-                        renderWeekTable(myWeek2, myTotalWeek2)
-                      )}
-                    </div>
+                    <textarea
+                      rows={3}
+                      value={myReply}
+                      onChange={(e) => {
+                        setReplyDraft(derivedMeEmpId, e.target.value);
+                        scheduleAutoSaveReply(derivedMeEmpId);
+                      }}
+                      onBlur={() => saveReplyForEmp(derivedMeEmpId)}
+                      placeholder="Écrire ta réponse…"
+                      style={{
+                        width: "100%",
+                        border: "1px solid #eab308",
+                        background: "#fef08a",
+                        borderRadius: 12,
+                        padding: "10px 12px",
+                        fontSize: 13,
+                        resize: "vertical",
+                      }}
+                    />
 
-                    <div style={{ marginTop: 6 }}>
-                      <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (Admin)</div>
+                    {rs ? (
                       <div
                         style={{
-                          border: "1px solid #e2e8f0",
-                          borderRadius: 12,
-                          background: "#f8fafc",
-                          padding: "10px 12px",
-                          whiteSpace: "pre-wrap",
-                          fontSize: 13,
+                          marginTop: 6,
+                          fontSize: 12,
+                          fontWeight: 900,
+                          color: rst.err ? "#b91c1c" : rst.saving ? "#7c2d12" : "#166534",
                         }}
                       >
-                        {myNote || "—"}
+                        {rs}
                       </div>
-                    </div>
+                    ) : null}
                   </div>
-                </Card>
+                </div>
               </div>
-            </PageContainer>
+            </Card>
           </div>
-
-          {/* ✅ marge de droite: messages */}
-          <MessagesSidebar
-            empId={derivedMeEmpId}
-            viewerEmail={user?.email || ""}
-            viewerRole="employe"
-            title="💬 Messages"
-          />
-        </div>
+        </PageContainer>
       </div>
     );
   }
@@ -1433,125 +1689,202 @@ export default function HistoriqueEmploye({
   /* ===================== ADMIN VIEW ===================== */
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      <TopBar title="📒 Historique (Admin)" rightSlot={rightSlot} />
+      <style>{`
+        @keyframes histAdminTitleBlink {
+          0%   { background: #ffffff; color: #0f172a; }
+          50%  { background: #ff0000; color: #ffffff; }
+          100% { background: #ffffff; color: #0f172a; }
+        }
+      `}</style>
 
-      <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <PageContainer>
-            {error && (
-              <div
-                style={{
-                  background: "#fdecea",
-                  color: "#7f1d1d",
-                  border: "1px solid #f5c6cb",
-                  padding: "10px 14px",
-                  borderRadius: 12,
-                  marginBottom: 14,
-                  fontSize: 14,
-                  fontWeight: 800,
-                }}
-              >
-                Erreur: {String(error)}
+      <TopBar
+        title="📒 Historique (Admin)"
+        rightSlot={rightSlot}
+        flashTitle={flashAdminTitle}
+      />
+
+      <PageContainer>
+        {error && (
+          <div
+            style={{
+              background: "#fdecea",
+              color: "#7f1d1d",
+              border: "1px solid #f5c6cb",
+              padding: "10px 14px",
+              borderRadius: 12,
+              marginBottom: 14,
+              fontSize: 14,
+              fontWeight: 800,
+            }}
+          >
+            Erreur: {String(error)}
+          </div>
+        )}
+
+        {navBar}
+
+        {/* ✅ CHANGEMENT #1: dire dans quels blocs sont les alertes + jump */}
+        {adminUnseenReplyCount > 0 ? (
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
+                  🚨 Alertes — réponses non vues (tous blocs)
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                  Clique un bloc pour naviguer directement dessus.
+                </div>
               </div>
+
+              <div style={{ fontWeight: 1000, color: "#b91c1c" }}>
+                Total: {adminUnseenReplyCount}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {alertBlocks.map((b) => (
+                <button
+                  key={b.blockKey}
+                  type="button"
+                  style={{
+                    ...linkBtn,
+                    border: "2px solid #ef4444",
+                    background: "#fff7f7",
+                  }}
+                  title={payBlockLabelFromKey(b.blockKey)}
+                  onClick={() => {
+                    const dt = parseISOInput(b.blockKey);
+                    if (dt) setAnchorDate(dt);
+                  }}
+                >
+                  {payBlockLabelFromKey(b.blockKey)} — {b.count}
+                </button>
+              ))}
+            </div>
+          </Card>
+        ) : null}
+
+        <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 1000, fontSize: 16 }}>Récap (tous employés)</div>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                  ✅ Clique un nom pour ouvrir le détail.<br />
+                  ✅ La note s’écrit directement ici (autosave).<br />
+                  ✅ La réponse employé apparaît en bulle jaune — coche <b>Vu</b> pour enlever l’alerte (même si elle est dans un autre bloc).
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={pill("#ecfdf3", "#bbf7d0", "#166534")}>
+                  Total 2 sem: {fmtHoursComma(allTotal2Weeks)} h
+                </span>
+                <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
+                  Sem1: {fmtHoursComma(allWeek1Total)} h
+                </span>
+                <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
+                  Sem2: {fmtHoursComma(allWeek2Total)} h
+                </span>
+              </div>
+            </div>
+
+            {summaryErr && (
+              <div style={{ marginTop: 10, fontWeight: 900, color: "#b91c1c" }}>{summaryErr}</div>
             )}
 
-            {navBar}
+            <div style={{ marginTop: 12, overflowX: "auto" }}>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}>Employé</th>
+                    <th style={th}>Sem1 (h)</th>
+                    <th style={th}>Sem2 (h)</th>
+                    <th style={th}>Total (h)</th>
+                    <th style={th}>Note (admin)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summaryLoading ? (
+                    <tr>
+                      <td style={tdLeft} colSpan={5}>
+                        <span style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</span>
+                      </td>
+                    </tr>
+                  ) : (summaryRows || []).length === 0 ? (
+                    <tr>
+                      <td style={tdLeft} colSpan={5}>
+                        <span style={{ fontWeight: 900, color: "#64748b" }}>Aucun employé.</span>
+                      </td>
+                    </tr>
+                  ) : (
+                    (summaryRows || []).map((r) => {
+                      const st = noteStatus?.[r.id] || {};
+                      const status = statusLabel(r.id);
 
-            <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
-              <Card>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontWeight: 1000, fontSize: 16 }}>
-                      Récap (tous employés)
-                    </div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                      ✅ Clique un nom pour ouvrir le détail (et afficher ses messages à droite).<br />
-                      ✅ La note s’écrit directement ici: ça crée/maj un message (nom + message + date).
-                    </div>
-                  </div>
+                      // bloc courant (tableau)
+                      const reply = String(repliesFS?.[r.id] || "").trim();
+                      const replyAtMs = Number(replyMeta?.[r.id]?.atMs || 0) || 0;
 
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <span style={pill("#ecfdf3", "#bbf7d0", "#166534")}>
-                      Total 2 sem: {fmtHoursComma(allTotal2Weeks)} h
-                    </span>
-                    <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
-                      Sem1: {fmtHoursComma(allWeek1Total)} h
-                    </span>
-                    <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
-                      Sem2: {fmtHoursComma(allWeek2Total)} h
-                    </span>
-                  </div>
-                </div>
+                      const hasReply = !!reply;
+                      const seen = hasReply
+                        ? isReplySeen(r.id, payBlockKey, replyAtMs)
+                        : true;
 
-                {summaryErr && (
-                  <div style={{ marginTop: 10, fontWeight: 900, color: "#b91c1c" }}>
-                    {summaryErr}
-                  </div>
-                )}
+                      // alerte globale pour cet employé (dernier doc non-vu)
+                      const globalUnseenForEmp = adminAlertList.find(
+                        (x) => x.empId === r.id
+                      );
 
-                <div style={{ marginTop: 12, overflowX: "auto" }}>
-                  <table style={table}>
-                    <thead>
-                      <tr>
-                        <th style={th}>Employé</th>
-                        {/* ✅ plus de taux dans le récap */}
-                        <th style={th}>Sem1 (h)</th>
-                        <th style={th}>Sem2 (h)</th>
-                        <th style={th}>Total (h)</th>
-                        <th style={th}>Note (admin)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summaryLoading ? (
-                        <tr>
-                          <td style={tdLeft} colSpan={5}>
-                            <span style={{ fontWeight: 900, color: "#64748b" }}>
-                              Chargement…
-                            </span>
-                          </td>
-                        </tr>
-                      ) : (summaryRows || []).length === 0 ? (
-                        <tr>
-                          <td style={tdLeft} colSpan={5}>
-                            <span style={{ fontWeight: 900, color: "#64748b" }}>
-                              Aucun employé.
-                            </span>
-                          </td>
-                        </tr>
-                      ) : (
-                        (summaryRows || []).map((r) => {
-                          const st = noteStatus?.[r.id] || {};
-                          const status = statusLabel(r.id);
+                      return (
+                        <tr key={r.id}>
+                          <td style={tdLeft}>
+                            <a
+                              href={`#/historique/${r.id}`}
+                              style={{
+                                cursor: "pointer",
+                                fontWeight: 1000,
+                                color: "#0f172a",
+                                textDecoration: "underline",
+                                textUnderlineOffset: 3,
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                window.location.hash = `#/historique/${r.id}`;
+                              }}
+                            >
+                              {r.nom}
+                            </a>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                              {r.email || ""}
+                            </div>
 
-                          return (
-                            <tr key={r.id}>
-                              <td style={tdLeft}>
-                                <a
-                                  href={`#/historique/${r.id}`}
-                                  style={{
-                                    cursor: "pointer",
-                                    fontWeight: 1000,
-                                    color: "#0f172a",
-                                    textDecoration: "underline",
-                                    textUnderlineOffset: 3,
-                                  }}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    window.location.hash = `#/historique/${r.id}`;
+                            {globalUnseenForEmp ? (
+                              <div style={{ marginTop: 6 }}>
+                                <span style={pill("#fff7f7", "#ef4444", "#b91c1c")}>
+                                  Alerte: {payBlockLabelFromKey(globalUnseenForEmp.blockKey)}
+                                </span>
+                                <button
+                                  type="button"
+                                  style={{ ...linkBtn, marginLeft: 8, border: "1px solid #ef4444" }}
+                                  onClick={() => {
+                                    const dt = parseISOInput(globalUnseenForEmp.blockKey);
+                                    if (dt) setAnchorDate(dt);
                                   }}
                                 >
-                                  {r.nom}
-                                </a>
-                                <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                                  {r.email || ""}
-                                </div>
-                              </td>
+                                  Aller au bloc
+                                </button>
+                              </div>
+                            ) : null}
+                          </td>
 
-                              <td style={td}>{fmtHoursComma(r.week1)}</td>
-                              <td style={td}>{fmtHoursComma(r.week2)}</td>
-                              <td style={totalCell}>{fmtHoursComma(r.total)}</td>
+                          <td style={td}>{fmtHoursComma(r.week1)}</td>
+                          <td style={td}>{fmtHoursComma(r.week2)}</td>
+                          <td style={totalCell}>{fmtHoursComma(r.total)}</td>
 
-                              <td style={{ ...td, whiteSpace: "normal", textAlign: "left" }}>
+                          <td style={{ ...td, whiteSpace: "normal", textAlign: "left" }}>
+                            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "nowrap" }}>
+                              <div style={{ flex: 1, minWidth: 260 }}>
                                 <textarea
                                   rows={2}
                                   value={getDraft(r.id)}
@@ -1563,7 +1896,6 @@ export default function HistoriqueEmploye({
                                   placeholder="Écrire une note…"
                                   style={{
                                     width: "100%",
-                                    minWidth: 260,
                                     border: "1px solid #cbd5e1",
                                     borderRadius: 10,
                                     padding: "8px 10px",
@@ -1583,219 +1915,256 @@ export default function HistoriqueEmploye({
                                     {status}
                                   </div>
                                 ) : null}
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
+                              </div>
 
-                      {!summaryLoading && (summaryRows || []).length > 0 && (
-                        <tr>
-                          <td style={totalCell}>Totaux</td>
-                          <td style={totalCell}>{fmtHoursComma(allWeek1Total)}</td>
-                          <td style={totalCell}>{fmtHoursComma(allWeek2Total)}</td>
-                          <td style={totalCell}>{fmtHoursComma(allTotal2Weeks)}</td>
-                          <td style={totalCell}>—</td>
+                              {reply ? (
+                                <div style={{ display: "grid", gap: 6, alignItems: "start" }}>
+                                  <div style={replyBubbleInline}>{reply}</div>
+
+                                  <label
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 8,
+                                      fontWeight: 1000,
+                                      fontSize: 12,
+                                      color: seen ? "#166534" : "#b91c1c",
+                                      userSelect: "none",
+                                    }}
+                                    title="Coche Vu pour arrêter le flash du titre Historique Admin"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={seen}
+                                      onChange={(e) => {
+                                        setReplySeen(r.id, payBlockKey, replyAtMs, e.target.checked);
+                                      }}
+                                    />
+                                    Vu
+                                    {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
+                                  </label>
+                                </div>
+                              ) : null}
+                            </div>
+                          </td>
                         </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            </div>
-
-            {/* MODAL DÉTAIL */}
-            {detailEmpId && (
-              <Modal
-                title={`Détail — ${detailEmp?.nom || detailEmpId}`}
-                onClose={() => {
-                  setDetailEmpId("");
-                  if (String(window.location.hash || "").includes("/historique/")) {
-                    window.location.hash = "#/historique";
-                  }
-                }}
-                width={1120}
-              >
-                <div style={{ display: "grid", gap: 14 }}>
-                  {detailErr && (
-                    <div style={{ fontWeight: 900, color: "#b91c1c" }}>
-                      {detailErr}
-                    </div>
+                      );
+                    })
                   )}
 
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                    <div>
-                      <div style={{ fontWeight: 1000, fontSize: 16 }}>
-                        {detailEmp?.nom || "(sans nom)"}
-                      </div>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                        {detailEmp?.email || ""}
-                      </div>
-                    </div>
+                  {!summaryLoading && (summaryRows || []).length > 0 && (
+                    <tr>
+                      <td style={totalCell}>Totaux</td>
+                      <td style={totalCell}>{fmtHoursComma(allWeek1Total)}</td>
+                      <td style={totalCell}>{fmtHoursComma(allWeek2Total)}</td>
+                      <td style={totalCell}>{fmtHoursComma(allTotal2Weeks)}</td>
+                      <td style={totalCell}>—</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
 
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={pill("#ecfdf3", "#bbf7d0", "#166534")}>
-                        Total 2 sem: {fmtHoursComma(detailTotal2Weeks)} h
-                      </span>
-                      <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
-                        Sem1: {fmtHoursComma(detailTotalWeek1)} h
-                      </span>
-                      <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
-                        Sem2: {fmtHoursComma(detailTotalWeek2)} h
-                      </span>
+        {/* MODAL DÉTAIL */}
+        {detailEmpId && (
+          <Modal
+            title={`Détail — ${detailEmp?.nom || detailEmpId}`}
+            onClose={() => {
+              setDetailEmpId("");
+              if (String(window.location.hash || "").includes("/historique/")) {
+                window.location.hash = "#/historique";
+              }
+            }}
+            width={1120}
+          >
+            <div style={{ display: "grid", gap: 14 }}>
+              {detailErr && <div style={{ fontWeight: 900, color: "#b91c1c" }}>{detailErr}</div>}
+
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 1000, fontSize: 16 }}>{detailEmp?.nom || "(sans nom)"}</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{detailEmp?.email || ""}</div>
+                </div>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={pill("#ecfdf3", "#bbf7d0", "#166534")}>
+                    Total 2 sem: {fmtHoursComma(detailTotal2Weeks)} h
+                  </span>
+                  <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
+                    Sem1: {fmtHoursComma(detailTotalWeek1)} h
+                  </span>
+                  <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
+                    Sem2: {fmtHoursComma(detailTotalWeek2)} h
+                  </span>
+                </div>
+              </div>
+
+              <Card>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    alignItems: "end",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ fontWeight: 1000 }}>Taux horaire</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                      Modifiable par admin seulement.
                     </div>
                   </div>
 
-                  {/* ✅ TAUX modifiable seulement ici */}
-                  <Card>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        <div style={{ fontWeight: 1000 }}>Taux horaire</div>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                          Modifiable par admin seulement (pas dans le récap).
-                        </div>
+                  <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>Taux ($/h)</div>
+                      <input
+                        value={rateDraftValue(detailEmpId, detailEmp?.tauxHoraire)}
+                        onChange={(e) =>
+                          setRateDrafts((p) => ({
+                            ...(p || {}),
+                            [detailEmpId]: e.target.value,
+                          }))
+                        }
+                        placeholder="0,00"
+                        style={{
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 10,
+                          padding: "10px 12px",
+                          fontWeight: 900,
+                          textAlign: "right",
+                          width: 160,
+                        }}
+                      />
+                    </div>
+
+                    <Button variant="primary" onClick={() => saveRate(detailEmpId)}>
+                      Sauver
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+
+              <Card>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1 — {week1Label}</div>
+                    {detailLoading ? (
+                      <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
+                    ) : (
+                      renderWeekTable(detailWeek1, detailTotalWeek1)
+                    )}
+                  </div>
+
+                  <div>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 2 — {week2Label}</div>
+                    {detailLoading ? (
+                      <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
+                    ) : (
+                      renderWeekTable(detailWeek2, detailTotalWeek2)
+                    )}
+                  </div>
+
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (admin)</div>
+                    <textarea
+                      rows={5}
+                      value={getDraft(detailEmpId)}
+                      onChange={(e) => {
+                        setDraft(detailEmpId, e.target.value);
+                        scheduleAutoSave(detailEmpId);
+                      }}
+                      placeholder="Écrire une note…"
+                      style={{
+                        width: "100%",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 12,
+                        padding: "10px 12px",
+                        fontSize: 13,
+                        resize: "vertical",
+                      }}
+                    />
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 10,
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        marginTop: 10,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                        Bloc: {payBlockLabel} • Clé: {payBlockKey}
                       </div>
 
-                      <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
-                        <div style={{ display: "grid", gap: 6 }}>
-                          <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>
-                            Taux ($/h)
-                          </div>
-                          <input
-                            value={rateDraftValue(detailEmpId, detailEmp?.tauxHoraire)}
-                            onChange={(e) =>
-                              setRateDrafts((p) => ({
-                                ...(p || {}),
-                                [detailEmpId]: e.target.value,
-                              }))
-                            }
-                            placeholder="0,00"
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        {statusLabel(detailEmpId) ? (
+                          <span
                             style={{
-                              border: "1px solid #cbd5e1",
-                              borderRadius: 10,
-                              padding: "10px 12px",
+                              fontSize: 12,
                               fontWeight: 900,
-                              textAlign: "right",
-                              width: 160,
+                              color: noteStatus?.[detailEmpId]?.err ? "#b91c1c" : "#166534",
                             }}
-                          />
-                        </div>
+                          >
+                            {statusLabel(detailEmpId)}
+                          </span>
+                        ) : null}
 
-                        <Button variant="primary" onClick={() => saveRate(detailEmpId)}>
-                          Sauver
+                        <Button
+                          variant="primary"
+                          onClick={() => saveNoteForEmp(detailEmpId)}
+                          disabled={!!noteStatus?.[detailEmpId]?.saving}
+                        >
+                          {noteStatus?.[detailEmpId]?.saving ? "Sauvegarde…" : "Sauvegarder"}
                         </Button>
                       </div>
                     </div>
-                  </Card>
 
-                  <Card>
-                    <div style={{ display: "grid", gap: 12 }}>
-                      <div>
-                        <div style={{ fontWeight: 1000, marginBottom: 6 }}>
-                          Semaine 1 — {week1Label}
-                        </div>
-                        {detailLoading ? (
-                          <div style={{ fontWeight: 900, color: "#64748b" }}>
-                            Chargement…
-                          </div>
-                        ) : (
-                          renderWeekTable(detailWeek1, detailTotalWeek1)
-                        )}
-                      </div>
+                    {/* réponse employé (bloc courant) + Vu */}
+                    {String(repliesFS?.[detailEmpId] || "").trim() ? (
+                      <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+                        <div style={replyBubbleInline}>{String(repliesFS?.[detailEmpId] || "")}</div>
 
-                      <div>
-                        <div style={{ fontWeight: 1000, marginBottom: 6 }}>
-                          Semaine 2 — {week2Label}
-                        </div>
-                        {detailLoading ? (
-                          <div style={{ fontWeight: 900, color: "#64748b" }}>
-                            Chargement…
-                          </div>
-                        ) : (
-                          renderWeekTable(detailWeek2, detailTotalWeek2)
-                        )}
-                      </div>
-
-                      {/* ✅ NOTE unique */}
-                      <div style={{ marginTop: 8 }}>
-                        <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (admin)</div>
-                        <textarea
-                          rows={5}
-                          value={getDraft(detailEmpId)}
-                          onChange={(e) => {
-                            setDraft(detailEmpId, e.target.value);
-                            scheduleAutoSave(detailEmpId);
-                          }}
-                          placeholder="Écrire une note…"
-                          style={{
-                            width: "100%",
-                            border: "1px solid #cbd5e1",
-                            borderRadius: 12,
-                            padding: "10px 12px",
-                            fontSize: 13,
-                            resize: "vertical",
-                          }}
-                        />
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-                          <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
-                            Bloc: {payBlockLabel} • Clé: {payBlockKey}
-                          </div>
-
-                          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                            {statusLabel(detailEmpId) ? (
-                              <span
-                                style={{
-                                  fontSize: 12,
-                                  fontWeight: 900,
-                                  color: noteStatus?.[detailEmpId]?.err ? "#b91c1c" : "#166534",
-                                }}
-                              >
-                                {statusLabel(detailEmpId)}
-                              </span>
-                            ) : null}
-
-                            <Button
-                              variant="primary"
-                              onClick={() => saveNoteForEmp(detailEmpId)}
-                              disabled={!!noteStatus?.[detailEmpId]?.saving}
+                        {(() => {
+                          const replyAtMs = Number(replyMeta?.[detailEmpId]?.atMs || 0) || 0;
+                          const seen = isReplySeen(detailEmpId, payBlockKey, replyAtMs);
+                          return (
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                fontWeight: 1000,
+                                fontSize: 12,
+                                color: seen ? "#166534" : "#b91c1c",
+                                userSelect: "none",
+                              }}
                             >
-                              {noteStatus?.[detailEmpId]?.saving ? "Sauvegarde…" : "Sauvegarder"}
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop: 10,
-                            padding: "10px 12px",
-                            borderRadius: 12,
-                            border: "1px solid #e2e8f0",
-                            background: "#f8fafc",
-                            fontSize: 12,
-                            color: "#475569",
-                            fontWeight: 800,
-                          }}
-                        >
-                          ✅ Sauvegarder écrit la note dans <strong>payBlockNotes</strong> ET crée/maj 1 message dans
-                          la marge de droite (nom + message + date).
-                        </div>
+                              <input
+                                type="checkbox"
+                                checked={seen}
+                                onChange={(e) =>
+                                  setReplySeen(detailEmpId, payBlockKey, replyAtMs, e.target.checked)
+                                }
+                              />
+                              Vu
+                              {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
+                            </label>
+                          );
+                        })()}
                       </div>
-                    </div>
-                  </Card>
+                    ) : null}
+                  </div>
                 </div>
-              </Modal>
-            )}
-          </PageContainer>
-        </div>
-
-        {/* ✅ marge de droite: messages (admin) */}
-        <MessagesSidebar
-          empId={detailEmpId || ""}
-          viewerEmail={user?.email || ""}
-          viewerRole="admin"
-          title="💬 Messages"
-        />
-      </div>
+              </Card>
+            </div>
+          </Modal>
+        )}
+      </PageContainer>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 // App.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebaseConfig";
 
@@ -16,13 +16,45 @@ import HistoriqueEmploye from "./HistoriqueEmploye";
 // ✅ AJOUT: page test OCR
 import Test from "./Test";
 
-import { collection, getDocs, limit, onSnapshot, query, where, doc } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  limit,
+  onSnapshot,
+  query,
+  where,
+  doc,
+} from "firebase/firestore";
 
 // ➜ Supporte aussi les sous-chemins (#/historique/<empId>, etc.)
 function getRouteFromHash() {
   const raw = window.location.hash.replace(/^#\//, ""); // ex: "historique/abc"
   const first = raw.split("/")[0];
   return first || "accueil";
+}
+
+/* ---------------------- payBlockKey (même logique que HistoriqueEmploye) ---------------------- */
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function dayKey(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+}
+function startOfSunday(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  const day = x.getDay(); // 0=dim
+  x.setDate(x.getDate() - day);
+  return x;
+}
+function safeToMs(ts) {
+  if (!ts) return 0;
+  if (typeof ts.toMillis === "function") return ts.toMillis();
+  if (typeof ts.toDate === "function") return ts.toDate().getTime();
+  const d = new Date(ts);
+  const ms = d.getTime();
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 export default function App() {
@@ -34,6 +66,14 @@ export default function App() {
   // ✅ Profil employé (pour savoir admin)
   const [me, setMe] = useState(null);
   const [meLoading, setMeLoading] = useState(true);
+
+  // ✅ Notif clignotante (note admin pour l’employé connecté)
+  const [noteNotifOn, setNoteNotifOn] = useState(false);
+  const [noteUpdatedAtMs, setNoteUpdatedAtMs] = useState(0);
+  const [noteHasText, setNoteHasText] = useState(false);
+
+  // ✅ permet de re-check le localStorage quand l’employé coche "Vu"
+  const [seenBump, setSeenBump] = useState(0);
 
   // router
   useEffect(() => {
@@ -66,11 +106,19 @@ export default function App() {
         const uid = user.uid;
         const emailLower = String(user.email || "").trim().toLowerCase();
 
-        let q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
+        let q1 = query(
+          collection(db, "employes"),
+          where("uid", "==", uid),
+          limit(1)
+        );
         let snap = await getDocs(q1);
 
         if (snap.empty && emailLower) {
-          q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
+          q1 = query(
+            collection(db, "employes"),
+            where("emailLower", "==", emailLower),
+            limit(1)
+          );
           snap = await getDocs(q1);
         }
 
@@ -108,7 +156,7 @@ export default function App() {
       window.location.hash = "#/reglages";
     }
 
-    // ✅ IMPORTANT: historique est maintenant accessible aux non-admin (ils verront juste leurs heures)
+    // ✅ historique est accessible aux non-admin (ils verront juste leurs heures)
     // Donc: on NE redirige PLUS si !isAdmin
 
     // ✅ protéger la page test OCR (admin-only)
@@ -122,6 +170,92 @@ export default function App() {
     window.location.hash = "#/accueil";
   };
 
+  /* ===================== 🔔 NOTIF NOTE ADMIN (pour l’employé NON-ADMIN) ===================== */
+  const payBlockKey = useMemo(() => {
+    // On prend le payBlock courant (dimanche de la semaine actuelle)
+    return dayKey(startOfSunday(new Date()));
+  }, []);
+
+  // écoute l'event envoyé par HistoriqueEmploye quand on coche "Vu"
+  useEffect(() => {
+    const onSeenChanged = () => setSeenBump((x) => x + 1);
+    window.addEventListener("noteSeenChanged", onSeenChanged);
+    return () => window.removeEventListener("noteSeenChanged", onSeenChanged);
+  }, []);
+
+  useEffect(() => {
+    // reset quand on change de user/me
+    setNoteNotifOn(false);
+    setNoteUpdatedAtMs(0);
+    setNoteHasText(false);
+  }, [user?.uid, me?.id]);
+
+  const recomputeNotifFromLocal = (empId, updMs, hasText) => {
+    const LS_KEY = `seen_note_${empId}_${payBlockKey}`;
+    let seenMs = 0;
+    try {
+      seenMs = Number(localStorage.getItem(LS_KEY) || "0") || 0;
+    } catch {
+      seenMs = 0;
+    }
+
+    // si pas de texte -> pas de notif
+    if (!hasText) return false;
+
+    // notif si note plus récente que "vu"
+    if (updMs && updMs > seenMs) return true;
+
+    return false;
+  };
+
+  // Snapshot sur la note admin (NON-ADMIN)
+  useEffect(() => {
+    if (!user) return;
+    if (!me?.id) return;
+    if (isAdmin) return;
+
+    const empId = me.id;
+    const ref = doc(db, "employes", empId, "payBlockNotes", payBlockKey);
+
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const data = snap.exists() ? snap.data() || {} : {};
+        const noteText = String(data.note || "").trim();
+        const hasText = !!noteText;
+
+        const updMs = safeToMs(data.updatedAt);
+        setNoteUpdatedAtMs(updMs);
+        setNoteHasText(hasText);
+
+        const shouldBlink = recomputeNotifFromLocal(empId, updMs, hasText);
+        setNoteNotifOn(shouldBlink);
+      },
+      (err) => {
+        console.error("note notif snapshot error:", err);
+        setNoteNotifOn(false);
+      }
+    );
+
+    return () => unsub();
+  }, [user, me?.id, isAdmin, payBlockKey]);
+
+  // Re-check quand on coche "Vu" (localStorage a changé)
+  useEffect(() => {
+    if (!user) return;
+    if (!me?.id) return;
+    if (isAdmin) return;
+
+    const shouldBlink = recomputeNotifFromLocal(
+      me.id,
+      noteUpdatedAtMs,
+      noteHasText
+    );
+    setNoteNotifOn(shouldBlink);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seenBump]);
+
+  /* ===================== UI ===================== */
   if (user === undefined) {
     return <div style={{ padding: 24 }}>Chargement...</div>;
   }
@@ -145,30 +279,59 @@ export default function App() {
     ...(isAdmin ? [{ key: "test-ocr", label: "Test OCR" }] : []),
   ];
 
-  const validRoutes = ["accueil", "projets", "materiels", "reglages", "historique", "reglages-admin", "test-ocr"];
+  const validRoutes = [
+    "accueil",
+    "projets",
+    "materiels",
+    "reglages",
+    "historique",
+    "reglages-admin",
+    "test-ocr",
+  ];
+
+  const topBarBase = {
+    display: "grid",
+    gridTemplateColumns: "1fr auto 1fr",
+    alignItems: "center",
+    padding: 1,
+    borderBottom: "1px solid #e5e7eb",
+    background: "#fff",
+  };
+
+  // 🔥 FLASH PLUS VIF
+  const topBarBlink = noteNotifOn
+    ? {
+        animation: "notifBlinkVIF 0.55s infinite",
+        borderBottom: "2px solid #ff0000",
+        boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
+      }
+    : null;
+
+  const connectedStyle = noteNotifOn
+    ? { color: "#ffffff", fontWeight: 1000, textShadow: "0 2px 10px rgba(0,0,0,0.25)" }
+    : { color: "#64748b", fontWeight: 700 };
 
   return (
     <div>
+      {/* ✅ Keyframes flash vif */}
+      <style>{`
+        @keyframes notifBlinkVIF {
+          0%   { background: #ffffff; }
+          50%  { background: #ff0000; }
+          100% { background: #ffffff; }
+        }
+      `}</style>
+
       {/* petite barre en haut avec bouton logout */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr auto 1fr",
-          alignItems: "center",
-          padding: 1,
-          borderBottom: "1px solid #e5e7eb",
-          background: "#fff",
-        }}
-      >
+      <div style={{ ...topBarBase, ...(topBarBlink || {}) }}>
         <div />
 
         <div
           style={{
             justifySelf: "center",
-            fontWeight: 700,
             fontSize: 12,
-            color: "#64748b",
             lineHeight: 1.2,
+            ...connectedStyle,
           }}
         >
           Connecté comme: {user.email}
@@ -176,7 +339,23 @@ export default function App() {
         </div>
 
         <div style={{ justifySelf: "end" }}>
-          <button onClick={handleLogout}>Se déconnecter</button>
+          <button
+            onClick={handleLogout}
+            style={
+              noteNotifOn
+                ? {
+                    border: "2px solid #ff0000",
+                    background: "#ffffff",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    fontWeight: 1000,
+                    cursor: "pointer",
+                  }
+                : undefined
+            }
+          >
+            Se déconnecter
+          </button>
         </div>
       </div>
 
@@ -189,7 +368,9 @@ export default function App() {
       {route === "reglages-admin" && <PageReglagesAdmin />}
 
       {/* ✅ on passe isAdmin + meEmpId */}
-      {route === "historique" && <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />}
+      {route === "historique" && (
+        <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />
+      )}
 
       {route === "test-ocr" && <Test />}
 

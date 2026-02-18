@@ -12,7 +12,7 @@ import {
   getDocs,
   query,
   orderBy,
-  where, // ✅ AJOUT
+  where,
 } from "firebase/firestore";
 
 /* ---------- Utils dates / temps ---------- */
@@ -82,8 +82,6 @@ function todayKey() {
 function segColAutre(projId, key) {
   return collection(db, "autresProjets", projId, "timecards", key, "segments");
 }
-
-/* ✅ AJOUT: collection segments employé (pour valider si le segment "autre tâche" est encore réellement actif) */
 function empSegCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
@@ -91,28 +89,16 @@ function empSegCol(empId, key) {
 function computeTotalMs(sessions) {
   const now = Date.now();
   return sessions.reduce((acc, s) => {
-    const st = s.start?.toDate
-      ? s.start.toDate().getTime()
-      : s.start
-      ? new Date(s.start).getTime()
-      : null;
-    const en = s.end?.toDate
-      ? s.end.toDate().getTime()
-      : s.end
-      ? new Date(s.end).getTime()
-      : null;
+    const st = s.start?.toDate ? s.start.toDate().getTime() : s.start ? new Date(s.start).getTime() : null;
+    const en = s.end?.toDate ? s.end.toDate().getTime() : s.end ? new Date(s.end).getTime() : null;
     if (!st) return acc;
     return acc + Math.max(0, (en ?? now) - st);
   }, 0);
 }
 
-/* ✅ AJOUT: check si un employé est encore punché sur other:<otherId> */
+/* ✅ check si un employé est encore punché sur other:<otherId> */
 async function empHasOpenJob(empId, key, jobId) {
-  const qOpen = query(
-    empSegCol(empId, key),
-    where("end", "==", null),
-    where("jobId", "==", jobId)
-  );
+  const qOpen = query(empSegCol(empId, key), where("end", "==", null), where("jobId", "==", jobId));
   const snap = await getDocs(qOpen);
   return !snap.empty;
 }
@@ -121,7 +107,7 @@ function useSessionsAutre(projId, key, setError) {
   const [list, setList] = useState([]);
   const [tick, setTick] = useState(0);
 
-  // rafraîchir les durées (UI) aux 15s, SANS re-souscrire au snapshot
+  // rafraîchir les durées (UI) aux 15s, SANS re-souscrire
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 15000);
     return () => clearInterval(t);
@@ -134,7 +120,7 @@ function useSessionsAutre(projId, key, setError) {
       qSeg,
       (snap) => {
         const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() })); // ✅ garde la ref pour auto-close
+        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() }));
         setList(rows);
       },
       (err) => setError?.(err?.message || String(err))
@@ -142,24 +128,29 @@ function useSessionsAutre(projId, key, setError) {
     return () => unsub();
   }, [projId, key, setError]);
 
-  // tick utilisé juste pour forcer recalcul des mémos plus bas si nécessaire
   void tick;
-
   return list;
 }
 
-/* ✅ FIX: statut "En cours" qui reste stuck
-   -> si un segment ouvert existe dans autresProjets mais que l’employé n’a PAS un segment employé ouvert
-      avec jobId = other:<id>, on auto-close ce segment (end + autoClosed*)
+/* ✅ FIX IMPORTANT:
+   Ton auto-close pouvait fermer un segment "Autre tâche" immédiatement (race condition),
+   parce que le segment employé n'avait pas encore jobId=other:<id>.
+   -> On met une PÉRIODE DE GRÂCE avant d'auto-close.
 */
 function usePresenceTodayAutre(projId, setError) {
   const key = todayKey();
   const sessions = useSessionsAutre(projId, key, setError);
 
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
-  const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
+
+  // "En cours" = il existe AU MOINS un segment ouvert
+  const hasOpen = useMemo(() => (sessions || []).some((s) => !s.end), [sessions]);
 
   const guardRef = useRef(0);
+  const runningRef = useRef(false);
+
+  // ✅ Ajuste si tu veux (45s / 60s). 60s = safe contre la latence/ordre d'écriture.
+  const GRACE_MS = 60000;
 
   useEffect(() => {
     if (!projId) return;
@@ -167,33 +158,59 @@ function usePresenceTodayAutre(projId, setError) {
     const openSegs = (sessions || []).filter((s) => !s.end);
     if (openSegs.length === 0) return;
 
-    // ✅ anti-spam: max 1 fois / 60s par projet
+    // anti-spam: max 1 run / 20s par projet
     const nowMs = Date.now();
-    if (nowMs - guardRef.current < 60000) return;
+    if (nowMs - guardRef.current < 20000) return;
     guardRef.current = nowMs;
+
+    if (runningRef.current) return;
+    runningRef.current = true;
 
     (async () => {
       const jobId = `other:${projId}`;
+      const now = new Date();
 
       for (const seg of openSegs) {
         const empId = seg.empId || null;
         const segRef = seg._ref || null;
         if (!empId || !segRef) continue;
 
-        // si l'employé n'est plus punché sur cette "autre tâche", on ferme le segment "autre tâche"
-        const still = await empHasOpenJob(empId, key, jobId);
+        // ✅ GRACE: ne jamais auto-close un segment trop "jeune"
+        const st = seg.start?.toDate ? seg.start.toDate() : seg.start ? new Date(seg.start) : null;
+        if (st && !isNaN(st.getTime())) {
+          const age = Date.now() - st.getTime();
+          if (age < GRACE_MS) continue;
+        }
+
+        // si l'employé n'est plus punché sur cette "autre tâche", on ferme le segment
+        let still = false;
+        try {
+          still = await empHasOpenJob(empId, key, jobId);
+        } catch (e) {
+          // si la lecture échoue, on ne ferme PAS (on préfère éviter les faux positifs)
+          console.error(e);
+          continue;
+        }
+
         if (!still) {
-          const now = new Date();
-          await updateDoc(segRef, {
-            end: now,
-            updatedAt: now,
-            autoClosed: true,
-            autoClosedAt: now,
-            autoClosedReason: "orphan_other_segment",
-          });
+          try {
+            await updateDoc(segRef, {
+              end: now,
+              updatedAt: now,
+              autoClosed: true,
+              autoClosedAt: now,
+              autoClosedReason: "orphan_other_segment",
+            });
+          } catch (e) {
+            console.error(e);
+          }
         }
       }
-    })().catch((e) => setError?.(e?.message || String(e)));
+    })()
+      .catch((e) => setError?.(e?.message || String(e)))
+      .finally(() => {
+        runningRef.current = false;
+      });
   }, [projId, key, sessions, setError]);
 
   return { key, sessions, totalMs, hasOpen };
@@ -250,13 +267,7 @@ function FieldV({ label, children }) {
 
 function CardKV({ k, v }) {
   return (
-    <div
-      style={{
-        border: "1px solid #eee",
-        borderRadius: 10,
-        padding: "6px 8px",
-      }}
-    >
+    <div style={{ border: "1px solid #eee", borderRadius: 10, padding: "6px 8px" }}>
       <div style={{ fontSize: 10, color: "#666" }}>{k}</div>
       <div style={{ fontSize: 13, fontWeight: 700 }}>{v}</div>
     </div>
@@ -264,28 +275,26 @@ function CardKV({ k, v }) {
 }
 
 /* ---------- Styles ---------- */
-/* ✅ EXACTEMENT comme tu voulais (Page Projets) */
 const thCenter = {
   textAlign: "center",
-  padding: "6px 8px", // ✅ header plus petit
+  padding: "6px 8px",
   borderBottom: "1px solid #d1d5db",
   whiteSpace: "nowrap",
   fontWeight: 700,
   fontSize: 18,
-  lineHeight: 1.3, // ✅ compact
+  lineHeight: 1.3,
   color: "#111827",
 };
 
 const tdCenter = {
   textAlign: "center",
-  padding: "4px 8px", // ✅ lignes plus basses (avant 7px)
+  padding: "4px 8px",
   borderBottom: "1px solid #eee",
   verticalAlign: "middle",
   fontSize: 17,
-  lineHeight: 1.15, // ✅ compact
+  lineHeight: 1.15,
 };
 
-/* ✅ Nom complètement à gauche */
 const thLeft = { ...thCenter, textAlign: "left", paddingLeft: 60 };
 const tdLeft = { ...tdCenter, textAlign: "left", paddingLeft: 50 };
 
@@ -296,6 +305,7 @@ const input = {
   borderRadius: 8,
   background: "#fff",
 };
+
 const btnPrimary = {
   border: "none",
   background: "#2563eb",
@@ -306,6 +316,7 @@ const btnPrimary = {
   fontWeight: 800,
   boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
 };
+
 const btnSecondary = {
   border: "1px solid #cbd5e1",
   background: "#f8fafc",
@@ -316,6 +327,7 @@ const btnSecondary = {
   textDecoration: "none",
   color: "#111",
 };
+
 const btnGhost = {
   border: "1px solid #e5e7eb",
   background: "#fff",
@@ -324,6 +336,7 @@ const btnGhost = {
   cursor: "pointer",
   fontWeight: 700,
 };
+
 const btnDanger = {
   border: "1px solid #ef4444",
   background: "#fee2e2",
@@ -333,27 +346,9 @@ const btnDanger = {
   cursor: "pointer",
   fontWeight: 800,
 };
-const btnTinyDanger = {
-  border: "1px solid #ef4444",
-  background: "#fff",
-  color: "#b91c1c",
-  borderRadius: 8,
-  padding: "4px 6px",
-  cursor: "pointer",
-  fontWeight: 800,
-  fontSize: 11,
-  lineHeight: 1,
-};
 
 /* ---------- Popup: créer / renommer (nom seulement) ---------- */
-function PopupNomAutreProjet({
-  open,
-  onClose,
-  onError,
-  mode = "create",
-  docId = null,
-  currentName = "",
-}) {
+function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = null, currentName = "" }) {
   const [nom, setNom] = useState("");
 
   useEffect(() => {
@@ -412,18 +407,9 @@ function PopupNomAutreProjet({
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 800, fontSize: 18 }}>
-            {mode === "edit"
-              ? "Renommer l’autre projet"
-              : "Créer un autre projet"}
+            {mode === "edit" ? "Renommer l’autre projet" : "Créer un autre projet"}
           </div>
           <button
             onClick={(e) => {
@@ -443,17 +429,9 @@ function PopupNomAutreProjet({
           </button>
         </div>
 
-        <form
-          onSubmit={submit}
-          style={{ display: "flex", flexDirection: "column", gap: 8 }}
-        >
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <FieldV label="Nom">
-            <input
-              value={nom}
-              onChange={(e) => setNom(e.target.value)}
-              placeholder="Ex.: Projet spécial"
-              style={input}
-            />
+            <input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex.: Projet spécial" style={input} />
           </FieldV>
 
           <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
@@ -476,7 +454,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
   const [histRows, setHistRows] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
   const [totalMsAll, setTotalMsAll] = useState(0);
-  const [histReload, setHistReload] = useState(0);
+  const [histReload] = useState(0);
 
   useEffect(() => {
     if (!open || !projet?.id) return;
@@ -484,9 +462,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
     (async () => {
       setHistLoading(true);
       try {
-        const daysSnap = await getDocs(
-          collection(db, "autresProjets", projet.id, "timecards")
-        );
+        const daysSnap = await getDocs(collection(db, "autresProjets", projet.id, "timecards"));
         const days = [];
         daysSnap.forEach((d) => days.push(d.id));
         days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD desc
@@ -495,45 +471,21 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
         let sumAllMs = 0;
 
         for (const key of days) {
-          const segSnap = await getDocs(
-            collection(
-              db,
-              "autresProjets",
-              projet.id,
-              "timecards",
-              key,
-              "segments"
-            )
-          );
+          const segSnap = await getDocs(collection(db, "autresProjets", projet.id, "timecards", key, "segments"));
           segSnap.forEach((sdoc) => {
             const s = sdoc.data();
-            const st = s.start?.toDate
-              ? s.start.toDate()
-              : s.start
-              ? new Date(s.start)
-              : null;
-            const en = s.end?.toDate
-              ? s.end.toDate()
-              : s.end
-              ? new Date(s.end)
-              : null;
+            const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
+            const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
             if (!st) return;
-            const ms = Math.max(
-              0,
-              (en ? en.getTime() : Date.now()) - st.getTime()
-            );
+
+            const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
             sumAllMs += ms;
 
             const empName = s.empName || "—";
             const empKey = s.empId || empName;
             const k = `${key}__${empKey}`;
-            const prev =
-              map.get(k) || {
-                date: key,
-                empName,
-                empId: s.empId || null,
-                totalMs: 0,
-              };
+
+            const prev = map.get(k) || { date: key, empName, empId: s.empId || null, totalMs: 0 };
             prev.totalMs += ms;
             map.set(k, prev);
           });
@@ -557,12 +509,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
 
   if (!open || !projet) return null;
 
-  const th = {
-    textAlign: "left",
-    padding: 8,
-    borderBottom: "1px solid #e0e0e0",
-    whiteSpace: "nowrap",
-  };
+  const th = { textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap" };
   const td = { padding: 8, borderBottom: "1px solid #eee" };
 
   return (
@@ -594,30 +541,15 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           fontSize: 13,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 6,
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 17 }}>
-            Détails de l’autre projet
-          </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontWeight: 900, fontSize: 17 }}>Détails de l’autre projet</div>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClose?.();
             }}
             title="Fermer"
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 22,
-              cursor: "pointer",
-              lineHeight: 1,
-            }}
+            style={{ border: "none", background: "transparent", fontSize: 22, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
@@ -625,16 +557,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
 
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 6,
-            rowGap: 6,
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, rowGap: 6, alignItems: "center", marginBottom: 8 }}>
           <div
             style={{
               display: "inline-flex",
@@ -650,30 +573,17 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
             }}
           >
             <span style={{ color: "#6b7280" }}>Nom :</span>
-            <strong style={{ color: "#111827", fontWeight: 700 }}>
-              {projet.nom || "—"}
-            </strong>
+            <strong style={{ color: "#111827", fontWeight: 700 }}>{projet.nom || "—"}</strong>
           </div>
         </div>
 
-        <div style={{ fontWeight: 800, margin: "2px 0 6px", fontSize: 11 }}>
-          Résumé
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2,1fr)",
-            gap: 8,
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ fontWeight: 800, margin: "2px 0 6px", fontSize: 11 }}>Résumé</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8, marginBottom: 8 }}>
           <CardKV k="Date de création" v={fmtDate(projet.createdAt)} />
           <CardKV k="Total d'heures compilées" v={fmtHM(totalMsAll)} />
         </div>
 
-        <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>
-          Historique — tout
-        </div>
+        <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>Historique — tout</div>
         <table
           style={{
             width: "100%",
@@ -693,7 +603,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           <tbody>
             {histLoading && (
               <tr>
-                <td colSpan={4} style={{ padding: 12, color: "#666" }}>
+                <td colSpan={3} style={{ padding: 12, color: "#666" }}>
                   Chargement…
                 </td>
               </tr>
@@ -704,7 +614,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
                   <td style={td}>{fmtDate(r.date)}</td>
                   <td style={td}>{fmtHM(r.totalMs)}</td>
                   <td style={td}>{r.empName || "—"}</td>
-                  <td style={td}></td>
                 </tr>
               ))}
             {!histLoading && histRows.length === 0 && (
@@ -722,24 +631,13 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
 }
 
 /* ---------- Ligne du tableau ---------- */
-function RowAutreProjet({
-  p,
-  idx = 0,
-  onRename,
-  onDelete,
-  onShowDetails,
-  allowEdit,
-  setError,
-}) {
+function RowAutreProjet({ p, idx = 0, onRename, onDelete, onShowDetails, allowEdit, setError }) {
   const { hasOpen } = usePresenceTodayAutre(p.id, setError);
 
   const statutLabel = hasOpen ? "En cours" : "—";
-  const statutStyle = {
-    fontWeight: 800,
-    color: hasOpen ? "#166534" : "#6b7280",
-  };
+  const statutStyle = { fontWeight: 800, color: hasOpen ? "#166534" : "#6b7280" };
 
-  const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff"; // ✅ blanc / gris très pâle
+  const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff";
 
   return (
     <tr
@@ -754,19 +652,8 @@ function RowAutreProjet({
       </td>
 
       <td style={{ ...tdCenter, textAlign: "right", paddingRight: 80 }}>
-        <div
-          style={{
-            display: "inline-flex",
-            gap: 8,
-            flexWrap: "wrap",
-            justifyContent: "flex-end",
-          }}
-        >
-          <button
-            onClick={() => onShowDetails?.(p)}
-            style={btnSecondary}
-            title="Voir l'historique"
-          >
+        <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <button onClick={() => onShowDetails?.(p)} style={btnSecondary} title="Voir l'historique">
             Historique
           </button>
 
@@ -775,11 +662,7 @@ function RowAutreProjet({
               <button onClick={() => onRename?.(p)} style={btnSecondary}>
                 Renommer
               </button>
-              <button
-                onClick={() => onDelete?.(p)}
-                style={btnDanger}
-                title="Supprimer"
-              >
+              <button onClick={() => onDelete?.(p)} style={btnDanger} title="Supprimer">
                 Supprimer
               </button>
             </>
@@ -791,15 +674,12 @@ function RowAutreProjet({
 }
 
 /* ---------- Section principale ---------- */
-export default function AutresProjetsSection({
-  allowEdit = true,
-  showHeader = true,
-}) {
+export default function AutresProjetsSection({ allowEdit = true, showHeader = true }) {
   const [error, setError] = useState(null);
   const [rows, setRows] = useState([]);
 
   const [popupOpen, setPopupOpen] = useState(false);
-  const [popupMode, setPopupMode] = useState("create"); // "create" | "edit"
+  const [popupMode, setPopupMode] = useState("create");
   const [editDoc, setEditDoc] = useState(null);
 
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -811,10 +691,7 @@ export default function AutresProjetsSection({
       c,
       (snap) => {
         const list = [];
-        snap.forEach((d) => {
-          const data = d.data();
-          list.push({ id: d.id, ...data });
-        });
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
         list.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
         setRows(list);
       },
@@ -856,25 +733,8 @@ export default function AutresProjetsSection({
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
       {showHeader && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 8,
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
-          <h2
-            style={{
-              margin: 0,
-              fontSize: 22,
-              fontWeight: 900,
-              lineHeight: 1.2,
-            }}
-          >
-            📁 Autres tâches
-          </h2>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 900, lineHeight: 1.2 }}>📁 Autres tâches</h2>
           {allowEdit && (
             <button type="button" onClick={openCreate} style={btnPrimary}>
               Créer nouveau projet
@@ -884,34 +744,13 @@ export default function AutresProjetsSection({
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <div
-          style={{
-            border: "1px solid #eee",
-            borderRadius: 12,
-            overflow: "hidden",
-            background: "#fff",
-          }}
-        >
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              background: "#fff",
-            }}
-          >
+        <div style={{ border: "1px solid #eee", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
             <thead>
               <tr style={{ background: "#e5e7eb" }}>
                 <th style={thLeft}>Nom</th>
                 <th style={thCenter}>Statut</th>
-                <th
-                  style={{
-                    ...thCenter,
-                    textAlign: "right",
-                    paddingRight: 100,
-                  }}
-                >
-                  Actions
-                </th>
+                <th style={{ ...thCenter, textAlign: "right", paddingRight: 100 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -948,11 +787,7 @@ export default function AutresProjetsSection({
         currentName={editDoc?.nom || ""}
       />
 
-      <PopupDetailsAutreProjet
-        open={detailsOpen}
-        onClose={() => setDetailsOpen(false)}
-        projet={detailsProjet}
-      />
+      <PopupDetailsAutreProjet open={detailsOpen} onClose={() => setDetailsOpen(false)} projet={detailsProjet} />
     </div>
   );
 }
