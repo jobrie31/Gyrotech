@@ -186,7 +186,7 @@ export default function PageReglages() {
               onClick={() => {
                 window.location.hash = "#/projets";
               }}
-              style={btnBackInline}
+              style={btnBackBig}
               title="Retour au projet en cours"
             >
               ⬅️ Projet en cours

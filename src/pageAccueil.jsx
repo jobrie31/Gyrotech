@@ -1224,32 +1224,6 @@ export default function PageAccueil() {
 
           <Card
             title="📁 Projets"
-            right={
-              <Button
-                variant="primary"
-                onClick={() => (window.location.hash = "#/projets")}
-                aria-label="Aller à la liste des projets"
-                onPointerDown={() => setPressed(true)}
-                onPointerUp={() => setPressed(false)}
-                onPointerCancel={() => setPressed(false)}
-                onPointerLeave={() => setPressed(false)}
-                style={{
-                  height: 42,
-                  padding: "0 16px",
-                  fontSize: 32, // ✅ texte plus gros
-                  fontWeight: 1000,
-                  borderRadius: 12,
-                  lineHeight: 1,
-                  background: pressed ? "#d97706" : "#f59e0b",
-                  borderColor: pressed ? "#d97706" : "#f59e0b",
-                  color: "#111827",
-                  transform: pressed ? "translateY(1px)" : "translateY(0)",
-                  transition: "background 120ms ease, border-color 120ms ease, transform 120ms ease",
-                }}
-              >
-                Projets
-              </Button>
-            }
           >
             <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
           </Card>

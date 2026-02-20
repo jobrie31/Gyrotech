@@ -33,7 +33,7 @@ function getRouteFromHash() {
   return first || "accueil";
 }
 
-/* ---------------------- payBlockKey (même logique que HistoriqueEmploye) ---------------------- */
+/* ---------------------- utils ---------------------- */
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
@@ -67,10 +67,12 @@ export default function App() {
   const [me, setMe] = useState(null);
   const [meLoading, setMeLoading] = useState(true);
 
-  // ✅ Notif clignotante (note admin pour l’employé connecté)
+  // ✅ Notif clignotante (note admin pour l’employé connecté) — maintenant: TOUS BLOCS
   const [noteNotifOn, setNoteNotifOn] = useState(false);
-  const [noteUpdatedAtMs, setNoteUpdatedAtMs] = useState(0);
-  const [noteHasText, setNoteHasText] = useState(false);
+
+  // ✅ meta cache des notes (pour recompute au tick “Vu”)
+  // blockKey -> { updMs, hasText }
+  const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
 
   // ✅ permet de re-check le localStorage quand l’employé coche "Vu"
   const [seenBump, setSeenBump] = useState(0);
@@ -156,9 +158,6 @@ export default function App() {
       window.location.hash = "#/reglages";
     }
 
-    // ✅ historique est accessible aux non-admin (ils verront juste leurs heures)
-    // Donc: on NE redirige PLUS si !isAdmin
-
     // ✅ protéger la page test OCR (admin-only)
     if (route === "test-ocr" && !isAdmin) {
       window.location.hash = "#/accueil";
@@ -170,11 +169,7 @@ export default function App() {
     window.location.hash = "#/accueil";
   };
 
-  /* ===================== 🔔 NOTIF NOTE ADMIN (pour l’employé NON-ADMIN) ===================== */
-  const payBlockKey = useMemo(() => {
-    // On prend le payBlock courant (dimanche de la semaine actuelle)
-    return dayKey(startOfSunday(new Date()));
-  }, []);
+  /* ===================== 🔔 NOTIF NOTE ADMIN (NON-ADMIN) — TOUS BLOCS ===================== */
 
   // écoute l'event envoyé par HistoriqueEmploye quand on coche "Vu"
   useEffect(() => {
@@ -183,62 +178,70 @@ export default function App() {
     return () => window.removeEventListener("noteSeenChanged", onSeenChanged);
   }, []);
 
+  // reset quand on change de user/me
   useEffect(() => {
-    // reset quand on change de user/me
     setNoteNotifOn(false);
-    setNoteUpdatedAtMs(0);
-    setNoteHasText(false);
+    setNotesMetaByBlock({});
   }, [user?.uid, me?.id]);
 
-  const recomputeNotifFromLocal = (empId, updMs, hasText) => {
-    const LS_KEY = `seen_note_${empId}_${payBlockKey}`;
-    let seenMs = 0;
+  const recomputeNotifFromLocal_AllBlocks = (empId, metaByBlock) => {
     try {
-      seenMs = Number(localStorage.getItem(LS_KEY) || "0") || 0;
+      const blocks = Object.keys(metaByBlock || {});
+      for (const blockKey of blocks) {
+        const meta = metaByBlock[blockKey] || {};
+        const updMs = Number(meta.updMs || 0) || 0;
+        const hasText = !!meta.hasText;
+
+        if (!hasText || !updMs) continue;
+
+        const LS_KEY = `seen_note_${empId}_${blockKey}`;
+        const seenMs = Number(localStorage.getItem(LS_KEY) || "0") || 0;
+
+        if (updMs > seenMs) return true; // au moins 1 bloc non vu
+      }
     } catch {
-      seenMs = 0;
+      // ignore
     }
-
-    // si pas de texte -> pas de notif
-    if (!hasText) return false;
-
-    // notif si note plus récente que "vu"
-    if (updMs && updMs > seenMs) return true;
-
     return false;
   };
 
-  // Snapshot sur la note admin (NON-ADMIN)
+  // Snapshot sur TOUTE la collection payBlockNotes de cet employé
   useEffect(() => {
     if (!user) return;
     if (!me?.id) return;
     if (isAdmin) return;
 
     const empId = me.id;
-    const ref = doc(db, "employes", empId, "payBlockNotes", payBlockKey);
+    const colRef = collection(db, "employes", empId, "payBlockNotes");
 
     const unsub = onSnapshot(
-      ref,
+      colRef,
       (snap) => {
-        const data = snap.exists() ? snap.data() || {} : {};
-        const noteText = String(data.note || "").trim();
-        const hasText = !!noteText;
+        const meta = {};
+        snap.forEach((d) => {
+          const data = d.data() || {};
+          const blockKey = d.id;
 
-        const updMs = safeToMs(data.updatedAt);
-        setNoteUpdatedAtMs(updMs);
-        setNoteHasText(hasText);
+          const noteText = String(data.note || "").trim();
+          const hasText = !!noteText;
 
-        const shouldBlink = recomputeNotifFromLocal(empId, updMs, hasText);
-        setNoteNotifOn(shouldBlink);
+          const updMs = safeToMs(data.updatedAt);
+
+          meta[blockKey] = { updMs, hasText };
+        });
+
+        setNotesMetaByBlock(meta);
+        setNoteNotifOn(recomputeNotifFromLocal_AllBlocks(empId, meta));
       },
       (err) => {
         console.error("note notif snapshot error:", err);
         setNoteNotifOn(false);
+        setNotesMetaByBlock({});
       }
     );
 
     return () => unsub();
-  }, [user, me?.id, isAdmin, payBlockKey]);
+  }, [user, me?.id, isAdmin]);
 
   // Re-check quand on coche "Vu" (localStorage a changé)
   useEffect(() => {
@@ -246,12 +249,7 @@ export default function App() {
     if (!me?.id) return;
     if (isAdmin) return;
 
-    const shouldBlink = recomputeNotifFromLocal(
-      me.id,
-      noteUpdatedAtMs,
-      noteHasText
-    );
-    setNoteNotifOn(shouldBlink);
+    setNoteNotifOn(recomputeNotifFromLocal_AllBlocks(me.id, notesMetaByBlock));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seenBump]);
 
@@ -303,12 +301,17 @@ export default function App() {
     ? {
         animation: "notifBlinkVIF 0.55s infinite",
         borderBottom: "2px solid #ff0000",
-        boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
+        boxShadow:
+          "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
       }
     : null;
 
   const connectedStyle = noteNotifOn
-    ? { color: "#ffffff", fontWeight: 1000, textShadow: "0 2px 10px rgba(0,0,0,0.25)" }
+    ? {
+        color: "#ffffff",
+        fontWeight: 1000,
+        textShadow: "0 2px 10px rgba(0,0,0,0.25)",
+      }
     : { color: "#64748b", fontWeight: 700 };
 
   return (

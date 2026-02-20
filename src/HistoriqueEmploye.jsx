@@ -621,8 +621,6 @@ export default function HistoriqueEmploye({
   }, [meEmpId, user, employes]);
 
   /* ===================== Période (2 semaines) ===================== */
-  // ✅ CHANGEMENT #2: on ouvre TOUJOURS sur le bloc courant (aujourd’hui),
-  // peu importe ce qui était sélectionné avant.
   const [anchorDate, setAnchorDate] = useState(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -668,6 +666,9 @@ export default function HistoriqueEmploye({
   const [notesFS, setNotesFS] = useState({}); // empId -> note (bloc courant)
   const [repliesFS, setRepliesFS] = useState({}); // empId -> reply (bloc courant)
   const [replyMeta, setReplyMeta] = useState({}); // empId -> { by, at(Date), atMs } (bloc courant)
+
+  // ✅ meta de la note (pour le "Vu" non-admin)
+  const [noteMeta, setNoteMeta] = useState({}); // empId -> { updatedAtMs, updatedBy }
 
   const [noteDrafts, setNoteDrafts] = useState({});
   const [replyDrafts, setReplyDrafts] = useState({});
@@ -848,6 +849,115 @@ export default function HistoriqueEmploye({
     replyTimersRef.current = {};
   }, [payBlockKey]);
 
+  /* ===================== ✅ NON-ADMIN: "VU" NOTE (localStorage) ===================== */
+  const noteSeenKey = (empId, blockKey) => `seen_note_${empId}_${blockKey}`;
+
+  const getNoteSeenMs = (empId, blockKey) => {
+    try {
+      return (
+        Number(localStorage.getItem(noteSeenKey(empId, blockKey)) || "0") || 0
+      );
+    } catch {
+      return 0;
+    }
+  };
+
+  const isNoteSeen = (empId, blockKey, noteUpdatedAtMs) => {
+    const seen = getNoteSeenMs(empId, blockKey);
+    if (!noteUpdatedAtMs) return true; // rien à voir
+    return noteUpdatedAtMs <= seen;
+  };
+
+  const setNoteSeen = (empId, blockKey, noteUpdatedAtMs, checked) => {
+    try {
+      if (!checked) {
+        localStorage.removeItem(noteSeenKey(empId, blockKey));
+      } else {
+        const v = Number(noteUpdatedAtMs || Date.now()) || Date.now();
+        localStorage.setItem(noteSeenKey(empId, blockKey), String(v));
+      }
+    } catch {
+      // ignore
+    }
+    // ✅ important: déclenche App.jsx -> seenBump
+    window.dispatchEvent(new Event("noteSeenChanged"));
+  };
+
+  /* ===================== ✅ NON-ADMIN: ALERTES NOTES (TOUS BLOCS) ===================== */
+  const [myNotesMetaByBlock, setMyNotesMetaByBlock] = useState({}); // blockKey -> { updMs, hasText }
+  const [mySeenBump, setMySeenBump] = useState(0);
+
+  useEffect(() => {
+    const onSeen = () => setMySeenBump((x) => x + 1);
+    window.addEventListener("noteSeenChanged", onSeen);
+    return () => window.removeEventListener("noteSeenChanged", onSeen);
+  }, []);
+
+  useEffect(() => {
+    // reset quand on change d'employé / route
+    setMyNotesMetaByBlock({});
+  }, [derivedMeEmpId]);
+
+  useEffect(() => {
+    if (isAdmin) return;
+    if (!pwUnlocked) return;
+    if (!derivedMeEmpId) return;
+
+    const colRef = collection(db, "employes", derivedMeEmpId, "payBlockNotes");
+    const unsub = onSnapshot(
+      colRef,
+      (snap) => {
+        const map = {};
+        snap.forEach((d) => {
+          const data = d.data() || {};
+          const blockKey = d.id;
+
+          const noteText = String(data.note || "").trim();
+          const hasText = !!noteText;
+          const updMs = safeToMs(data.updatedAt);
+
+          map[blockKey] = { updMs, hasText };
+        });
+        setMyNotesMetaByBlock(map);
+      },
+      (err) => setError(err?.message || String(err))
+    );
+
+    return () => unsub();
+  }, [isAdmin, pwUnlocked, derivedMeEmpId]);
+
+  const myUnseenNoteDocs = useMemo(() => {
+    if (isAdmin) return [];
+    const blocks = Object.keys(myNotesMetaByBlock || {});
+    const out = [];
+    for (const blockKey of blocks) {
+      const meta = myNotesMetaByBlock[blockKey] || {};
+      const updMs = Number(meta.updMs || 0) || 0;
+      const hasText = !!meta.hasText;
+      if (!hasText || !updMs) continue;
+
+      const seenMs = getNoteSeenMs(derivedMeEmpId, blockKey);
+      if (updMs > seenMs) out.push({ blockKey, updMs });
+    }
+    out.sort((a, b) => (b.updMs || 0) - (a.updMs || 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return out;
+  }, [isAdmin, myNotesMetaByBlock, derivedMeEmpId, mySeenBump]);
+
+  const myUnseenNoteCount = myUnseenNoteDocs.length;
+
+  const myAlertBlocksNotes = useMemo(() => {
+    const groups = {};
+    for (const it of myUnseenNoteDocs) {
+      const k = it.blockKey;
+      if (!groups[k]) groups[k] = { blockKey: k, count: 0 };
+      groups[k].count += 1; // 1 note/doc, mais format identique
+    }
+    const out = Object.values(groups);
+    out.sort((a, b) => String(b.blockKey).localeCompare(String(a.blockKey)));
+    return out;
+  }, [myUnseenNoteDocs]);
+
   // NON-ADMIN: écoute seulement mon doc (bloc courant)
   useEffect(() => {
     if (isAdmin) return;
@@ -885,6 +995,16 @@ export default function HistoriqueEmploye({
             by: String(data.replyBy || ""),
             at: toJSDateMaybe(data.replyAt),
             atMs,
+          },
+        }));
+
+        // ✅ meta note
+        const updMs = safeToMs(data.updatedAt);
+        setNoteMeta((prev) => ({
+          ...(prev || {}),
+          [derivedMeEmpId]: {
+            updatedAtMs: updMs,
+            updatedBy: String(data.updatedBy || ""),
           },
         }));
       },
@@ -932,6 +1052,16 @@ export default function HistoriqueEmploye({
             },
           }));
 
+          // ✅ meta note
+          const updMs = safeToMs(data.updatedAt);
+          setNoteMeta((prev) => ({
+            ...(prev || {}),
+            [empId]: {
+              updatedAtMs: updMs,
+              updatedBy: String(data.updatedBy || ""),
+            },
+          }));
+
           setNoteDrafts((prev) => {
             if (prev?.[empId] !== undefined) return prev;
             return { ...(prev || {}), [empId]: note };
@@ -958,14 +1088,11 @@ export default function HistoriqueEmploye({
   /* ===================== ✅ ADMIN: "VU" + ALERTES (TOUS BLOCS) ===================== */
   const [adminSeenBump, setAdminSeenBump] = useState(0);
 
-  const replySeenKey = (empId, blockKey) =>
-    `seen_reply_admin_${empId}_${blockKey}`;
+  const replySeenKey = (empId, blockKey) => `seen_reply_admin_${empId}_${blockKey}`;
 
   const getReplySeenMs = (empId, blockKey) => {
     try {
-      return (
-        Number(localStorage.getItem(replySeenKey(empId, blockKey)) || "0") || 0
-      );
+      return Number(localStorage.getItem(replySeenKey(empId, blockKey)) || "0") || 0;
     } catch {
       return 0;
     }
@@ -991,8 +1118,7 @@ export default function HistoriqueEmploye({
     setAdminSeenBump((x) => x + 1);
   };
 
-  // ✅ CHANGEMENT #1: on écoute toutes les réponses (tous blocs) via collectionGroup
-  // et on fait flasher le titre si au moins une réponse est "non vue".
+  // ✅ on écoute toutes les réponses (tous blocs) via collectionGroup
   const [allRepliesByDoc, setAllRepliesByDoc] = useState({}); // docKey => {empId, blockKey, reply, atMs, by}
   useEffect(() => {
     if (!isAdmin || !unlocked) return;
@@ -1034,7 +1160,6 @@ export default function HistoriqueEmploye({
   const adminAlertList = useMemo(() => {
     if (!isAdmin || !unlocked) return [];
     const arr = Object.values(allRepliesByDoc || []);
-    // seulement non-vues
     return arr
       .filter((x) => !isReplySeen(x.empId, x.blockKey, x.atMs))
       .sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
@@ -1530,7 +1655,6 @@ export default function HistoriqueEmploye({
           />
         </div>
 
-        {/* ✅ alertes globales (tous blocs) */}
         {isAdmin && unlocked && adminUnseenReplyCount > 0 ? (
           <div style={{ fontSize: 12, fontWeight: 1000, color: "#b91c1c" }}>
             Réponses non vues (tous blocs): {adminUnseenReplyCount}
@@ -1550,6 +1674,13 @@ export default function HistoriqueEmploye({
     const myReply = getReplyDraft(derivedMeEmpId);
     const rs = replyStatusLabel(derivedMeEmpId);
     const rst = replyStatus?.[derivedMeEmpId] || {};
+
+    const myNoteUpdatedAtMs =
+      Number(noteMeta?.[derivedMeEmpId]?.updatedAtMs || 0) || 0;
+    const hasNoteText = !!String(myNote || "").trim();
+    const noteSeen = hasNoteText
+      ? isNoteSeen(derivedMeEmpId, payBlockKey, myNoteUpdatedAtMs)
+      : true;
 
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
@@ -1582,6 +1713,47 @@ export default function HistoriqueEmploye({
           )}
 
           {navBar}
+
+          {/* ✅ NEW: Carte Alertes Notes (tous blocs) */}
+          {myUnseenNoteCount > 0 ? (
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
+                    🚨 Alertes — notes non vues (tous blocs)
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                    Clique un bloc pour naviguer directement dessus.
+                  </div>
+                </div>
+
+                <div style={{ fontWeight: 1000, color: "#b91c1c" }}>
+                  Total: {myUnseenNoteCount}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {myAlertBlocksNotes.map((b) => (
+                  <button
+                    key={b.blockKey}
+                    type="button"
+                    style={{
+                      ...linkBtn,
+                      border: "2px solid #ef4444",
+                      background: "#fff7f7",
+                    }}
+                    title={payBlockLabelFromKey(b.blockKey)}
+                    onClick={() => {
+                      const dt = parseISOInput(b.blockKey);
+                      if (dt) setAnchorDate(dt);
+                    }}
+                  >
+                    {payBlockLabelFromKey(b.blockKey)} — {b.count}
+                  </button>
+                ))}
+              </div>
+            </Card>
+          ) : null}
 
           <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
             <Card>
@@ -1639,6 +1811,43 @@ export default function HistoriqueEmploye({
                     >
                       {myNote || "—"}
                     </div>
+
+                    {/* ✅ Vu pour la NOTE (non-admin) */}
+                    {hasNoteText ? (
+                      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                            fontWeight: 1000,
+                            fontSize: 12,
+                            color: noteSeen ? "#166534" : "#b91c1c",
+                            userSelect: "none",
+                          }}
+                          title="Coche Vu pour arrêter le flash rouge en haut"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={noteSeen}
+                            onChange={(e) => {
+                              setNoteSeen(
+                                derivedMeEmpId,
+                                payBlockKey,
+                                myNoteUpdatedAtMs,
+                                e.target.checked
+                              );
+                            }}
+                          />
+                          Vu
+                          {!noteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
+                        </label>
+
+                        <span style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                          Bloc: {payBlockLabel}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div>
@@ -1723,7 +1932,6 @@ export default function HistoriqueEmploye({
 
         {navBar}
 
-        {/* ✅ CHANGEMENT #1: dire dans quels blocs sont les alertes + jump */}
         {adminUnseenReplyCount > 0 ? (
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -1822,7 +2030,6 @@ export default function HistoriqueEmploye({
                       const st = noteStatus?.[r.id] || {};
                       const status = statusLabel(r.id);
 
-                      // bloc courant (tableau)
                       const reply = String(repliesFS?.[r.id] || "").trim();
                       const replyAtMs = Number(replyMeta?.[r.id]?.atMs || 0) || 0;
 
@@ -1831,7 +2038,6 @@ export default function HistoriqueEmploye({
                         ? isReplySeen(r.id, payBlockKey, replyAtMs)
                         : true;
 
-                      // alerte globale pour cet employé (dernier doc non-vu)
                       const globalUnseenForEmp = adminAlertList.find(
                         (x) => x.empId === r.id
                       );
