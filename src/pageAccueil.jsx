@@ -1173,7 +1173,7 @@ export default function PageAccueil() {
 
   return (
     <>
-      <LogoRail />
+      {/* <LogoRail /> */}   {/* ✅ logo désactivé pour l'instant */}
       <ClockFloat now={now} />
 
       <PageContainer
