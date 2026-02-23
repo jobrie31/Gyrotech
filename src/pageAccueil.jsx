@@ -1,20 +1,13 @@
 // PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
-// Nécessite: UIPro.jsx dans le même dossier src/
 //
-// ✅ Admin: voit tous les employés
-// ✅ Non-admin: voit seulement son propre nom
+// ✅ FIX "temps mismatch":
+// - Punch Projet / Autre tâche = écritures ATOMIQUES (writeBatch)
+// - Segment employé n'est JAMAIS créé avec jobId=null pour proj/other
+// - Dépunch: fallback si jobId manquant (lastProjectId / lastOtherId)
 //
-// ✅ MODIF:
-// - CLIQUER sur un travailleur NE DOIT PLUS ouvrir l’Excel / Horaire
-// - L’Excel / Horaire est une PAGE (#/historique) via le bouton "Horaire (Vue)"
-//
-// ✅ AJOUT (2026-01-12):
-// - Si un employé est punché sur un projet et que ce projet se ferme (ou disparaît de la liste des projets ouverts),
-//   on le DÉPUNCH automatiquement + on clear lastProjectId/Name pour éviter un "retour auto" quand on réouvre.
-//
-// ✅ MODIF (toi, maintenant):
-// - Code par "Autre tâche" (champ `code` dans chaque doc autresProjets)
-// - Plus de code global config/punchCodes.autresProjetsCode
+// ✅ FIX (repunch après dépunch auto midi):
+// - Quand on REPUNCH, on remet timecards/{day}.end = null (doc day redevient "ouvert")
+//   La présence reste basée sur segments (end:null), mais le doc day ne reste plus figé à midi.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -30,6 +23,7 @@ import {
   where,
   getDocs,
   orderBy,
+  writeBatch,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "./firebaseConfig";
@@ -80,6 +74,10 @@ function dayRef(empId, key) {
 function segCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
+function newEmpSegRef(empId, key) {
+  return doc(segCol(empId, key)); // auto id
+}
+
 async function ensureDay(empId, key = todayKey()) {
   const ref = dayRef(empId, key);
   const snap = await getDoc(ref);
@@ -97,29 +95,17 @@ async function ensureDay(empId, key = todayKey()) {
   }
   return ref;
 }
+
 async function getOpenEmpSegments(empId, key = todayKey()) {
   const qOpen = query(segCol(empId, key), where("end", "==", null), orderBy("start", "desc"));
   const snap = await getDocs(qOpen);
   return snap.docs;
 }
+
 async function closeAllOpenSessions(empId, key = todayKey()) {
   const docs = await getOpenEmpSegments(empId, key);
   const now = new Date();
   await Promise.all(docs.map((d) => updateDoc(d.ref, { end: now, updatedAt: now })));
-}
-async function openEmpSession(empId, key = todayKey()) {
-  const open = await getOpenEmpSegments(empId, key);
-  if (open.length > 0) return open[0].ref;
-  const now = new Date();
-  const added = await addDoc(segCol(empId, key), {
-    jobId: null,
-    jobName: null,
-    start: now,
-    end: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return added;
 }
 
 /* ---------------------- Firestore helpers (Projets) ---------------------- */
@@ -129,6 +115,10 @@ function projDayRef(projId, key) {
 function projSegCol(projId, key) {
   return collection(db, "projets", projId, "timecards", key, "segments");
 }
+function newProjSegRef(projId, key) {
+  return doc(projSegCol(projId, key)); // auto id
+}
+
 async function ensureProjDay(projId, key = todayKey()) {
   const ref = projDayRef(projId, key);
   const snap = await getDoc(ref);
@@ -138,25 +128,13 @@ async function ensureProjDay(projId, key = todayKey()) {
   }
   return ref;
 }
+
 async function getOpenProjSegsForEmp(projId, empId, key = todayKey()) {
   const qOpen = query(projSegCol(projId, key), where("end", "==", null), where("empId", "==", empId));
   const snap = await getDocs(qOpen);
   return snap.docs;
 }
-async function openProjSessionForEmp(projId, empId, empName, key = todayKey()) {
-  const open = await getOpenProjSegsForEmp(projId, empId, key);
-  if (open.length > 0) return open[0].ref;
-  const now = new Date();
-  const added = await addDoc(projSegCol(projId, key), {
-    empId,
-    empName: empName ?? null,
-    start: now,
-    end: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return added;
-}
+
 async function closeProjSessionsForEmp(projId, empId, key = todayKey()) {
   const docs = await getOpenProjSegsForEmp(projId, empId, key);
   const now = new Date();
@@ -170,6 +148,10 @@ function otherDayRef(otherId, key) {
 function otherSegCol(otherId, key) {
   return collection(db, "autresProjets", otherId, "timecards", key, "segments");
 }
+function newOtherSegRef(otherId, key) {
+  return doc(otherSegCol(otherId, key)); // auto id
+}
+
 async function ensureOtherDay(otherId, key = todayKey()) {
   const ref = otherDayRef(otherId, key);
   const snap = await getDoc(ref);
@@ -179,25 +161,13 @@ async function ensureOtherDay(otherId, key = todayKey()) {
   }
   return ref;
 }
+
 async function getOpenOtherSegsForEmp(otherId, empId, key = todayKey()) {
   const qOpen = query(otherSegCol(otherId, key), where("end", "==", null), where("empId", "==", empId));
   const snap = await getDocs(qOpen);
   return snap.docs;
 }
-async function openOtherSessionForEmp(otherId, empId, empName, key = todayKey()) {
-  const open = await getOpenOtherSegsForEmp(otherId, empId, key);
-  if (open.length > 0) return open[0].ref;
-  const now = new Date();
-  const added = await addDoc(otherSegCol(otherId, key), {
-    empId,
-    empName: empName ?? null,
-    start: now,
-    end: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return added;
-}
+
 async function closeOtherSessionsForEmp(otherId, empId, key = todayKey()) {
   const docs = await getOpenOtherSegsForEmp(otherId, empId, key);
   const now = new Date();
@@ -284,20 +254,6 @@ function useAutresProjets(setError) {
   return rows;
 }
 
-function useDay(empId, key, setError) {
-  const [card, setCard] = useState(null);
-  useEffect(() => {
-    if (!empId || !key) return;
-    const unsub = onSnapshot(
-      dayRef(empId, key),
-      (snap) => setCard(snap.exists() ? snap.data() : null),
-      (err) => setError(err?.message || String(err))
-    );
-    return () => unsub();
-  }, [empId, key, setError]);
-  return card;
-}
-
 function useSessions(empId, key, setError) {
   const [list, setList] = useState([]);
   const [tick, setTick] = useState(0);
@@ -337,7 +293,6 @@ function computeTotalMs(sessions) {
 
 function usePresenceToday(empId, setError) {
   const key = todayKey();
-  useDay(empId, key, setError);
   const sessions = useSessions(empId, key, setError);
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
   const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
@@ -345,95 +300,262 @@ function usePresenceToday(empId, setError) {
 }
 
 /* ---------------------- Punch / Dépunch ---------------------- */
+/**
+ * ✅ Punch PROJET atomique:
+ * - crée segment employé (jobId=proj:xxx) + segment projet (empId) dans le même batch
+ * - start day employé/projet si vide
+ * - ✅ FIX: quand on punch, on remet day.end = null (doc day redevient "ouvert")
+ */
 async function doPunchWithProject(emp, proj) {
   const key = todayKey();
   if (proj && proj.ouvert === false) throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
 
+  const now = new Date();
+  const chosenProjId = proj?.id || null;
   const projName = proj ? (proj.nom || proj.clientNom || null) : null;
 
   await ensureDay(emp.id, key);
-  const empSegRef = await openEmpSession(emp.id, key);
 
-  if (proj) {
-    await ensureProjDay(proj.id, key);
-    await openProjSessionForEmp(proj.id, emp.id, emp.nom || null, key);
+  // Si déjà punché (devrait pas arriver), on force juste la cohérence
+  const openEmp = await getOpenEmpSegments(emp.id, key);
+  if (openEmp.length > 0) {
+    const ref = openEmp[0].ref;
 
-    if (empSegRef) {
-      const now = new Date();
-      await updateDoc(empSegRef, { jobId: `proj:${proj.id}`, jobName: projName, updatedAt: now });
+    if (chosenProjId) {
+      await ensureProjDay(chosenProjId, key);
+      await updateDoc(ref, { jobId: `proj:${chosenProjId}`, jobName: projName, updatedAt: now });
+
+      const openP = await getOpenProjSegsForEmp(chosenProjId, emp.id, key);
+      if (openP.length === 0) {
+        await addDoc(projSegCol(chosenProjId, key), {
+          empId: emp.id,
+          empName: emp.nom || null,
+          start: now,
+          end: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      await updateDoc(doc(db, "employes", emp.id), {
+        lastProjectId: chosenProjId,
+        lastProjectName: projName,
+        lastProjectUpdatedAt: now,
+      });
+    } else {
+      await updateDoc(ref, { jobId: null, jobName: null, updatedAt: now });
     }
 
-    const pdRef = projDayRef(proj.id, key);
-    const pdSnap = await getDoc(pdRef);
-    const pd = pdSnap.data() || {};
-    if (!pd.start) {
-      const now = new Date();
-      await updateDoc(pdRef, { start: now, updatedAt: now });
+    // ✅ doc day employé: start si vide + end=null (repunch après dépunch auto)
+    const edRef = dayRef(emp.id, key);
+    const edSnap = await getDoc(edRef);
+    const ed = edSnap.data() || {};
+    const patch = { updatedAt: now, end: null };
+    if (!ed.start) patch.start = now;
+    await updateDoc(edRef, patch);
+
+    // ✅ doc day projet: end=null (si punch projet)
+    if (chosenProjId) {
+      const pdRef = projDayRef(chosenProjId, key);
+      const pdSnap = await getDoc(pdRef);
+      const pd = pdSnap.data() || {};
+      const pPatch = { updatedAt: now, end: null };
+      if (!pd.start) pPatch.start = now;
+      await updateDoc(pdRef, pPatch);
     }
 
-    await updateDoc(doc(db, "employes", emp.id), {
-      lastProjectId: proj.id,
-      lastProjectName: projName,
-      lastProjectUpdatedAt: new Date(),
-    });
+    return;
   }
 
+  // Nouveau punch normal
+  const batch = writeBatch(db);
+
+  const empSegRef = newEmpSegRef(emp.id, key);
+  batch.set(empSegRef, {
+    jobId: chosenProjId ? `proj:${chosenProjId}` : null,
+    jobName: chosenProjId ? projName : null,
+    start: now,
+    end: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // ✅ doc day employé: start si vide + end=null
   const edRef = dayRef(emp.id, key);
   const edSnap = await getDoc(edRef);
   const ed = edSnap.data() || {};
-  if (!ed.start) {
-    const now = new Date();
-    await updateDoc(edRef, { start: now, updatedAt: now });
+  if (!ed.start) batch.update(edRef, { start: now, end: null, updatedAt: now });
+  else batch.update(edRef, { end: null, updatedAt: now });
+
+  if (chosenProjId) {
+    await ensureProjDay(chosenProjId, key);
+
+    const projSegRef = newProjSegRef(chosenProjId, key);
+    batch.set(projSegRef, {
+      empId: emp.id,
+      empName: emp.nom || null,
+      start: now,
+      end: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // ✅ doc day projet: start si vide + end=null
+    const pdRef = projDayRef(chosenProjId, key);
+    const pdSnap = await getDoc(pdRef);
+    const pd = pdSnap.data() || {};
+    if (!pd.start) batch.update(pdRef, { start: now, end: null, updatedAt: now });
+    else batch.update(pdRef, { end: null, updatedAt: now });
+  }
+
+  await batch.commit();
+
+  if (chosenProjId) {
+    await updateDoc(doc(db, "employes", emp.id), {
+      lastProjectId: chosenProjId,
+      lastProjectName: projName,
+      lastProjectUpdatedAt: now,
+    });
   }
 }
 
+/**
+ * ✅ Punch AUTRE TÂCHE atomique:
+ * - crée segment employé (jobId=other:xxx) + segment autresProjets (empId) dans le même batch
+ * - start day employé/autre si vide
+ * - ✅ FIX: quand on punch, on remet day.end = null (doc day redevient "ouvert")
+ */
 async function doPunchWithOther(emp, other) {
   const key = todayKey();
+  const now = new Date();
+  const otherId = other?.id;
+  if (!otherId) throw new Error("Autre tâche invalide.");
 
   await ensureDay(emp.id, key);
-  const empSegRef = await openEmpSession(emp.id, key);
+  await ensureOtherDay(otherId, key);
 
-  await ensureOtherDay(other.id, key);
-  await openOtherSessionForEmp(other.id, emp.id, emp.nom || null, key);
+  const openEmp = await getOpenEmpSegments(emp.id, key);
+  if (openEmp.length > 0) {
+    const ref = openEmp[0].ref;
+    await updateDoc(ref, { jobId: `other:${otherId}`, jobName: other.nom || null, updatedAt: now });
 
-  if (empSegRef) {
-    const now = new Date();
-    await updateDoc(empSegRef, { jobId: `other:${other.id}`, jobName: other.nom || null, updatedAt: now });
+    const openO = await getOpenOtherSegsForEmp(otherId, emp.id, key);
+    if (openO.length === 0) {
+      await addDoc(otherSegCol(otherId, key), {
+        empId: emp.id,
+        empName: emp.nom || null,
+        start: now,
+        end: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    // ✅ doc day employé: start si vide + end=null
+    const edRef = dayRef(emp.id, key);
+    const edSnap = await getDoc(edRef);
+    const ed = edSnap.data() || {};
+    const patch = { updatedAt: now, end: null };
+    if (!ed.start) patch.start = now;
+    await updateDoc(edRef, patch);
+
+    // ✅ doc day autre tâche: start si vide + end=null
+    const odRef = otherDayRef(otherId, key);
+    const odSnap = await getDoc(odRef);
+    const od = odSnap.data() || {};
+    const oPatch = { updatedAt: now, end: null };
+    if (!od.start) oPatch.start = now;
+    await updateDoc(odRef, oPatch);
+
+    await updateDoc(doc(db, "employes", emp.id), {
+      lastOtherId: otherId,
+      lastOtherName: other.nom || null,
+      lastOtherUpdatedAt: now,
+    });
+    return;
   }
 
-  const odRef = otherDayRef(other.id, key);
+  const batch = writeBatch(db);
+
+  const empSegRef = newEmpSegRef(emp.id, key);
+  batch.set(empSegRef, {
+    jobId: `other:${otherId}`,
+    jobName: other.nom || null,
+    start: now,
+    end: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const otherSegRef = newOtherSegRef(otherId, key);
+  batch.set(otherSegRef, {
+    empId: emp.id,
+    empName: emp.nom || null,
+    start: now,
+    end: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // ✅ doc day employé: start si vide + end=null
+  const edRef = dayRef(emp.id, key);
+  const edSnap = await getDoc(edRef);
+  const ed = edSnap.data() || {};
+  if (!ed.start) batch.update(edRef, { start: now, end: null, updatedAt: now });
+  else batch.update(edRef, { end: null, updatedAt: now });
+
+  // ✅ doc day autre tâche: start si vide + end=null
+  const odRef = otherDayRef(otherId, key);
   const odSnap = await getDoc(odRef);
   const od = odSnap.data() || {};
-  if (!od.start) {
-    const now = new Date();
-    await updateDoc(odRef, { start: now, updatedAt: now });
-  }
+  if (!od.start) batch.update(odRef, { start: now, end: null, updatedAt: now });
+  else batch.update(odRef, { end: null, updatedAt: now });
+
+  await batch.commit();
 
   await updateDoc(doc(db, "employes", emp.id), {
-    lastOtherId: other.id,
+    lastOtherId: otherId,
     lastOtherName: other.nom || null,
-    lastOtherUpdatedAt: new Date(),
+    lastOtherUpdatedAt: now,
   });
 }
 
+/**
+ * ✅ Dépunch béton:
+ * - ferme les segments ouverts projet/other via jobTokens
+ * - fallback: si jobId manquant, ferme quand même lastProjectId / lastOtherId
+ * - ✅ doc day: end = now
+ */
 async function doDepunchWithProject(emp) {
   const key = todayKey();
+  const now = new Date();
+
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
 
   const jobTokens = Array.from(
     new Set(openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0))
   );
 
-  await Promise.all(
-    jobTokens.filter((t) => t.startsWith("proj:")).map(async (t) => closeProjSessionsForEmp(t.slice(5), emp.id, key))
-  );
+  await Promise.all(jobTokens.filter((t) => t.startsWith("proj:")).map((t) => closeProjSessionsForEmp(t.slice(5), emp.id, key)));
+  await Promise.all(jobTokens.filter((t) => t.startsWith("other:")).map((t) => closeOtherSessionsForEmp(t.slice(6), emp.id, key)));
 
-  await Promise.all(
-    jobTokens.filter((t) => t.startsWith("other:")).map(async (t) => closeOtherSessionsForEmp(t.slice(6), emp.id, key))
-  );
+  if (jobTokens.length === 0) {
+    const lastProj = emp?.lastProjectId ? String(emp.lastProjectId) : "";
+    const lastOther = emp?.lastOtherId ? String(emp.lastOtherId) : "";
+
+    if (lastProj) {
+      try {
+        await closeProjSessionsForEmp(lastProj, emp.id, key);
+      } catch {}
+    }
+    if (lastOther) {
+      try {
+        await closeOtherSessionsForEmp(lastOther, emp.id, key);
+      } catch {}
+    }
+  }
 
   await closeAllOpenSessions(emp.id, key);
-  const now = new Date();
   await updateDoc(dayRef(emp.id, key), { end: now, updatedAt: now });
 }
 
@@ -711,8 +833,8 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
 }
 
 /* ✅ UI flottante (logo dans la marge + horloge à droite) */
-const APP_TOP = 38; // hauteur de ta barre du haut (Connecté comme…)
-const LEFT_RAIL_W = 270; // espace réservé à gauche pour ne pas passer sous le logo
+const APP_TOP = 38;
+const LEFT_RAIL_W = 270;
 
 function LogoRail() {
   return (
@@ -722,7 +844,7 @@ function LogoRail() {
         top: APP_TOP + 10,
         left: 14,
         zIndex: 50,
-        pointerEvents: "none", // IMPORTANT: ne bloque jamais les clics
+        pointerEvents: "none",
       }}
     >
       <img
@@ -923,9 +1045,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets }) {
   const ROW_YELLOW_HOVER = "#eab308";
 
   const baseBg = !present ? ROW_RED_BASE : currentIsOther ? ROW_YELLOW_BASE : currentIsProj ? ROW_GREEN_BASE : ROW_RED_BASE;
-
   const hoverBg = !present ? ROW_RED_HOVER : currentIsOther ? ROW_YELLOW_HOVER : currentIsProj ? ROW_GREEN_HOVER : ROW_RED_HOVER;
-
   const rowBg = isHovered ? hoverBg : baseBg;
 
   const proceedPunchOther = async (ap) => {
@@ -1170,10 +1290,12 @@ export default function PageAccueil() {
 
   // ✅ IMPORTANT: état "pressed" (c’est ça qui manquait, donc ça ne marchait pas)
   const [pressed, setPressed] = useState(false);
+  void pressed;
+  void setPressed;
 
   return (
     <>
-      {/* <LogoRail /> */}   {/* ✅ logo désactivé pour l'instant */}
+      {/* <LogoRail /> */} {/* ✅ logo désactivé pour l'instant */}
       <ClockFloat now={now} />
 
       <PageContainer
@@ -1213,7 +1335,9 @@ export default function PageAccueil() {
                   {visibleEmployes.length === 0 && (
                     <tr>
                       <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                        {isAdmin ? "Aucun employé(e) pour l’instant." : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
+                        {isAdmin
+                          ? "Aucun employé(e) pour l’instant."
+                          : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
                       </td>
                     </tr>
                   )}
@@ -1222,9 +1346,7 @@ export default function PageAccueil() {
             </div>
           </Card>
 
-          <Card
-            title="📁 Projets"
-          >
+          <Card title="📁 Projets">
             <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
           </Card>
 

@@ -1,8 +1,9 @@
-// src/PageProjets.jsx — Tableau Projets (Accueil) + ✅ mêmes Actions + ✅ même popup Détails que PageListeProjet
-// ✅ Actions identiques: Détails / Matériel / PDF (badge) / Fermer le BT
-// ✅ Click sur la ligne = ouvre EXACTEMENT la même popup Détails (édition directe + autosave)
-// ✅ Inclus: PDF manager + Historique + Fermer BT (wizard) + Matériel panel
-// ⚠️ NOTE: ce fichier est autonome (copie des composants nécessaires)
+// src/PageProjets.jsx — Tableau Projets (Accueil) + popup Détails etc.
+//
+// ✅ FIX "temps mismatch":
+// - useSessionsP garde _ref
+// - usePresenceTodayP auto-close segments projet orphelins (grace 60s)
+//   => garantit que l'historique projet ne dépasse jamais l'employé
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage } from "./firebaseConfig";
@@ -91,7 +92,7 @@ async function ensureDayP(projId, key = todayKey()) {
   return ref;
 }
 
-/* ---------------------- Timecards helpers (Employés) — pour dépunch ---------------------- */
+/* ---------------------- Timecards helpers (Employés) — pour dépunch & orphan check ---------------------- */
 function empDayRef(empId, key) {
   return doc(db, "employes", empId, "timecards", key);
 }
@@ -119,6 +120,14 @@ function parseEmpAndDayFromSegPath(path) {
   const m = String(path || "").match(/^employes\/([^/]+)\/timecards\/([^/]+)\/segments\/[^/]+$/);
   if (!m) return null;
   return { empId: m[1], key: m[2] };
+}
+
+/* ✅ check si un employé est encore punché sur proj:<projId> */
+async function empHasOpenJob(empId, key, jobId) {
+  if (!empId || !key || !jobId) return false;
+  const qOpen = query(empSegCol(empId, key), where("end", "==", null), where("jobId", "==", jobId));
+  const snap = await getDocs(qOpen);
+  return !snap.empty;
 }
 
 async function depunchWorkersOnProject(projId) {
@@ -252,6 +261,7 @@ function useDayP(projId, key, setError) {
   return card;
 }
 
+/* ✅ sessions projet avec _ref (pour auto-close) */
 function useSessionsP(projId, key, setError) {
   const [list, setList] = useState([]);
   const [tick, setTick] = useState(0);
@@ -268,7 +278,7 @@ function useSessionsP(projId, key, setError) {
       qSeg,
       (snap) => {
         const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() })); // ✅ _ref
         setList(rows);
       },
       (err) => setError(err?.message || String(err))
@@ -289,12 +299,75 @@ function computeTotalMs(sessions) {
   }, 0);
 }
 
+/* ✅ Presence projet + auto-close orphelins */
 function usePresenceTodayP(projId, setError) {
   const key = todayKey();
   const card = useDayP(projId, key, setError);
   const sessions = useSessionsP(projId, key, setError);
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
   const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
+
+  const guardRef = useRef(0);
+  const runningRef = useRef(false);
+  const GRACE_MS = 60000;
+
+  useEffect(() => {
+    if (!projId) return;
+
+    const openSegs = (sessions || []).filter((s) => !s.end);
+    if (openSegs.length === 0) return;
+
+    const nowMs = Date.now();
+    if (nowMs - guardRef.current < 20000) return;
+    guardRef.current = nowMs;
+
+    if (runningRef.current) return;
+    runningRef.current = true;
+
+    (async () => {
+      const jobId = `proj:${projId}`;
+      const now = new Date();
+
+      for (const seg of openSegs) {
+        const empId = seg.empId || null;
+        const segRef = seg._ref || null;
+        if (!empId || !segRef) continue;
+
+        const st = toDateSafe(seg.start);
+        if (st && !isNaN(st.getTime())) {
+          const age = Date.now() - st.getTime();
+          if (age < GRACE_MS) continue;
+        }
+
+        let still = false;
+        try {
+          still = await empHasOpenJob(empId, key, jobId);
+        } catch (e) {
+          console.error(e);
+          continue; // ✅ si lecture échoue, on ne ferme pas
+        }
+
+        if (!still) {
+          try {
+            await updateDoc(segRef, {
+              end: now,
+              updatedAt: now,
+              autoClosed: true,
+              autoClosedAt: now,
+              autoClosedReason: "orphan_project_segment",
+            });
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      }
+    })()
+      .catch((e) => setError?.(e?.message || String(e)))
+      .finally(() => {
+        runningRef.current = false;
+      });
+  }, [projId, key, sessions, setError]);
+
   return { key, card, sessions, totalMs, hasOpen };
 }
 
@@ -431,6 +504,7 @@ function PDFButton({ count, onClick, title = "PDF du projet", style, children })
 }
 
 /* ---------------------- ✅ Popup HISTORIQUE Projet ---------------------- */
+/* (inchangé) */
 function PopupHistoriqueProjet({ open, onClose, projet }) {
   const [error, setError] = useState(null);
   const [histRows, setHistRows] = useState([]);
@@ -448,7 +522,7 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
         const daysSnap = await getDocs(collection(db, "projets", projet.id, "timecards"));
         const days = [];
         daysSnap.forEach((d) => days.push(d.id));
-        days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD desc
+        days.sort((a, b) => b.localeCompare(a));
 
         const map = new Map();
         let sumAllMs = 0;
@@ -632,6 +706,7 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
 }
 
 /* ---------------------- Popup PDF Manager ---------------------- */
+/* (inchangé) */
 function PopupPDFManager({ open, onClose, projet }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -844,6 +919,7 @@ function PopupPDFManager({ open, onClose, projet }) {
 }
 
 /* ---------------------- Popup fermeture BT ---------------------- */
+/* (inchangé) */
 function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
   if (!open || !projet) return null;
 
@@ -929,18 +1005,17 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
 }
 
 /* ---------------------- ✅ helper: patch projet (compat nom=clientNom) ---------------------- */
+/* (inchangé) */
 async function updateProjetPatch(projId, patch) {
   if (!projId) return;
   const p = { ...(patch || {}) };
 
-  // compat: "nom" = "clientNom"
   if (p.clientNom != null) {
     const cn = String(p.clientNom || "").trim();
     p.clientNom = cn ? cn : null;
     p.nom = p.clientNom;
   }
 
-  // trims safe
   const trimKeys = ["numeroUnite", "marque", "modele", "plaque", "odometre", "vin", "note"];
   for (const k of trimKeys) {
     if (p[k] != null) {
@@ -949,7 +1024,6 @@ async function updateProjetPatch(projId, patch) {
     }
   }
 
-  // année
   if (p.annee != null) {
     const n = Number(String(p.annee).trim());
     p.annee = Number.isFinite(n) ? n : null;
@@ -959,6 +1033,7 @@ async function updateProjetPatch(projId, patch) {
 }
 
 /* ---------------------- Popup Détails (édition directe + auto-save) ---------------------- */
+/* (inchangé) */
 function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMateriel, onCloseBT, onOpenHistorique }) {
   const projId = projet?.id || null;
 
@@ -1339,36 +1414,19 @@ function LigneProjet({ proj, idx = 0, tick, onOpenDetails, onOpenMaterial, onOpe
 
       <td style={tdCenter} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-          <button
-            onClick={() => onOpenDetails?.(proj)}
-            style={btnSecondary}
-            title="Ouvrir les détails"
-          >
+          <button onClick={() => onOpenDetails?.(proj)} style={btnSecondary} title="Ouvrir les détails">
             Détails
           </button>
 
-          <button
-            onClick={() => onOpenMaterial?.(proj)}
-            style={btnBlue}
-            title="Voir le matériel"
-          >
+          <button onClick={() => onOpenMaterial?.(proj)} style={btnBlue} title="Voir le matériel">
             Matériel
           </button>
 
-          <PDFButton
-            count={proj.pdfCount}
-            onClick={() => onOpenPDF?.(proj)}
-            style={btnPDF}
-            title="PDF du projet"
-          >
+          <PDFButton count={proj.pdfCount} onClick={() => onOpenPDF?.(proj)} style={btnPDF} title="PDF du projet">
             PDF
           </PDFButton>
 
-          <button
-            onClick={() => onCloseBT?.(proj)}
-            style={btnCloseBT}
-            title="Fermer le BT"
-          >
+          <button onClick={() => onCloseBT?.(proj)} style={btnCloseBT} title="Fermer le BT">
             Fermer le BT
           </button>
         </div>
@@ -1431,7 +1489,6 @@ export default function PageProjets({ onOpenMaterial }) {
     const id = typeof projOrId === "string" ? projOrId : projOrId?.id;
     if (!id) return;
 
-    // compat: si le parent veut gérer l’ouverture, on l’appelle
     if (typeof onOpenMaterial === "function") {
       onOpenMaterial(id);
       return;
@@ -1497,7 +1554,6 @@ export default function PageProjets({ onOpenMaterial }) {
         </table>
       </div>
 
-      {/* ✅ Même popup Détails que PageListeProjet */}
       <PopupDetailsProjetSimple
         open={details.open}
         projet={details.projet}

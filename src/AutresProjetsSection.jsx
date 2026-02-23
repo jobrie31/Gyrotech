@@ -1,4 +1,5 @@
 // src/AutresProjetsSection.jsx
+
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { db } from "./firebaseConfig";
 import {
@@ -16,20 +17,7 @@ import {
 } from "firebase/firestore";
 
 /* ---------- Utils dates / temps ---------- */
-const MONTHS_FR_ABBR = [
-  "janv",
-  "févr",
-  "mars",
-  "avr",
-  "mai",
-  "juin",
-  "juil",
-  "août",
-  "sept",
-  "oct",
-  "nov",
-  "déc",
-];
+const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
 
 function toDateSafe(ts) {
   if (!ts) return null;
@@ -98,6 +86,7 @@ function computeTotalMs(sessions) {
 
 /* ✅ check si un employé est encore punché sur other:<otherId> */
 async function empHasOpenJob(empId, key, jobId) {
+  if (!empId || !key || !jobId) return false;
   const qOpen = query(empSegCol(empId, key), where("end", "==", null), where("jobId", "==", jobId));
   const snap = await getDocs(qOpen);
   return !snap.empty;
@@ -107,7 +96,7 @@ function useSessionsAutre(projId, key, setError) {
   const [list, setList] = useState([]);
   const [tick, setTick] = useState(0);
 
-  // rafraîchir les durées (UI) aux 15s, SANS re-souscrire
+  // rafraîchir les durées (UI) aux 15s
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 15000);
     return () => clearInterval(t);
@@ -120,7 +109,7 @@ function useSessionsAutre(projId, key, setError) {
       qSeg,
       (snap) => {
         const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() }));
+        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() })); // ✅ _ref conservé
         setList(rows);
       },
       (err) => setError?.(err?.message || String(err))
@@ -132,24 +121,17 @@ function useSessionsAutre(projId, key, setError) {
   return list;
 }
 
-/* ✅ FIX IMPORTANT:
-   Ton auto-close pouvait fermer un segment "Autre tâche" immédiatement (race condition),
-   parce que le segment employé n'avait pas encore jobId=other:<id>.
-   -> On met une PÉRIODE DE GRÂCE avant d'auto-close.
-*/
+/* ✅ Auto-close ORPHELINS avec période de grâce */
 function usePresenceTodayAutre(projId, setError) {
   const key = todayKey();
   const sessions = useSessionsAutre(projId, key, setError);
 
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
-
-  // "En cours" = il existe AU MOINS un segment ouvert
   const hasOpen = useMemo(() => (sessions || []).some((s) => !s.end), [sessions]);
 
   const guardRef = useRef(0);
   const runningRef = useRef(false);
 
-  // ✅ Ajuste si tu veux (45s / 60s). 60s = safe contre la latence/ordre d'écriture.
   const GRACE_MS = 60000;
 
   useEffect(() => {
@@ -158,7 +140,6 @@ function usePresenceTodayAutre(projId, setError) {
     const openSegs = (sessions || []).filter((s) => !s.end);
     if (openSegs.length === 0) return;
 
-    // anti-spam: max 1 run / 20s par projet
     const nowMs = Date.now();
     if (nowMs - guardRef.current < 20000) return;
     guardRef.current = nowMs;
@@ -175,21 +156,18 @@ function usePresenceTodayAutre(projId, setError) {
         const segRef = seg._ref || null;
         if (!empId || !segRef) continue;
 
-        // ✅ GRACE: ne jamais auto-close un segment trop "jeune"
         const st = seg.start?.toDate ? seg.start.toDate() : seg.start ? new Date(seg.start) : null;
         if (st && !isNaN(st.getTime())) {
           const age = Date.now() - st.getTime();
           if (age < GRACE_MS) continue;
         }
 
-        // si l'employé n'est plus punché sur cette "autre tâche", on ferme le segment
         let still = false;
         try {
           still = await empHasOpenJob(empId, key, jobId);
         } catch (e) {
-          // si la lecture échoue, on ne ferme PAS (on préfère éviter les faux positifs)
           console.error(e);
-          continue;
+          continue; // ✅ si lecture échoue: NE PAS fermer
         }
 
         if (!still) {
@@ -465,7 +443,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
         const daysSnap = await getDocs(collection(db, "autresProjets", projet.id, "timecards"));
         const days = [];
         daysSnap.forEach((d) => days.push(d.id));
-        days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD desc
+        days.sort((a, b) => b.localeCompare(a));
 
         const map = new Map();
         let sumAllMs = 0;

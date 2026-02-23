@@ -153,7 +153,6 @@ function computeDayTotal(segments) {
     if (!st) continue;
     totalMs += Math.max(0, (en ?? now.getTime()) - st);
   }
-
   return { totalHours: round2(msToHours(totalMs)) };
 }
 
@@ -169,12 +168,6 @@ function build14Days(sundayStart) {
     });
   }
   return days;
-}
-
-function isoInputValue(date) {
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
-    date.getDate()
-  )}`;
 }
 
 async function mapLimit(items, limit, fn) {
@@ -202,12 +195,63 @@ function getEmpIdFromHash() {
   return parts[1] || "";
 }
 
-/* ✅ label d’un bloc à partir de sa clé "YYYY-MM-DD" (dimanche) */
+/* ===================== ✅ PP (Pay Period) helpers ===================== */
+function sundayOnOrBefore(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  const day = x.getDay();
+  x.setDate(x.getDate() - day);
+  return x;
+}
+function getCyclePP1StartForDate(anyDate) {
+  const d = anyDate instanceof Date ? new Date(anyDate) : new Date(anyDate);
+  d.setHours(0, 0, 0, 0);
+
+  const y = d.getFullYear();
+  const dec14ThisYear = new Date(y, 11, 14);
+  const pp1ThisYear = sundayOnOrBefore(dec14ThisYear);
+
+  if (d >= pp1ThisYear) return pp1ThisYear;
+
+  const dec14PrevYear = new Date(y - 1, 11, 14);
+  return sundayOnOrBefore(dec14PrevYear);
+}
+function buildPPListForCycle(pp1Start) {
+  const base = pp1Start instanceof Date ? new Date(pp1Start) : new Date(pp1Start);
+  base.setHours(0, 0, 0, 0);
+
+  const list = [];
+  for (let i = 0; i < 26; i++) {
+    const start = addDays(base, i * 14);
+    const end = addDays(start, 13);
+    const pp = `PP${i + 1}`;
+    list.push({
+      pp,
+      start,
+      end,
+      key: dayKey(start),
+      label: `${pp} — ${formatRangeFRShort(start, end)}`,
+    });
+  }
+  return list;
+}
+function getPPFromPayBlockStart(payBlockStart) {
+  const start = payBlockStart instanceof Date ? new Date(payBlockStart) : new Date(payBlockStart);
+  start.setHours(0, 0, 0, 0);
+
+  const pp1 = getCyclePP1StartForDate(start);
+  const diffDays = Math.floor((start.getTime() - pp1.getTime()) / 86400000);
+  const idx = Math.floor(diffDays / 14) + 1;
+
+  if (idx < 1 || idx > 26) return { pp: "PP?", index: null };
+  return { pp: `PP${idx}`, index: idx };
+}
 function payBlockLabelFromKey(payKey) {
   const start = parseISOInput(payKey);
   if (!start) return payKey || "";
   const end = addDays(start, 13);
-  return formatRangeFRShort(start, end);
+  const { pp } = getPPFromPayBlockStart(start);
+  return `${pp} — ${formatRangeFRShort(start, end)}`;
 }
 
 /* ---------------------- Modal ---------------------- */
@@ -369,7 +413,6 @@ const pill = (bg, bd, fg) => ({
   fontSize: 12,
   whiteSpace: "nowrap",
 });
-
 const replyBubbleInline = {
   border: "1px solid #eab308",
   background: "#fef08a",
@@ -381,7 +424,6 @@ const replyBubbleInline = {
   minWidth: 160,
   maxWidth: 320,
 };
-
 const linkBtn = {
   border: "1px solid #e2e8f0",
   background: "#ffffff",
@@ -389,6 +431,19 @@ const linkBtn = {
   padding: "6px 10px",
   fontWeight: 1000,
   cursor: "pointer",
+};
+const btnFeuilleDepenses = {
+  border: "2px solid #0ea5e9",
+  background: "#e0f2fe",
+  color: "#075985",
+  borderRadius: 16,
+  padding: "10px 14px",
+  fontWeight: 1000,
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
 };
 
 /* ---------------------- Top bar ---------------------- */
@@ -455,7 +510,6 @@ export default function HistoriqueEmploye({
 }) {
   const [error, setError] = useState(null);
 
-  // auth user
   const [user, setUser] = useState(null);
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u || null));
@@ -473,16 +527,12 @@ export default function HistoriqueEmploye({
   const tryPasswordUnlock = async () => {
     setPwErr("");
     const pass = String(pwInput || "").trim();
-    if (!pass) {
-      setPwErr("Entre ton mot de passe.");
-      return;
-    }
+    if (!pass) return setPwErr("Entre ton mot de passe.");
 
     const u = auth.currentUser;
     const email = String(u?.email || "").trim().toLowerCase();
     if (!u || !email) {
-      setPwErr("Session invalide. Déconnecte-toi puis reconnecte-toi.");
-      return;
+      return setPwErr("Session invalide. Déconnecte-toi puis reconnecte-toi.");
     }
 
     setPwBusy(true);
@@ -493,7 +543,6 @@ export default function HistoriqueEmploye({
       setPwInput("");
       setPwErr("");
     } catch (e) {
-      console.error(e);
       const code = e?.code || "";
       if (code === "auth/wrong-password") setPwErr("Mot de passe incorrect.");
       else if (code === "auth/too-many-requests")
@@ -526,7 +575,6 @@ export default function HistoriqueEmploye({
 
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       try {
         setCodeLoading(true);
@@ -545,13 +593,11 @@ export default function HistoriqueEmploye({
         const v = String(data.historiqueCode || "").trim();
         if (!cancelled) setExpectedCode(v);
       } catch (e) {
-        console.error(e);
         if (!cancelled) setCodeErr(e?.message || String(e));
       } finally {
         if (!cancelled) setCodeLoading(false);
       }
     })();
-
     return () => {
       cancelled = true;
     };
@@ -560,18 +606,12 @@ export default function HistoriqueEmploye({
   const tryUnlock = () => {
     const entered = String(codeInput || "").trim();
     const expected = String(expectedCode || "").trim();
-
     if (!expected) {
-      setCodeErr(
+      return setCodeErr(
         "Code historique non configuré dans Firestore (config/adminAccess.historiqueCode)."
       );
-      return;
     }
-    if (entered !== expected) {
-      setCodeErr("Code invalide.");
-      return;
-    }
-
+    if (entered !== expected) return setCodeErr("Code invalide.");
     setCodeErr("");
     setUnlocked(true);
     setCodeInput("");
@@ -607,7 +647,6 @@ export default function HistoriqueEmploye({
     return () => unsub();
   }, []);
 
-  // fallback meEmpId
   const derivedMeEmpId = useMemo(() => {
     if (meEmpId) return meEmpId;
     if (!user) return "";
@@ -659,20 +698,19 @@ export default function HistoriqueEmploye({
 
   const goPrevPayBlock = () => setAnchorDate(addDays(payPeriodStart, -14));
   const goNextPayBlock = () => setAnchorDate(addDays(payPeriodStart, +14));
-
   const payBlockKey = useMemo(() => dayKey(payPeriodStart), [payPeriodStart]);
 
+  const currentPPInfo = useMemo(() => getPPFromPayBlockStart(payPeriodStart), [payPeriodStart]);
+  const cyclePP1Start = useMemo(() => getCyclePP1StartForDate(payPeriodStart), [payPeriodStart]);
+  const ppList = useMemo(() => buildPPListForCycle(cyclePP1Start), [cyclePP1Start]);
+
   /* ===================== NOTES + RÉPONSES (Firestore) ===================== */
-  const [notesFS, setNotesFS] = useState({}); // empId -> note (bloc courant)
-  const [repliesFS, setRepliesFS] = useState({}); // empId -> reply (bloc courant)
-  const [replyMeta, setReplyMeta] = useState({}); // empId -> { by, at(Date), atMs } (bloc courant)
-
-  // ✅ meta de la note (pour le "Vu" non-admin)
-  const [noteMeta, setNoteMeta] = useState({}); // empId -> { updatedAtMs, updatedBy }
-
+  const [notesFS, setNotesFS] = useState({});
+  const [repliesFS, setRepliesFS] = useState({});
+  const [replyMeta, setReplyMeta] = useState({});
+  const [noteMeta, setNoteMeta] = useState({});
   const [noteDrafts, setNoteDrafts] = useState({});
   const [replyDrafts, setReplyDrafts] = useState({});
-
   const [noteStatus, setNoteStatus] = useState({});
   const [replyStatus, setReplyStatus] = useState({});
 
@@ -687,46 +725,29 @@ export default function HistoriqueEmploye({
     if (d !== undefined) return d;
     return String(notesFS?.[empId] || "");
   };
-  const setDraft = (empId, value) => {
-    setNoteDrafts((prev) => ({ ...(prev || {}), [empId]: value }));
-  };
-  const primeDraftFromFS = (empId, noteValue) => {
-    setNoteDrafts((prev) => ({
-      ...(prev || {}),
-      [empId]: String(noteValue || ""),
-    }));
-  };
+  const setDraft = (empId, value) => setNoteDrafts((p) => ({ ...(p || {}), [empId]: value }));
+  const primeDraftFromFS = (empId, noteValue) =>
+    setNoteDrafts((p) => ({ ...(p || {}), [empId]: String(noteValue || "") }));
 
   const getReplyDraft = (empId) => {
     const d = replyDrafts?.[empId];
     if (d !== undefined) return d;
     return String(repliesFS?.[empId] || "");
   };
-  const setReplyDraft = (empId, value) => {
-    setReplyDrafts((prev) => ({ ...(prev || {}), [empId]: value }));
-  };
+  const setReplyDraft = (empId, value) => setReplyDrafts((p) => ({ ...(p || {}), [empId]: value }));
 
   const scheduleAutoSave = (empId) => {
     if (!empId) return;
     const timers = saveTimersRef.current || {};
     if (timers[empId]) clearTimeout(timers[empId]);
-
-    timers[empId] = setTimeout(() => {
-      saveNoteForEmp(empId);
-    }, 700);
-
+    timers[empId] = setTimeout(() => saveNoteForEmp(empId), 700);
     saveTimersRef.current = timers;
   };
-
   const scheduleAutoSaveReply = (empId) => {
     if (!empId) return;
     const timers = replyTimersRef.current || {};
     if (timers[empId]) clearTimeout(timers[empId]);
-
-    timers[empId] = setTimeout(() => {
-      saveReplyForEmp(empId);
-    }, 700);
-
+    timers[empId] = setTimeout(() => saveReplyForEmp(empId), 700);
     replyTimersRef.current = timers;
   };
 
@@ -736,11 +757,7 @@ export default function HistoriqueEmploye({
 
     setNoteStatus((p) => ({
       ...(p || {}),
-      [empId]: {
-        saving: true,
-        savedAt: p?.[empId]?.savedAt || null,
-        err: "",
-      },
+      [empId]: { saving: true, savedAt: p?.[empId]?.savedAt || null, err: "" },
     }));
 
     try {
@@ -750,25 +767,16 @@ export default function HistoriqueEmploye({
         { merge: true }
       );
 
-      setNotesFS((prev) => ({ ...(prev || {}), [empId]: note }));
-      setNoteStatus((p) => ({
-        ...(p || {}),
-        [empId]: { saving: false, savedAt: Date.now(), err: "" },
-      }));
+      setNotesFS((p) => ({ ...(p || {}), [empId]: note }));
+      setNoteStatus((p) => ({ ...(p || {}), [empId]: { saving: false, savedAt: Date.now(), err: "" } }));
     } catch (e) {
-      console.error("❌ saveNoteForEmp failed:", e);
       const msg =
         e?.code === "permission-denied"
           ? "Accès refusé: Firestore bloque l’enregistrement (rules)."
           : e?.message || String(e);
-
       setNoteStatus((p) => ({
         ...(p || {}),
-        [empId]: {
-          saving: false,
-          savedAt: p?.[empId]?.savedAt || null,
-          err: msg,
-        },
+        [empId]: { saving: false, savedAt: p?.[empId]?.savedAt || null, err: msg },
       }));
       setError(msg);
     }
@@ -780,11 +788,7 @@ export default function HistoriqueEmploye({
 
     setReplyStatus((p) => ({
       ...(p || {}),
-      [empId]: {
-        saving: true,
-        savedAt: p?.[empId]?.savedAt || null,
-        err: "",
-      },
+      [empId]: { saving: true, savedAt: p?.[empId]?.savedAt || null, err: "" },
     }));
 
     try {
@@ -794,25 +798,16 @@ export default function HistoriqueEmploye({
         { merge: true }
       );
 
-      setRepliesFS((prev) => ({ ...(prev || {}), [empId]: reply }));
-      setReplyStatus((p) => ({
-        ...(p || {}),
-        [empId]: { saving: false, savedAt: Date.now(), err: "" },
-      }));
+      setRepliesFS((p) => ({ ...(p || {}), [empId]: reply }));
+      setReplyStatus((p) => ({ ...(p || {}), [empId]: { saving: false, savedAt: Date.now(), err: "" } }));
     } catch (e) {
-      console.error("❌ saveReplyForEmp failed:", e);
       const msg =
         e?.code === "permission-denied"
           ? "Accès refusé: Firestore bloque l’enregistrement (rules)."
           : e?.message || String(e);
-
       setReplyStatus((p) => ({
         ...(p || {}),
-        [empId]: {
-          saving: false,
-          savedAt: p?.[empId]?.savedAt || null,
-          err: msg,
-        },
+        [empId]: { saving: false, savedAt: p?.[empId]?.savedAt || null, err: msg },
       }));
       setError(msg);
     }
@@ -825,7 +820,6 @@ export default function HistoriqueEmploye({
     if (s.savedAt) return "Sauvegardé ✅";
     return "";
   };
-
   const replyStatusLabel = (empId) => {
     const s = replyStatus?.[empId] || {};
     if (s.saving) return "Sauvegarde…";
@@ -851,40 +845,28 @@ export default function HistoriqueEmploye({
 
   /* ===================== ✅ NON-ADMIN: "VU" NOTE (localStorage) ===================== */
   const noteSeenKey = (empId, blockKey) => `seen_note_${empId}_${blockKey}`;
-
   const getNoteSeenMs = (empId, blockKey) => {
     try {
-      return (
-        Number(localStorage.getItem(noteSeenKey(empId, blockKey)) || "0") || 0
-      );
+      return Number(localStorage.getItem(noteSeenKey(empId, blockKey)) || "0") || 0;
     } catch {
       return 0;
     }
   };
-
   const isNoteSeen = (empId, blockKey, noteUpdatedAtMs) => {
     const seen = getNoteSeenMs(empId, blockKey);
-    if (!noteUpdatedAtMs) return true; // rien à voir
+    if (!noteUpdatedAtMs) return true;
     return noteUpdatedAtMs <= seen;
   };
-
   const setNoteSeen = (empId, blockKey, noteUpdatedAtMs, checked) => {
     try {
-      if (!checked) {
-        localStorage.removeItem(noteSeenKey(empId, blockKey));
-      } else {
-        const v = Number(noteUpdatedAtMs || Date.now()) || Date.now();
-        localStorage.setItem(noteSeenKey(empId, blockKey), String(v));
-      }
-    } catch {
-      // ignore
-    }
-    // ✅ important: déclenche App.jsx -> seenBump
+      if (!checked) localStorage.removeItem(noteSeenKey(empId, blockKey));
+      else localStorage.setItem(noteSeenKey(empId, blockKey), String(Number(noteUpdatedAtMs || Date.now()) || Date.now()));
+    } catch {}
     window.dispatchEvent(new Event("noteSeenChanged"));
   };
 
   /* ===================== ✅ NON-ADMIN: ALERTES NOTES (TOUS BLOCS) ===================== */
-  const [myNotesMetaByBlock, setMyNotesMetaByBlock] = useState({}); // blockKey -> { updMs, hasText }
+  const [myNotesMetaByBlock, setMyNotesMetaByBlock] = useState({});
   const [mySeenBump, setMySeenBump] = useState(0);
 
   useEffect(() => {
@@ -894,7 +876,6 @@ export default function HistoriqueEmploye({
   }, []);
 
   useEffect(() => {
-    // reset quand on change d'employé / route
     setMyNotesMetaByBlock({});
   }, [derivedMeEmpId]);
 
@@ -911,11 +892,9 @@ export default function HistoriqueEmploye({
         snap.forEach((d) => {
           const data = d.data() || {};
           const blockKey = d.id;
-
           const noteText = String(data.note || "").trim();
           const hasText = !!noteText;
           const updMs = safeToMs(data.updatedAt);
-
           map[blockKey] = { updMs, hasText };
         });
         setMyNotesMetaByBlock(map);
@@ -940,7 +919,6 @@ export default function HistoriqueEmploye({
       if (updMs > seenMs) out.push({ blockKey, updMs });
     }
     out.sort((a, b) => (b.updMs || 0) - (a.updMs || 0));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     return out;
   }, [isAdmin, myNotesMetaByBlock, derivedMeEmpId, mySeenBump]);
 
@@ -951,7 +929,7 @@ export default function HistoriqueEmploye({
     for (const it of myUnseenNoteDocs) {
       const k = it.blockKey;
       if (!groups[k]) groups[k] = { blockKey: k, count: 0 };
-      groups[k].count += 1; // 1 note/doc, mais format identique
+      groups[k].count += 1;
     }
     const out = Object.values(groups);
     out.sort((a, b) => String(b.blockKey).localeCompare(String(a.blockKey)));
@@ -978,19 +956,19 @@ export default function HistoriqueEmploye({
 
         const reply = data.reply !== undefined ? String(data.reply || "") : "";
 
-        setNotesFS((prev) => ({ ...(prev || {}), [derivedMeEmpId]: note }));
-        setRepliesFS((prev) => ({ ...(prev || {}), [derivedMeEmpId]: reply }));
+        setNotesFS((p) => ({ ...(p || {}), [derivedMeEmpId]: note }));
+        setRepliesFS((p) => ({ ...(p || {}), [derivedMeEmpId]: reply }));
 
         primeDraftFromFS(derivedMeEmpId, note);
 
-        setReplyDrafts((prev) => {
-          if (prev?.[derivedMeEmpId] !== undefined) return prev;
-          return { ...(prev || {}), [derivedMeEmpId]: reply };
+        setReplyDrafts((p) => {
+          if (p?.[derivedMeEmpId] !== undefined) return p;
+          return { ...(p || {}), [derivedMeEmpId]: reply };
         });
 
         const atMs = safeToMs(data.replyAt);
-        setReplyMeta((prev) => ({
-          ...(prev || {}),
+        setReplyMeta((p) => ({
+          ...(p || {}),
           [derivedMeEmpId]: {
             by: String(data.replyBy || ""),
             at: toJSDateMaybe(data.replyAt),
@@ -998,10 +976,9 @@ export default function HistoriqueEmploye({
           },
         }));
 
-        // ✅ meta note
         const updMs = safeToMs(data.updatedAt);
-        setNoteMeta((prev) => ({
-          ...(prev || {}),
+        setNoteMeta((p) => ({
+          ...(p || {}),
           [derivedMeEmpId]: {
             updatedAtMs: updMs,
             updatedBy: String(data.updatedBy || ""),
@@ -1012,7 +989,6 @@ export default function HistoriqueEmploye({
     );
 
     return () => unsub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, pwUnlocked, derivedMeEmpId, payBlockKey]);
 
   // ADMIN: listeners (note + reply) pour tous (bloc courant)
@@ -1036,15 +1012,14 @@ export default function HistoriqueEmploye({
                   .map((x) => x.trim())
                   .filter(Boolean)
                   .join("\n\n");
-
           const reply = data.reply !== undefined ? String(data.reply || "") : "";
 
-          setNotesFS((prev) => ({ ...(prev || {}), [empId]: note }));
-          setRepliesFS((prev) => ({ ...(prev || {}), [empId]: reply }));
+          setNotesFS((p) => ({ ...(p || {}), [empId]: note }));
+          setRepliesFS((p) => ({ ...(p || {}), [empId]: reply }));
 
           const atMs = safeToMs(data.replyAt);
-          setReplyMeta((prev) => ({
-            ...(prev || {}),
+          setReplyMeta((p) => ({
+            ...(p || {}),
             [empId]: {
               by: String(data.replyBy || ""),
               at: toJSDateMaybe(data.replyAt),
@@ -1052,24 +1027,22 @@ export default function HistoriqueEmploye({
             },
           }));
 
-          // ✅ meta note
           const updMs = safeToMs(data.updatedAt);
-          setNoteMeta((prev) => ({
-            ...(prev || {}),
+          setNoteMeta((p) => ({
+            ...(p || {}),
             [empId]: {
               updatedAtMs: updMs,
               updatedBy: String(data.updatedBy || ""),
             },
           }));
 
-          setNoteDrafts((prev) => {
-            if (prev?.[empId] !== undefined) return prev;
-            return { ...(prev || {}), [empId]: note };
+          setNoteDrafts((p) => {
+            if (p?.[empId] !== undefined) return p;
+            return { ...(p || {}), [empId]: note };
           });
         },
         (err) => setError(err?.message || String(err))
       );
-
       unsubs.push(unsub);
     }
 
@@ -1077,19 +1050,15 @@ export default function HistoriqueEmploye({
       unsubs.forEach((fn) => {
         try {
           fn?.();
-        } catch {
-          // ignore
-        }
+        } catch {}
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, unlocked, payBlockKey, employes]);
 
   /* ===================== ✅ ADMIN: "VU" + ALERTES (TOUS BLOCS) ===================== */
   const [adminSeenBump, setAdminSeenBump] = useState(0);
 
   const replySeenKey = (empId, blockKey) => `seen_reply_admin_${empId}_${blockKey}`;
-
   const getReplySeenMs = (empId, blockKey) => {
     try {
       return Number(localStorage.getItem(replySeenKey(empId, blockKey)) || "0") || 0;
@@ -1097,29 +1066,20 @@ export default function HistoriqueEmploye({
       return 0;
     }
   };
-
   const isReplySeen = (empId, blockKey, replyAtMs) => {
     const seen = getReplySeenMs(empId, blockKey);
     if (!replyAtMs) return true;
     return replyAtMs <= seen;
   };
-
   const setReplySeen = (empId, blockKey, replyAtMs, checked) => {
     try {
-      if (!checked) {
-        localStorage.removeItem(replySeenKey(empId, blockKey));
-      } else {
-        const v = Number(replyAtMs || Date.now()) || Date.now();
-        localStorage.setItem(replySeenKey(empId, blockKey), String(v));
-      }
-    } catch {
-      // ignore
-    }
+      if (!checked) localStorage.removeItem(replySeenKey(empId, blockKey));
+      else localStorage.setItem(replySeenKey(empId, blockKey), String(Number(replyAtMs || Date.now()) || Date.now()));
+    } catch {}
     setAdminSeenBump((x) => x + 1);
   };
 
-  // ✅ on écoute toutes les réponses (tous blocs) via collectionGroup
-  const [allRepliesByDoc, setAllRepliesByDoc] = useState({}); // docKey => {empId, blockKey, reply, atMs, by}
+  const [allRepliesByDoc, setAllRepliesByDoc] = useState({});
   useEffect(() => {
     if (!isAdmin || !unlocked) return;
 
@@ -1134,14 +1094,12 @@ export default function HistoriqueEmploye({
           const atMs = safeToMs(data.replyAt);
           if (!reply || !atMs) return;
 
-          // path: employes/{empId}/payBlockNotes/{blockKey}
           const parts = String(d.ref.path || "").split("/");
           const empId = parts?.[1] || "";
           const blockKey = parts?.[3] || "";
           if (!empId || !blockKey) return;
 
-          const docKey = `${empId}__${blockKey}`;
-          map[docKey] = {
+          map[`${empId}__${blockKey}`] = {
             empId,
             blockKey,
             reply,
@@ -1159,11 +1117,10 @@ export default function HistoriqueEmploye({
 
   const adminAlertList = useMemo(() => {
     if (!isAdmin || !unlocked) return [];
-    const arr = Object.values(allRepliesByDoc || []);
+    const arr = Object.values(allRepliesByDoc || {});
     return arr
       .filter((x) => !isReplySeen(x.empId, x.blockKey, x.atMs))
       .sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, unlocked, allRepliesByDoc, adminSeenBump]);
 
   const adminUnseenReplyCount = adminAlertList.length;
@@ -1183,7 +1140,7 @@ export default function HistoriqueEmploye({
 
   const flashAdminTitle = isAdmin && unlocked && adminUnseenReplyCount > 0;
 
-  /* ===================== TAUX HORAIRE (ADMIN seul) ===================== */
+  /* ===================== TAUX HORAIRE + VACANCES (ADMIN seul) ===================== */
   const [rateDrafts, setRateDrafts] = useState({});
   const rateDraftValue = (empId, current) => {
     const v = rateDrafts?.[empId];
@@ -1191,26 +1148,70 @@ export default function HistoriqueEmploye({
     return current == null ? "" : String(current).replace(".", ",");
   };
 
-  const saveRate = async (empId) => {
+  const [vacDrafts, setVacDrafts] = useState({});
+  const vacDraftValue = (empId, current) => {
+    const v = vacDrafts?.[empId];
+    if (v !== undefined) return v;
+    return current == null ? "" : String(current).replace(".", ",");
+  };
+
+  function parsePercentInput(v) {
+    const s = String(v || "").trim().replace(",", ".");
+    if (!s) return null;
+    const n = Number(s);
+    if (!isFinite(n)) return null;
+    return Math.max(0, Math.min(100, n));
+  }
+
+  const saveRateAndVac = async (empId) => {
     if (!isAdmin) return;
-    const raw = rateDrafts?.[empId];
-    const n = parseMoneyInput(raw);
-    if (n == null) {
-      setError("Taux horaire invalide. Exemple: 32,50");
-      return;
+
+    const rawRate = rateDrafts?.[empId];
+    const rawVac = vacDrafts?.[empId];
+
+    const hasRate = rawRate !== undefined;
+    const hasVac = rawVac !== undefined;
+
+    if (!hasRate && !hasVac) return;
+
+    const payload = {};
+
+    if (hasRate) {
+      const n = parseMoneyInput(rawRate);
+      if (n == null) return setError("Taux horaire invalide. Exemple: 32,50");
+      payload.tauxHoraire = n;
     }
+
+    if (hasVac) {
+      const p = parsePercentInput(rawVac);
+      if (p == null) return setError("Vacance (%) invalide. Exemple: 4 ou 4,0");
+      payload.vacancePct = p; // ✅ nouveau champ
+    }
+
     try {
-      await updateDoc(doc(db, "employes", empId), { tauxHoraire: n });
-      setRateDrafts((p) => {
-        const c = { ...(p || {}) };
-        delete c[empId];
-        return c;
-      });
+      await updateDoc(doc(db, "employes", empId), payload);
+
+      if (hasRate) {
+        setRateDrafts((p) => {
+          const c = { ...(p || {}) };
+          delete c[empId];
+          return c;
+        });
+      }
+      if (hasVac) {
+        setVacDrafts((p) => {
+          const c = { ...(p || {}) };
+          delete c[empId];
+          return c;
+        });
+      }
     } catch (e) {
-      console.error(e);
       setError(e?.message || String(e));
     }
   };
+
+  const saveRate = async (empId) => saveRateAndVac(empId);
+  const saveVac = async (empId) => saveRateAndVac(empId);
 
   /* ===================== NON-ADMIN : seulement moi ===================== */
   const myEmpObj = useMemo(
@@ -1237,10 +1238,7 @@ export default function HistoriqueEmploye({
 
         const results = await Promise.all(
           days14.map(async (d) => {
-            const qSeg = query(
-              segCol(derivedMeEmpId, d.key),
-              orderBy("start", "asc")
-            );
+            const qSeg = query(segCol(derivedMeEmpId, d.key), orderBy("start", "asc"));
             const snap = await getDocs(qSeg);
             const segs = snap.docs.map((docx) => docx.data());
             const tot = computeDayTotal(segs);
@@ -1250,7 +1248,6 @@ export default function HistoriqueEmploye({
 
         if (!cancelled) setMyRows(results);
       } catch (e) {
-        console.error(e);
         if (!cancelled) setMyErr(e?.message || String(e));
       } finally {
         if (!cancelled) setMyLoading(false);
@@ -1273,16 +1270,10 @@ export default function HistoriqueEmploye({
     () => round2(myWeek2.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)),
     [myWeek2]
   );
-  const myTotal2Weeks = useMemo(
-    () => round2(myTotalWeek1 + myTotalWeek2),
-    [myTotalWeek1, myTotalWeek2]
-  );
+  const myTotal2Weeks = useMemo(() => round2(myTotalWeek1 + myTotalWeek2), [myTotalWeek1, myTotalWeek2]);
 
   /* ===================== ADMIN : Sommaire + détail ===================== */
-  const visibleEmployes = useMemo(
-    () => (isAdmin ? employes : []),
-    [employes, isAdmin]
-  );
+  const visibleEmployes = useMemo(() => (isAdmin ? employes : []), [employes, isAdmin]);
 
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryErr, setSummaryErr] = useState("");
@@ -1297,22 +1288,15 @@ export default function HistoriqueEmploye({
 
       const dayTotals = await Promise.all(
         days14.map(async (d) => {
-          const qSeg = query(
-            segCol(empIdLocal, d.key),
-            orderBy("start", "asc")
-          );
+          const qSeg = query(segCol(empIdLocal, d.key), orderBy("start", "asc"));
           const snap = await getDocs(qSeg);
           const segs = snap.docs.map((docx) => docx.data());
           return computeDayTotal(segs).totalHours || 0;
         })
       );
 
-      const w1 = round2(
-        dayTotals.slice(0, 7).reduce((a, b) => a + (Number(b) || 0), 0)
-      );
-      const w2 = round2(
-        dayTotals.slice(7, 14).reduce((a, b) => a + (Number(b) || 0), 0)
-      );
+      const w1 = round2(dayTotals.slice(0, 7).reduce((a, b) => a + (Number(b) || 0), 0));
+      const w2 = round2(dayTotals.slice(7, 14).reduce((a, b) => a + (Number(b) || 0), 0));
       const t = round2(w1 + w2);
 
       return {
@@ -1320,6 +1304,7 @@ export default function HistoriqueEmploye({
         nom: emp?.nom || "(sans nom)",
         email: emp?.email || "",
         tauxHoraire: emp?.tauxHoraire ?? null,
+        vacancePct: emp?.vacancePct ?? null,
         week1: w1,
         week2: w2,
         total: t,
@@ -1343,7 +1328,6 @@ export default function HistoriqueEmploye({
 
         if (!cancelled) setSummaryRows(clean);
       } catch (e) {
-        console.error(e);
         if (!cancelled) setSummaryErr(e?.message || String(e));
       } finally {
         if (!cancelled) setSummaryLoading(false);
@@ -1357,23 +1341,14 @@ export default function HistoriqueEmploye({
   }, [isAdmin, unlocked, days14, visibleEmployes]);
 
   const allWeek1Total = useMemo(
-    () =>
-      round2(
-        (summaryRows || []).reduce((acc, r) => acc + (Number(r.week1) || 0), 0)
-      ),
+    () => round2((summaryRows || []).reduce((acc, r) => acc + (Number(r.week1) || 0), 0)),
     [summaryRows]
   );
   const allWeek2Total = useMemo(
-    () =>
-      round2(
-        (summaryRows || []).reduce((acc, r) => acc + (Number(r.week2) || 0), 0)
-      ),
+    () => round2((summaryRows || []).reduce((acc, r) => acc + (Number(r.week2) || 0), 0)),
     [summaryRows]
   );
-  const allTotal2Weeks = useMemo(
-    () => round2(allWeek1Total + allWeek2Total),
-    [allWeek1Total, allWeek2Total]
-  );
+  const allTotal2Weeks = useMemo(() => round2(allWeek1Total + allWeek2Total), [allWeek1Total, allWeek2Total]);
 
   const [routeEmpId, setRouteEmpId] = useState(getEmpIdFromHash());
   useEffect(() => {
@@ -1421,7 +1396,6 @@ export default function HistoriqueEmploye({
 
         if (!cancelled) setDetailRows(results);
       } catch (e) {
-        console.error(e);
         if (!cancelled) setDetailErr(e?.message || String(e));
       } finally {
         if (!cancelled) setDetailLoading(false);
@@ -1438,19 +1412,14 @@ export default function HistoriqueEmploye({
   const detailWeek1 = detailRows.slice(0, 7);
   const detailWeek2 = detailRows.slice(7, 14);
   const detailTotalWeek1 = useMemo(
-    () =>
-      round2(detailWeek1.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)),
+    () => round2(detailWeek1.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)),
     [detailWeek1]
   );
   const detailTotalWeek2 = useMemo(
-    () =>
-      round2(detailWeek2.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)),
+    () => round2(detailWeek2.reduce((a, r) => a + (Number(r.totalHours) || 0), 0)),
     [detailWeek2]
   );
-  const detailTotal2Weeks = useMemo(
-    () => round2(detailTotalWeek1 + detailTotalWeek2),
-    [detailTotalWeek1, detailTotalWeek2]
-  );
+  const detailTotal2Weeks = useMemo(() => round2(detailTotalWeek1 + detailTotalWeek2), [detailTotalWeek1, detailTotalWeek2]);
 
   /* ===================== Guards screens ===================== */
   if (!isAdmin && !pwUnlocked) {
@@ -1500,9 +1469,7 @@ export default function HistoriqueEmploye({
                   style={smallInput}
                   disabled={pwBusy}
                   autoComplete="current-password"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") tryPasswordUnlock();
-                  }}
+                  onKeyDown={(e) => e.key === "Enter" && tryPasswordUnlock()}
                 />
               </div>
 
@@ -1558,9 +1525,7 @@ export default function HistoriqueEmploye({
                   onChange={(e) => setCodeInput(e.target.value)}
                   style={smallInput}
                   disabled={codeLoading}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") tryUnlock();
-                  }}
+                  onKeyDown={(e) => e.key === "Enter" && tryUnlock()}
                 />
               </div>
 
@@ -1575,55 +1540,95 @@ export default function HistoriqueEmploye({
   }
 
   /* ===================== Render helpers ===================== */
-  const renderWeekTable = (rows, totalHours) => {
-    return (
-      <div style={{ overflowX: "auto" }}>
-        <table style={table}>
-          <thead>
-            <tr>
-              <th style={th}>Jour</th>
-              <th style={th}>Date</th>
-              <th style={th}>Heures</th>
+  const renderWeekTable = (rows, totalHours) => (
+    <div style={{ overflowX: "auto" }}>
+      <table style={table}>
+        <thead>
+          <tr>
+            <th style={th}>Jour</th>
+            <th style={th}>Date</th>
+            <th style={th}>Heures</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(rows || []).map((r) => (
+            <tr key={r.key}>
+              <td style={tdLeft}>{r.weekday}</td>
+              <td style={td}>{r.dateStr}</td>
+              <td style={td}>{fmtHoursComma(r.totalHours || 0)}</td>
             </tr>
-          </thead>
-          <tbody>
-            {(rows || []).map((r) => (
-              <tr key={r.key}>
-                <td style={tdLeft}>{r.weekday}</td>
-                <td style={td}>{r.dateStr}</td>
-                <td style={td}>{fmtHoursComma(r.totalHours || 0)}</td>
-              </tr>
-            ))}
-            <tr>
-              <td style={totalCell} colSpan={2}>
-                Total
-              </td>
-              <td style={totalCell}>{fmtHoursComma(totalHours || 0)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    );
-  };
-
-  const rightSlot = (
-    <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-      Connecté: <strong>{user?.email || "—"}</strong> {isAdmin ? "— Admin" : ""}
+          ))}
+          <tr>
+            <td style={totalCell} colSpan={2}>
+              Total
+            </td>
+            <td style={totalCell}>{fmtHoursComma(totalHours || 0)}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 
+  const rightSlot = (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      {isAdmin ? (
+        <button
+          type="button"
+          style={btnFeuilleDepenses}
+          onClick={() => {
+            window.location.hash = "#/feuille-depenses";
+          }}
+          title="Ouvrir la feuille de dépenses"
+        >
+          🧾 Feuille dépenses
+        </button>
+      ) : null}
+
+      <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
+        Connecté: <strong>{user?.email || "—"}</strong> {isAdmin ? "— Admin" : ""}
+      </div>
+    </div>
+  );
+
+  // ✅ remplace ton const navBar = (...) par ceci :
   const navBar = (
     <div style={navWrap}>
       <button type="button" style={bigArrowBtn} onClick={goPrevPayBlock} title="Bloc précédent">
         ‹
       </button>
 
-      <div style={{ display: "grid", gap: 6, textAlign: "center" }}>
-        <div style={{ fontWeight: 1000, fontSize: 18 }}>
-          {isAdmin ? "Historique" : "Mes heures"}
-        </div>
-        <div style={{ fontWeight: 900, color: "#334155" }}>{payBlockLabel}</div>
+      <div style={{ display: "grid", gap: 8, textAlign: "center", justifyItems: "center" }}>
+        {/* ✅ on enlève "Historique" + le range en double, on met juste le select PP */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>PP</div>
 
+          <select
+            value={currentPPInfo.pp}
+            onChange={(e) => {
+              const wanted = String(e.target.value || "").trim();
+              const found = (ppList || []).find((x) => x.pp === wanted);
+              if (found?.start) setAnchorDate(found.start);
+            }}
+            style={{
+              border: "1px solid #cbd5e1",
+              borderRadius: 12,
+              padding: "8px 12px",
+              fontWeight: 1000,
+              background: "#fff",
+              maxWidth: 360,
+              fontSize: 16,
+            }}
+            title="Choisir un PP (recommence chaque année)"
+          >
+            {(ppList || []).map((p) => (
+              <option key={p.pp} value={p.pp}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* ✅ on garde Sem1 / Sem2 */}
         <div
           style={{
             display: "flex",
@@ -1635,24 +1640,6 @@ export default function HistoriqueEmploye({
         >
           <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>Sem1: {week1Label}</span>
           <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>Sem2: {week2Label}</span>
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "center", gap: 10, alignItems: "center" }}>
-          <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>Ancrage</div>
-          <input
-            type="date"
-            value={isoInputValue(anchorDate)}
-            onChange={(e) => {
-              const v = parseISOInput(e.target.value);
-              if (v) setAnchorDate(v);
-            }}
-            style={{
-              border: "1px solid #cbd5e1",
-              borderRadius: 10,
-              padding: "6px 10px",
-              fontWeight: 900,
-            }}
-          />
         </div>
 
         {isAdmin && unlocked && adminUnseenReplyCount > 0 ? (
@@ -1675,12 +1662,9 @@ export default function HistoriqueEmploye({
     const rs = replyStatusLabel(derivedMeEmpId);
     const rst = replyStatus?.[derivedMeEmpId] || {};
 
-    const myNoteUpdatedAtMs =
-      Number(noteMeta?.[derivedMeEmpId]?.updatedAtMs || 0) || 0;
+    const myNoteUpdatedAtMs = Number(noteMeta?.[derivedMeEmpId]?.updatedAtMs || 0) || 0;
     const hasNoteText = !!String(myNote || "").trim();
-    const noteSeen = hasNoteText
-      ? isNoteSeen(derivedMeEmpId, payBlockKey, myNoteUpdatedAtMs)
-      : true;
+    const noteSeen = hasNoteText ? isNoteSeen(derivedMeEmpId, payBlockKey, myNoteUpdatedAtMs) : true;
 
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
@@ -1714,7 +1698,6 @@ export default function HistoriqueEmploye({
 
           {navBar}
 
-          {/* ✅ NEW: Carte Alertes Notes (tous blocs) */}
           {myUnseenNoteCount > 0 ? (
             <Card>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -1726,10 +1709,7 @@ export default function HistoriqueEmploye({
                     Clique un bloc pour naviguer directement dessus.
                   </div>
                 </div>
-
-                <div style={{ fontWeight: 1000, color: "#b91c1c" }}>
-                  Total: {myUnseenNoteCount}
-                </div>
+                <div style={{ fontWeight: 1000, color: "#b91c1c" }}>Total: {myUnseenNoteCount}</div>
               </div>
 
               <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1737,11 +1717,7 @@ export default function HistoriqueEmploye({
                   <button
                     key={b.blockKey}
                     type="button"
-                    style={{
-                      ...linkBtn,
-                      border: "2px solid #ef4444",
-                      background: "#fff7f7",
-                    }}
+                    style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7" }}
                     title={payBlockLabelFromKey(b.blockKey)}
                     onClick={() => {
                       const dt = parseISOInput(b.blockKey);
@@ -1757,22 +1733,37 @@ export default function HistoriqueEmploye({
 
           <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
             <Card>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
                 <div>
-                  <div style={{ fontWeight: 1000, fontSize: 16 }}>{myEmpObj?.nom || "Moi"}</div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{user?.email || ""}</div>
+                  <div style={{ fontWeight: 1000, fontSize: 16 }}>
+                    {myEmpObj?.nom || "Moi"}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                    {user?.email || ""}
+                  </div>
                 </div>
 
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={pill("#ecfdf3", "#bbf7d0", "#166534")}>
                     Total 2 sem: {fmtHoursComma(myTotal2Weeks)} h
                   </span>
+
                   <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
                     Taux: {fmtMoneyComma(myEmpObj?.tauxHoraire)} $
                   </span>
+
+                  <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
+                    Vacance: {fmtMoneyComma(myEmpObj?.vacancePct)} %
+                  </span>
                 </div>
               </div>
-
               <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
                 <div>
                   <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1 — {week1Label}</div>
@@ -1812,7 +1803,6 @@ export default function HistoriqueEmploye({
                       {myNote || "—"}
                     </div>
 
-                    {/* ✅ Vu pour la NOTE (non-admin) */}
                     {hasNoteText ? (
                       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <label
@@ -1830,21 +1820,14 @@ export default function HistoriqueEmploye({
                           <input
                             type="checkbox"
                             checked={noteSeen}
-                            onChange={(e) => {
-                              setNoteSeen(
-                                derivedMeEmpId,
-                                payBlockKey,
-                                myNoteUpdatedAtMs,
-                                e.target.checked
-                              );
-                            }}
+                            onChange={(e) => setNoteSeen(derivedMeEmpId, payBlockKey, myNoteUpdatedAtMs, e.target.checked)}
                           />
                           Vu
                           {!noteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
                         </label>
 
                         <span style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                          Bloc: {payBlockLabel}
+                          Bloc: {currentPPInfo.pp} • {payBlockLabel}
                         </span>
                       </div>
                     ) : null}
@@ -1852,7 +1835,6 @@ export default function HistoriqueEmploye({
 
                   <div>
                     <div style={{ fontWeight: 1000, marginBottom: 6 }}>Ma réponse (si je veux répondre)</div>
-
                     <textarea
                       rows={3}
                       value={myReply}
@@ -1906,11 +1888,7 @@ export default function HistoriqueEmploye({
         }
       `}</style>
 
-      <TopBar
-        title="📒 Historique (Admin)"
-        rightSlot={rightSlot}
-        flashTitle={flashAdminTitle}
-      />
+      <TopBar title="📒 Historique (Admin)" rightSlot={rightSlot} flashTitle={flashAdminTitle} />
 
       <PageContainer>
         {error && (
@@ -1944,9 +1922,7 @@ export default function HistoriqueEmploye({
                 </div>
               </div>
 
-              <div style={{ fontWeight: 1000, color: "#b91c1c" }}>
-                Total: {adminUnseenReplyCount}
-              </div>
+              <div style={{ fontWeight: 1000, color: "#b91c1c" }}>Total: {adminUnseenReplyCount}</div>
             </div>
 
             <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1954,11 +1930,7 @@ export default function HistoriqueEmploye({
                 <button
                   key={b.blockKey}
                   type="button"
-                  style={{
-                    ...linkBtn,
-                    border: "2px solid #ef4444",
-                    background: "#fff7f7",
-                  }}
+                  style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7" }}
                   title={payBlockLabelFromKey(b.blockKey)}
                   onClick={() => {
                     const dt = parseISOInput(b.blockKey);
@@ -1980,7 +1952,7 @@ export default function HistoriqueEmploye({
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
                   ✅ Clique un nom pour ouvrir le détail.<br />
                   ✅ La note s’écrit directement ici (autosave).<br />
-                  ✅ La réponse employé apparaît en bulle jaune — coche <b>Vu</b> pour enlever l’alerte (même si elle est dans un autre bloc).
+                  ✅ La réponse employé apparaît en bulle jaune — coche <b>Vu</b> pour enlever l’alerte.
                 </div>
               </div>
 
@@ -2034,13 +2006,9 @@ export default function HistoriqueEmploye({
                       const replyAtMs = Number(replyMeta?.[r.id]?.atMs || 0) || 0;
 
                       const hasReply = !!reply;
-                      const seen = hasReply
-                        ? isReplySeen(r.id, payBlockKey, replyAtMs)
-                        : true;
+                      const seen = hasReply ? isReplySeen(r.id, payBlockKey, replyAtMs) : true;
 
-                      const globalUnseenForEmp = adminAlertList.find(
-                        (x) => x.empId === r.id
-                      );
+                      const globalUnseenForEmp = adminAlertList.find((x) => x.empId === r.id);
 
                       return (
                         <tr key={r.id}>
@@ -2061,9 +2029,7 @@ export default function HistoriqueEmploye({
                             >
                               {r.nom}
                             </a>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                              {r.email || ""}
-                            </div>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{r.email || ""}</div>
 
                             {globalUnseenForEmp ? (
                               <div style={{ marginTop: 6 }}>
@@ -2142,9 +2108,7 @@ export default function HistoriqueEmploye({
                                     <input
                                       type="checkbox"
                                       checked={seen}
-                                      onChange={(e) => {
-                                        setReplySeen(r.id, payBlockKey, replyAtMs, e.target.checked);
-                                      }}
+                                      onChange={(e) => setReplySeen(r.id, payBlockKey, replyAtMs, e.target.checked)}
                                     />
                                     Vu
                                     {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
@@ -2207,18 +2171,11 @@ export default function HistoriqueEmploye({
                 </div>
               </div>
 
+              {/* ✅ Taux + Vacances */}
               <Card>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    flexWrap: "wrap",
-                    alignItems: "end",
-                  }}
-                >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
                   <div style={{ display: "grid", gap: 6 }}>
-                    <div style={{ fontWeight: 1000 }}>Taux horaire</div>
+                    <div style={{ fontWeight: 1000 }}>Paramètres paie</div>
                     <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
                       Modifiable par admin seulement.
                     </div>
@@ -2229,12 +2186,7 @@ export default function HistoriqueEmploye({
                       <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>Taux ($/h)</div>
                       <input
                         value={rateDraftValue(detailEmpId, detailEmp?.tauxHoraire)}
-                        onChange={(e) =>
-                          setRateDrafts((p) => ({
-                            ...(p || {}),
-                            [detailEmpId]: e.target.value,
-                          }))
-                        }
+                        onChange={(e) => setRateDrafts((p) => ({ ...(p || {}), [detailEmpId]: e.target.value }))}
                         placeholder="0,00"
                         style={{
                           border: "1px solid #cbd5e1",
@@ -2247,7 +2199,24 @@ export default function HistoriqueEmploye({
                       />
                     </div>
 
-                    <Button variant="primary" onClick={() => saveRate(detailEmpId)}>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>Vacance (%)</div>
+                      <input
+                        value={vacDraftValue(detailEmpId, detailEmp?.vacancePct)}
+                        onChange={(e) => setVacDrafts((p) => ({ ...(p || {}), [detailEmpId]: e.target.value }))}
+                        placeholder="0"
+                        style={{
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 10,
+                          padding: "10px 12px",
+                          fontWeight: 900,
+                          textAlign: "right",
+                          width: 140,
+                        }}
+                      />
+                    </div>
+
+                    <Button variant="primary" onClick={() => saveRateAndVac(detailEmpId)}>
                       Sauver
                     </Button>
                   </div>
@@ -2293,29 +2262,14 @@ export default function HistoriqueEmploye({
                         resize: "vertical",
                       }}
                     />
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 10,
-                        flexWrap: "wrap",
-                        alignItems: "center",
-                        marginTop: 10,
-                      }}
-                    >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
                       <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
-                        Bloc: {payBlockLabel} • Clé: {payBlockKey}
+                        Bloc: {getPPFromPayBlockStart(payPeriodStart).pp} • {payBlockLabel} • Clé: {payBlockKey}
                       </div>
 
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                         {statusLabel(detailEmpId) ? (
-                          <span
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 900,
-                              color: noteStatus?.[detailEmpId]?.err ? "#b91c1c" : "#166534",
-                            }}
-                          >
+                          <span style={{ fontSize: 12, fontWeight: 900, color: noteStatus?.[detailEmpId]?.err ? "#b91c1c" : "#166534" }}>
                             {statusLabel(detailEmpId)}
                           </span>
                         ) : null}
@@ -2330,7 +2284,6 @@ export default function HistoriqueEmploye({
                       </div>
                     </div>
 
-                    {/* réponse employé (bloc courant) + Vu */}
                     {String(repliesFS?.[detailEmpId] || "").trim() ? (
                       <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
                         <div style={replyBubbleInline}>{String(repliesFS?.[detailEmpId] || "")}</div>
@@ -2353,9 +2306,7 @@ export default function HistoriqueEmploye({
                               <input
                                 type="checkbox"
                                 checked={seen}
-                                onChange={(e) =>
-                                  setReplySeen(detailEmpId, payBlockKey, replyAtMs, e.target.checked)
-                                }
+                                onChange={(e) => setReplySeen(detailEmpId, payBlockKey, replyAtMs, e.target.checked)}
                               />
                               Vu
                               {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}

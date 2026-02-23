@@ -12,6 +12,7 @@ import PageMateriels from "./PageMateriels";
 import PageReglages from "./PageReglages";
 import PageReglagesAdmin from "./PageReglagesAdmin";
 import HistoriqueEmploye from "./HistoriqueEmploye";
+import FeuilleDepensesExcel from "./FeuilleDepensesExcel";
 
 // ✅ AJOUT: page test OCR
 import Test from "./Test";
@@ -162,6 +163,11 @@ export default function App() {
     if (route === "test-ocr" && !isAdmin) {
       window.location.hash = "#/accueil";
     }
+
+    // ✅ protéger la feuille dépenses (admin-only)
+    if (route === "feuille-depenses" && !isAdmin) {
+      window.location.hash = "#/accueil";
+    }
   }, [route, meLoading, isAdmin]);
 
   const handleLogout = async () => {
@@ -273,6 +279,9 @@ export default function App() {
     // ✅ Heures de travail visible pour tout le monde
     { key: "historique", label: isAdmin ? "Heures de travail" : "Mes heures" },
 
+    // ✅ Feuille dépenses (admin-only)
+    ...(isAdmin ? [{ key: "feuille-depenses", label: "Feuille dépenses" }] : []),
+
     // ✅ Test OCR (admin-only)
     ...(isAdmin ? [{ key: "test-ocr", label: "Test OCR" }] : []),
   ];
@@ -283,6 +292,7 @@ export default function App() {
     "materiels",
     "reglages",
     "historique",
+    "feuille-depenses",
     "reglages-admin",
     "test-ocr",
   ];
@@ -373,6 +383,9 @@ export default function App() {
       {/* ✅ on passe isAdmin + meEmpId */}
       {route === "historique" && (
         <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />
+      )}
+      {route === "feuille-depenses" && (
+        <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />
       )}
 
       {route === "test-ocr" && <Test />}
