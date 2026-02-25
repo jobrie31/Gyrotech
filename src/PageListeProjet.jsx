@@ -50,6 +50,11 @@
 // - La note n'apparaît PAS dans le tableau
 // - ✅ MODIF (2026-02-04): Dans Détails, PLUS de bouton Modifier.
 //   → Tu modifies DIRECTEMENT dans la popup (infos + notes). Sauvegarde auto (debounce).
+//
+// ✅ FIX (2026-02-25):
+// - ✅ BÉTON: le temps "questionnaire" est TOUJOURS un segment FERMÉ dans le projet (start->save time)
+// - ✅ puis on ouvre immédiatement un segment "travail projet" (continuité sans arrêt)
+// - ✅ les segments employé/projet utilisent le MÊME docId (link 1:1) pour éviter tout mismatch
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -69,6 +74,7 @@ import {
   where,
   getDoc,
   setDoc,
+  writeBatch, // ✅ NEW
 } from "firebase/firestore";
 import { ref as storageRef, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
 
@@ -200,28 +206,6 @@ async function ensureEmpDay(empId, key) {
   }
   return ref;
 }
-async function hasOpenEmpSeg(empId, key) {
-  const qOpen = query(empSegCol(empId, key), where("end", "==", null), limit(1));
-  const snap = await getDocs(qOpen);
-  return !snap.empty;
-}
-async function openEmpSeg(empId, key, jobId, jobName, startDate) {
-  const now = new Date();
-  await addDoc(empSegCol(empId, key), {
-    jobId: jobId || null,
-    jobName: jobName || null,
-    start: startDate || now,
-    end: null,
-    createdAt: now,
-    updatedAt: now,
-    source: "create_projet_questionnaire",
-  });
-
-  const dref = empDayRef(empId, key);
-  const ds = await getDoc(dref);
-  const d = ds.data() || {};
-  if (!d.start) await updateDoc(dref, { start: startDate || now, updatedAt: now });
-}
 
 /* ---------------------- ✅ Timecards helpers (Projets) ---------------------- */
 function projDayRef(projId, key) {
@@ -239,22 +223,111 @@ async function ensureProjDay(projId, key) {
   }
   return ref;
 }
-async function openProjSeg(projId, empId, empName, key, startDate) {
-  const now = new Date();
-  await addDoc(projSegCol(projId, key), {
-    empId,
-    empName: empName ?? null,
-    start: startDate || now,
-    end: null,
+
+/* ---------------------- ✅ BÉTON: questionnaire fermé + ouverture projet continue ---------------------- */
+/**
+ * Objectif:
+ * - Segment "questionnaire" TOUJOURS FERMÉ (end != null) côté EMPLOYÉ ET PROJET
+ * - Puis segment "travail projet" ouvert immédiatement (continuité)
+ * - Les deux côtés partagent les MÊMES docIds pour éliminer tout mismatch / recherche fragile
+ */
+async function createQuestionnaireAndOpenWorkSegments({
+  empId,
+  empName,
+  projId,
+  projName,
+  startDate, // début questionnaire (pendingNewProjStartMs)
+}) {
+  if (!empId || !projId) return;
+
+  const now = new Date(); // moment "Enregistrer"
+  const qStart = startDate instanceof Date ? startDate : new Date(startDate || now);
+  const qEnd = now;
+
+  const day = dayKey(qStart);
+
+  // ensure day docs existent
+  await ensureEmpDay(empId, day);
+  await ensureProjDay(projId, day);
+
+  const batch = writeBatch(db);
+
+  // --- doc day employé: start si vide, end=null (car on va ouvrir un segment de travail)
+  const edRef = empDayRef(empId, day);
+  const edSnap = await getDoc(edRef);
+  const ed = edSnap.data() || {};
+  if (!ed.start) batch.update(edRef, { start: qStart, end: null, updatedAt: now });
+  else batch.update(edRef, { end: null, updatedAt: now });
+
+  // --- doc day projet: start si vide, end=null (car on va ouvrir un segment de travail)
+  const pdRef = projDayRef(projId, day);
+  const pdSnap = await getDoc(pdRef);
+  const pd = pdSnap.data() || {};
+  if (!pd.start) batch.update(pdRef, { start: qStart, end: null, updatedAt: now });
+  else batch.update(pdRef, { end: null, updatedAt: now });
+
+  // 1) Segment questionnaire (FERMÉ) — même id côté employé & projet
+  const qEmpId = doc(empSegCol(empId, day)).id;
+  const qEmpRef = doc(db, "employes", empId, "timecards", day, "segments", qEmpId);
+  const qProjRef = doc(db, "projets", projId, "timecards", day, "segments", qEmpId);
+
+  const questionnairePayloadEmp = {
+    jobId: `proj:${projId}`,
+    jobName: projName || null,
+    start: qStart,
+    end: qEnd,
     createdAt: now,
     updatedAt: now,
     source: "create_projet_questionnaire",
-  });
+    phase: "questionnaire",
+  };
 
-  const dref = projDayRef(projId, key);
-  const ds = await getDoc(dref);
-  const d = ds.data() || {};
-  if (!d.start) await updateDoc(dref, { start: startDate || now, updatedAt: now });
+  const questionnairePayloadProj = {
+    empId,
+    empName: empName ?? null,
+    start: qStart,
+    end: qEnd,
+    createdAt: now,
+    updatedAt: now,
+    source: "create_projet_questionnaire",
+    phase: "questionnaire",
+  };
+
+  batch.set(qEmpRef, questionnairePayloadEmp);
+  batch.set(qProjRef, questionnairePayloadProj);
+
+  // 2) Segment travail PROJET (OUVERT) — même id côté employé & projet
+  const wEmpId = doc(empSegCol(empId, day)).id;
+  const wEmpRef = doc(db, "employes", empId, "timecards", day, "segments", wEmpId);
+  const wProjRef = doc(db, "projets", projId, "timecards", day, "segments", wEmpId);
+
+  const workStart = qEnd; // continuité parfaite
+  const workPayloadEmp = {
+    jobId: `proj:${projId}`,
+    jobName: projName || null,
+    start: workStart,
+    end: null,
+    createdAt: now,
+    updatedAt: now,
+    source: "create_projet_after_questionnaire",
+    phase: "travail",
+  };
+
+  const workPayloadProj = {
+    empId,
+    empName: empName ?? null,
+    start: workStart,
+    end: null,
+    createdAt: now,
+    updatedAt: now,
+    source: "create_projet_after_questionnaire",
+    phase: "travail",
+  };
+
+  batch.set(wEmpRef, workPayloadEmp);
+  batch.set(wProjRef, workPayloadProj);
+
+  await batch.commit();
 }
 
 /* ---------------------- ✅ DEPUNCH travailleurs (fermeture projet) ---------------------- */
@@ -1874,28 +1947,26 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
           createdByEmpName: creator?.empName || null,
         });
 
+        // ✅ BÉTON: questionnaire fermé + ouverture projet (continuité) côté employé/projet
         if (creator?.empId) {
           const startMs = Number(createStartMsRef.current || Date.now());
           const startDate = new Date(Number.isFinite(startMs) ? startMs : Date.now());
-          const key = dayKey(startDate);
 
-          await ensureEmpDay(creator.empId, key);
-          const alreadyOpen = await hasOpenEmpSeg(creator.empId, key);
+          await createQuestionnaireAndOpenWorkSegments({
+            empId: creator.empId,
+            empName: creator.empName || null,
+            projId: docRef.id,
+            projName: cleanNom,
+            startDate,
+          });
 
-          if (!alreadyOpen) {
-            await ensureProjDay(docRef.id, key);
-
-            await openEmpSeg(creator.empId, key, `proj:${docRef.id}`, cleanNom, startDate);
-            await openProjSeg(docRef.id, creator.empId, creator.empName || null, key, startDate);
-
-            try {
-              await updateDoc(doc(db, "employes", creator.empId), {
-                lastProjectId: docRef.id,
-                lastProjectName: cleanNom,
-                lastProjectUpdatedAt: new Date(),
-              });
-            } catch {}
-          }
+          try {
+            await updateDoc(doc(db, "employes", creator.empId), {
+              lastProjectId: docRef.id,
+              lastProjectName: cleanNom,
+              lastProjectUpdatedAt: new Date(),
+            });
+          } catch {}
         }
 
         try {
@@ -2595,10 +2666,10 @@ const btnTrash = {
 
 const btnAccueil = {
   border: "1px solid #eab308",
-  background: "#fde047",      // jaune
+  background: "#fde047", // jaune
   color: "#111827",
   borderRadius: 14,
-  padding: "12px 18px",       // assez gros
+  padding: "12px 18px", // assez gros
   cursor: "pointer",
   fontWeight: 1000,
   fontSize: 18,

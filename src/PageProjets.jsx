@@ -4,6 +4,12 @@
 // - useSessionsP garde _ref
 // - usePresenceTodayP auto-close segments projet orphelins (grace 60s)
 //   => garantit que l'historique projet ne dépasse jamais l'employé
+//
+// ✅ FIX (2026-02-25) "béton":
+// - Orphan check: on tente d'abord de matcher le segment EMPLOYÉ par **docId identique**
+//   employes/{empId}/timecards/{day}/segments/{segId}
+//   -> si le seg employé n'existe pas / est fermé => on ferme le seg projet
+//   -> fallback sur l'ancien query (end==null & jobId==proj:...) si besoin
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage } from "./firebaseConfig";
@@ -99,6 +105,9 @@ function empDayRef(empId, key) {
 function empSegCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
+function empSegRef(empId, key, segId) {
+  return doc(db, "employes", empId, "timecards", key, "segments", segId);
+}
 async function ensureEmpDay(empId, key) {
   const ref = empDayRef(empId, key);
   const snap = await getDoc(ref);
@@ -130,6 +139,24 @@ async function empHasOpenJob(empId, key, jobId) {
   return !snap.empty;
 }
 
+/* ✅ NEW: check béton par docId segment (si on a segId) */
+async function empHasOpenBySegId(empId, key, segId, expectedJobId) {
+  if (!empId || !key || !segId) return { ok: false, result: false };
+  try {
+    const s = await getDoc(empSegRef(empId, key, segId));
+    if (!s.exists()) return { ok: true, result: false };
+    const d = s.data() || {};
+    if (expectedJobId && String(d.jobId || "") !== String(expectedJobId || "")) {
+      // segId existe mais pas le bon job (rare) -> considérer comme "pas open"
+      return { ok: true, result: false };
+    }
+    return { ok: true, result: d.end == null };
+  } catch (e) {
+    // lecture échouée -> on dira "pas ok", fallback sur query
+    return { ok: false, result: false };
+  }
+}
+
 async function depunchWorkersOnProject(projId) {
   if (!projId) return;
   const now = new Date();
@@ -141,9 +168,7 @@ async function depunchWorkersOnProject(projId) {
     daysSnap.forEach((d) => dayIds.push(d.id));
 
     for (const key of dayIds) {
-      const segsOpenSnap = await getDocs(
-        query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null))
-      );
+      const segsOpenSnap = await getDocs(query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null)));
       const tasks = [];
       segsOpenSnap.forEach((sdoc) => tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now })));
       if (tasks.length) await Promise.all(tasks);
@@ -339,12 +364,23 @@ function usePresenceTodayP(projId, setError) {
           if (age < GRACE_MS) continue;
         }
 
-        let still = false;
+        // ✅ 1) Match béton par docId côté employé (seg.id)
+        let still = null;
         try {
-          still = await empHasOpenJob(empId, key, jobId);
-        } catch (e) {
-          console.error(e);
-          continue; // ✅ si lecture échoue, on ne ferme pas
+          const byId = await empHasOpenBySegId(empId, key, seg.id, jobId);
+          if (byId.ok) {
+            still = byId.result;
+          }
+        } catch {}
+
+        // ✅ 2) Fallback ancien (query)
+        if (still == null) {
+          try {
+            still = await empHasOpenJob(empId, key, jobId);
+          } catch (e) {
+            console.error(e);
+            continue; // si lecture échoue, on ne ferme pas
+          }
         }
 
         if (!still) {
@@ -504,7 +540,6 @@ function PDFButton({ count, onClick, title = "PDF du projet", style, children })
 }
 
 /* ---------------------- ✅ Popup HISTORIQUE Projet ---------------------- */
-/* (inchangé) */
 function PopupHistoriqueProjet({ open, onClose, projet }) {
   const [error, setError] = useState(null);
   const [histRows, setHistRows] = useState([]);
@@ -706,7 +741,6 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
 }
 
 /* ---------------------- Popup PDF Manager ---------------------- */
-/* (inchangé) */
 function PopupPDFManager({ open, onClose, projet }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -919,7 +953,6 @@ function PopupPDFManager({ open, onClose, projet }) {
 }
 
 /* ---------------------- Popup fermeture BT ---------------------- */
-/* (inchangé) */
 function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
   if (!open || !projet) return null;
 
@@ -1005,7 +1038,6 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
 }
 
 /* ---------------------- ✅ helper: patch projet (compat nom=clientNom) ---------------------- */
-/* (inchangé) */
 async function updateProjetPatch(projId, patch) {
   if (!projId) return;
   const p = { ...(patch || {}) };
@@ -1033,7 +1065,6 @@ async function updateProjetPatch(projId, patch) {
 }
 
 /* ---------------------- Popup Détails (édition directe + auto-save) ---------------------- */
-/* (inchangé) */
 function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMateriel, onCloseBT, onOpenHistorique }) {
   const projId = projet?.id || null;
 
@@ -1128,21 +1159,9 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
   const p = live || projet;
   const title = p.clientNom || p.nom || "—";
 
-  const inputInline = {
-    ...input,
-    fontSize: 16,
-    fontWeight: 900,
-    padding: "9px 10px",
-    borderRadius: 12,
-  };
-
+  const inputInline = { ...input, fontSize: 16, fontWeight: 900, padding: "9px 10px", borderRadius: 12 };
   const labelMini = { fontSize: 13, fontWeight: 1000, color: "#334155", marginBottom: 4 };
-
-  const infoGrid = {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 10,
-  };
+  const infoGrid = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 };
 
   return (
     <div
@@ -1173,11 +1192,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>Détails – {title}</div>
-          <button
-            onClick={onClose}
-            title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}
-          >
+          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}>
             ×
           </button>
         </div>
@@ -1302,21 +1317,12 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #d1d5db" }}>
               <div style={{ fontWeight: 1000 }}>
                 Temps estimé:{" "}
-                <span style={{ fontWeight: 900 }}>
-                  {p.tempsEstimeHeures != null ? `${fmtHours(p.tempsEstimeHeures)} h` : "—"}
-                </span>
+                <span style={{ fontWeight: 900 }}>{p.tempsEstimeHeures != null ? `${fmtHours(p.tempsEstimeHeures)} h` : "—"}</span>
               </div>
             </div>
 
             {(saving || saveMsg) && (
-              <div
-                style={{
-                  marginTop: 10,
-                  fontSize: 14,
-                  fontWeight: 1000,
-                  color: saveMsg.startsWith("❌") ? "#b91c1c" : "#166534",
-                }}
-              >
+              <div style={{ marginTop: 10, fontSize: 14, fontWeight: 1000, color: saveMsg.startsWith("❌") ? "#b91c1c" : "#166534" }}>
                 {saving ? "⏳ Sauvegarde..." : saveMsg}
               </div>
             )}
@@ -1353,13 +1359,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
                   commitPatchDebounced({ note: v });
                 }}
                 placeholder="Écris les notes ici…"
-                style={{
-                  ...inputInline,
-                  minHeight: 120,
-                  resize: "vertical",
-                  whiteSpace: "pre-wrap",
-                  fontWeight: 800,
-                }}
+                style={{ ...inputInline, minHeight: 120, resize: "vertical", whiteSpace: "pre-wrap", fontWeight: 800 }}
               />
             </div>
           </div>
@@ -1580,9 +1580,7 @@ export default function PageProjets({ onOpenMaterial }) {
 
       <PopupPDFManager open={pdfMgr.open} onClose={closePDF} projet={pdfMgr.projet} />
 
-      {materialProjId && (
-        <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={() => {}} />
-      )}
+      {materialProjId && <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={() => {}} />}
 
       <PopupHistoriqueProjet open={hist.open} onClose={closeHistorique} projet={hist.projet} />
 

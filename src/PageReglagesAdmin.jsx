@@ -174,7 +174,7 @@ export default function PageReglagesAdmin() {
   const [factureError, setFactureError] = useState(null);
   const [factureSaved, setFactureSaved] = useState(false);
 
-  // ✅ NEW: emails destinataires facture (admin)
+  // ✅ emails destinataires facture (admin)
   const [invoiceToRaw, setInvoiceToRaw] = useState("jlabrie@styro.ca");
   const [invoiceEmailLoading, setInvoiceEmailLoading] = useState(true);
   const [invoiceEmailError, setInvoiceEmailError] = useState("");
@@ -239,7 +239,10 @@ export default function PageReglagesAdmin() {
         if (snap.exists()) {
           const data = snap.data() || {};
           const arr = Array.isArray(data.invoiceTo) ? data.invoiceTo : parseEmails(data.invoiceTo || "");
-          const txt = (arr || []).map((e) => String(e || "").trim()).filter(Boolean).join("\n");
+          const txt = (arr || [])
+            .map((e) => String(e || "").trim())
+            .filter(Boolean)
+            .join("\n");
           if (txt) setInvoiceToRaw(txt);
         }
       } catch (e) {
@@ -276,7 +279,7 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  // ✅ NEW: save invoice recipients
+  // ✅ save invoice recipients
   const saveInvoiceEmails = async () => {
     if (!canUseAdminPage) return;
     try {
@@ -389,8 +392,8 @@ export default function PageReglagesAdmin() {
   const onDelEmploye = async (id, nom) => {
     if (!canUseAdminPage) return;
 
-    const label = nom || "cet employé ";
-    if (!window.confirm(`Supprimer définitivement ${label} ? (Le punch / historique lié ne sera plus visible dans l'application.)`)) return;
+    const labelX = nom || "cet employé ";
+    if (!window.confirm(`Supprimer définitivement ${labelX} ? (Le punch / historique lié ne sera plus visible dans l'application.)`)) return;
     try {
       await deleteDoc(doc(db, "employes", id));
     } catch (e) {
@@ -566,7 +569,10 @@ export default function PageReglagesAdmin() {
     setTimeRowEdits(initial);
   }, [timeSegments]);
 
-  const displayedSegments = useMemo(() => (timeEmpId ? timeSegments.filter((s) => s.empId === timeEmpId) : timeSegments), [timeSegments, timeEmpId]);
+  const displayedSegments = useMemo(
+    () => (timeEmpId ? timeSegments.filter((s) => s.empId === timeEmpId) : timeSegments),
+    [timeSegments, timeEmpId]
+  );
 
   const updateRowEdit = (id, field, value) => {
     setTimeRowEdits((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }));
@@ -579,40 +585,54 @@ export default function PageReglagesAdmin() {
     return [s, `other:${s}`, `autre:${s}`, `autres:${s}`];
   }
 
+  // ✅ NEW (2026-02-25): match béton par docId quand possible
   async function findEmployeeSegmentForJob(seg, dateKey, jobType, jobId) {
-    if (!seg.empId || !jobId || !dateKey) return null;
+    if (!seg?.empId || !jobId || !dateKey) return null;
 
-    const empSegCol = collection(db, "employes", seg.empId, "timecards", dateKey, "segments");
-    const snap = await getDocs(empSegCol);
-    if (snap.empty) return null;
+    // 1) ✅ Tentative direct: même docId (recommandé)
+    try {
+      const directRef = doc(db, "employes", seg.empId, "timecards", dateKey, "segments", seg.id);
+      const s = await getDoc(directRef);
+      if (s.exists()) return directRef;
+    } catch {}
 
-    const targetStartMs = toMillis(seg.start);
-    const allowed = new Set(normalizeJobIdForEmpMatch(jobType, jobId));
+    // 2) Fallback ancien: heuristique jobId + start proche
+    try {
+      const empSegCol = collection(db, "employes", seg.empId, "timecards", dateKey, "segments");
+      const snap = await getDocs(empSegCol);
+      if (snap.empty) return null;
 
-    let candidates = [];
-    snap.forEach((d) => {
-      const data = d.data() || {};
-      const jid = String(data.jobId || "").trim();
-      if (allowed.has(jid)) candidates.push({ ref: d.ref, startMs: toMillis(data.start) });
-    });
+      const targetStartMs = toMillis(seg.start);
+      const allowed = new Set(normalizeJobIdForEmpMatch(jobType, jobId));
 
-    if (candidates.length === 0) {
+      let candidates = [];
       snap.forEach((d) => {
         const data = d.data() || {};
-        candidates.push({ ref: d.ref, startMs: toMillis(data.start) });
+        const jid = String(data.jobId || "").trim();
+        if (allowed.has(jid)) candidates.push({ ref: d.ref, startMs: toMillis(data.start) });
       });
-    }
 
-    let bestRef = null;
-    let bestDiff = Infinity;
-    for (const c of candidates) {
-      const diff = Math.abs((c.startMs || 0) - (targetStartMs || 0));
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestRef = c.ref;
+      if (candidates.length === 0) {
+        snap.forEach((d) => {
+          const data = d.data() || {};
+          candidates.push({ ref: d.ref, startMs: toMillis(data.start) });
+        });
       }
+
+      let bestRef = null;
+      let bestDiff = Infinity;
+      for (const c of candidates) {
+        const diff = Math.abs((c.startMs || 0) - (targetStartMs || 0));
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestRef = c.ref;
+        }
+      }
+      return bestRef;
+    } catch (e) {
+      console.error("findEmployeeSegmentForJob fallback error", e);
+      return null;
     }
-    return bestRef;
   }
 
   const saveSegment = async (seg) => {
@@ -743,31 +763,69 @@ export default function PageReglagesAdmin() {
               if (segData.end) continue;
 
               const jobIdRaw = segData.jobId;
-              const startTs = segData.start;
+              const parsed = parseJobKind(jobIdRaw);
 
+              // ✅ fermer côté employé
               await updateDoc(segDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
               countSegs++;
 
-              if (jobIdRaw && startTs) {
-                const parsed = parseJobKind(jobIdRaw);
+              // ✅ fermer côté job — NOUVEAU: match direct par docId (bÉTON), sinon fallback start==startTs
+              if (jobIdRaw) {
+                if (parsed.kind === "projet" && parsed.id) {
+                  const directRef = doc(db, "projets", parsed.id, "timecards", dKey, "segments", segDoc.id);
+                  try {
+                    const s = await getDoc(directRef);
+                    if (s.exists()) {
+                      await updateDoc(directRef, { end: endTime, updatedAt: serverTimestamp() });
+                      continue;
+                    }
+                  } catch {}
 
-                if (parsed.kind === "projet") {
-                  const projSegCol = collection(db, "projets", parsed.id, "timecards", dKey, "segments");
-                  const qProj = query(projSegCol, where("empId", "==", empId), where("start", "==", startTs));
-                  const projSnap = await getDocs(qProj);
-                  for (const pDoc of projSnap.docs) await updateDoc(pDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
-                } else if (parsed.kind === "autre") {
-                  const otherSegCol = collection(db, "autresProjets", parsed.id, "timecards", dKey, "segments");
-                  const qOther = query(otherSegCol, where("empId", "==", empId), where("start", "==", startTs));
-                  const otherSnap = await getDocs(qOther);
-                  for (const oDoc of otherSnap.docs) await updateDoc(oDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
+                  // fallback ancien
+                  try {
+                    const startTs = segData.start;
+                    if (startTs) {
+                      const projSegCol = collection(db, "projets", parsed.id, "timecards", dKey, "segments");
+                      const qProj = query(projSegCol, where("empId", "==", empId), where("start", "==", startTs));
+                      const projSnap = await getDocs(qProj);
+                      for (const pDoc of projSnap.docs) await updateDoc(pDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
+                    }
+                  } catch (e) {
+                    console.error("massDepunch project fallback error", e);
+                  }
+                } else if (parsed.kind === "autre" && parsed.id) {
+                  const directRef = doc(db, "autresProjets", parsed.id, "timecards", dKey, "segments", segDoc.id);
+                  try {
+                    const s = await getDoc(directRef);
+                    if (s.exists()) {
+                      await updateDoc(directRef, { end: endTime, updatedAt: serverTimestamp() });
+                      continue;
+                    }
+                  } catch {}
+
+                  // fallback ancien
+                  try {
+                    const startTs = segData.start;
+                    if (startTs) {
+                      const otherSegCol = collection(db, "autresProjets", parsed.id, "timecards", dKey, "segments");
+                      const qOther = query(otherSegCol, where("empId", "==", empId), where("start", "==", startTs));
+                      const otherSnap = await getDocs(qOther);
+                      for (const oDoc of otherSnap.docs) await updateDoc(oDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
+                    }
+                  } catch (e) {
+                    console.error("massDepunch autres fallback error", e);
+                  }
                 }
               }
             }
           }
 
           window.localStorage?.setItem("massDepunchLastDate", dKey);
-          setMassDepunchMsg(countSegs ? `Dé-punch auto terminé : ${countSegs} punch(s) fermés à 17h.` : "Dé-punch auto : aucun punch ouvert trouvé pour aujourd'hui.");
+          setMassDepunchMsg(
+            countSegs
+              ? `Dé-punch auto terminé : ${countSegs} punch(s) fermés à 17h.`
+              : "Dé-punch auto : aucun punch ouvert trouvé pour aujourd'hui."
+          );
         }
       } catch (e) {
         console.error(e);
@@ -1022,7 +1080,18 @@ export default function PageReglagesAdmin() {
       <section style={section}>
         <h3 style={h3Bold}>Gestion du temps (admin)</h3>
         {massDepunchMsg && (
-          <div style={{ marginBottom: 8, padding: 6, borderRadius: 8, background: "#ecfdf3", border: "1px solid #bbf7d0", fontSize: 12, color: "#166534", fontWeight: 800 }}>
+          <div
+            style={{
+              marginBottom: 8,
+              padding: 6,
+              borderRadius: 8,
+              background: "#ecfdf3",
+              border: "1px solid #bbf7d0",
+              fontSize: 12,
+              color: "#166534",
+              fontWeight: 800,
+            }}
+          >
             {massDepunchMsg}
           </div>
         )}
@@ -1116,10 +1185,20 @@ export default function PageReglagesAdmin() {
                       return (
                         <tr key={seg.id}>
                           <td style={tdTime}>
-                            <input type="time" value={edit.startTime || ""} onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)} style={{ ...input, width: 110, padding: "4px 6px" }} />
+                            <input
+                              type="time"
+                              value={edit.startTime || ""}
+                              onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)}
+                              style={{ ...input, width: 110, padding: "4px 6px" }}
+                            />
                           </td>
                           <td style={tdTime}>
-                            <input type="time" value={edit.endTime || ""} onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)} style={{ ...input, width: 110, padding: "4px 6px" }} />
+                            <input
+                              type="time"
+                              value={edit.endTime || ""}
+                              onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)}
+                              style={{ ...input, width: 110, padding: "4px 6px" }}
+                            />
                           </td>
                           <td style={tdTime}>{empName}</td>
                           <td style={tdTime}>
@@ -1128,6 +1207,7 @@ export default function PageReglagesAdmin() {
                                 Enregistrer
                               </button>
 
+                              {/* ✅ on garde Supprimer seulement pour Projet (comme tu avais) */}
                               {timeJobType === "projet" && (
                                 <button type="button" onClick={() => deleteSegment(seg)} disabled={timeLoading} style={btnDangerSmall}>
                                   Supprimer
@@ -1158,7 +1238,9 @@ export default function PageReglagesAdmin() {
       {/* ===================== 2) FACTURATION ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Facturation</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>Ces informations sont utilisées en haut de la facture et pour le prix unitaire de la main-d&apos;œuvre.</div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          Ces informations sont utilisées en haut de la facture et pour le prix unitaire de la main-d&apos;œuvre.
+        </div>
 
         {factureError && <div style={alertErr}>{factureError}</div>}
         {factureSaved && !factureError && <div style={alertOk}>Réglages de facturation enregistrés.</div>}
@@ -1188,7 +1270,12 @@ export default function PageReglagesAdmin() {
 
           <div style={{ maxWidth: 260 }}>
             <label style={label}>Taux horaire (main-d&apos;œuvre)</label>
-            <input value={factureTauxHoraire} onChange={(e) => setFactureTauxHoraire(e.target.value)} inputMode="decimal" style={{ ...input, width: "100%" }} />
+            <input
+              value={factureTauxHoraire}
+              onChange={(e) => setFactureTauxHoraire(e.target.value)}
+              inputMode="decimal"
+              style={{ ...input, width: "100%" }}
+            />
           </div>
 
           <div style={{ marginTop: 4 }}>
@@ -1197,7 +1284,7 @@ export default function PageReglagesAdmin() {
             </button>
           </div>
 
-          {/* ✅ NEW: emails destinataires facture */}
+          {/* ✅ Emails destinataires facture */}
           <div style={{ marginTop: 12, borderTop: "2px solid #111", paddingTop: 10 }}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Emails — destinataires facture</div>
             <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>1 email par ligne (ou séparé par virgules).</div>
@@ -1210,7 +1297,7 @@ export default function PageReglagesAdmin() {
               onChange={(e) => setInvoiceToRaw(e.target.value)}
               rows={4}
               style={{ width: "100%", border: "2px solid #111", borderRadius: 10, padding: 10, fontWeight: 800, fontSize: 13 }}
-              placeholder="ex: jlabrie@styro.ca&#10;compta@domaine.com"
+              placeholder={"ex: jlabrie@styro.ca\ncompta@domaine.com"}
               disabled={invoiceEmailLoading}
             />
 
@@ -1229,7 +1316,12 @@ export default function PageReglagesAdmin() {
         <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "end" }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <label style={label}>Nom</label>
-            <input value={employeNomInput} onChange={(e) => setEmployeNomInput(e.target.value)} placeholder="Nom de l'employé" style={{ ...input, width: "100%" }} />
+            <input
+              value={employeNomInput}
+              onChange={(e) => setEmployeNomInput(e.target.value)}
+              placeholder="Nom de l'employé"
+              style={{ ...input, width: "100%" }}
+            />
           </div>
 
           <div style={{ flex: 1, minWidth: 260 }}>
@@ -1350,13 +1442,27 @@ export default function PageReglagesAdmin() {
                 return (
                   <tr key={r.id}>
                     <td style={tdTime}>
-                      <input value={edit.nom ?? ""} onChange={(e) => setAutresEdit(r.id, "nom", e.target.value)} style={{ ...input, width: 320, padding: "6px 10px" }} />
+                      <input
+                        value={edit.nom ?? ""}
+                        onChange={(e) => setAutresEdit(r.id, "nom", e.target.value)}
+                        style={{ ...input, width: 320, padding: "6px 10px" }}
+                      />
                     </td>
                     <td style={tdTime}>
-                      <input value={edit.ordre ?? ""} onChange={(e) => setAutresEdit(r.id, "ordre", e.target.value)} inputMode="numeric" style={{ ...input, width: 110, padding: "6px 10px" }} />
+                      <input
+                        value={edit.ordre ?? ""}
+                        onChange={(e) => setAutresEdit(r.id, "ordre", e.target.value)}
+                        inputMode="numeric"
+                        style={{ ...input, width: 110, padding: "6px 10px" }}
+                      />
                     </td>
                     <td style={tdTime}>
-                      <input value={edit.code ?? ""} onChange={(e) => setAutresEdit(r.id, "code", e.target.value)} style={{ ...input, width: 220, padding: "6px 10px" }} placeholder="(vide = aucun code)" />
+                      <input
+                        value={edit.code ?? ""}
+                        onChange={(e) => setAutresEdit(r.id, "code", e.target.value)}
+                        style={{ ...input, width: 220, padding: "6px 10px" }}
+                        placeholder="(vide = aucun code)"
+                      />
                     </td>
                     <td style={tdTime}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
