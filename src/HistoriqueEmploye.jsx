@@ -18,6 +18,7 @@ import {
   setDoc,
   serverTimestamp,
   collectionGroup,
+  deleteField,
 } from "firebase/firestore";
 import { auth, db } from "./firebaseConfig";
 import { Card, Button, PageContainer } from "./UIPro";
@@ -54,6 +55,14 @@ function formatDateFR(d) {
 function weekdayFR(d) {
   const s = d.toLocaleDateString("fr-CA", { weekday: "long" });
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function fmtDateTimeFR(ts) {
+  if (!ts) return "—";
+  const d = ts instanceof Date ? ts : null;
+  if (!d) return "—";
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(
+    d.getHours()
+  )}:${pad2(d.getMinutes())}`;
 }
 function segCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
@@ -843,37 +852,65 @@ export default function HistoriqueEmploye({
     replyTimersRef.current = {};
   }, [payBlockKey]);
 
-  /* ===================== ✅ NON-ADMIN: "VU" NOTE (localStorage) ===================== */
-  const noteSeenKey = (empId, blockKey) => `seen_note_${empId}_${blockKey}`;
-  const getNoteSeenMs = (empId, blockKey) => {
+  /* ===================== ✅ "VU" STOCKÉ DANS FIRESTORE ===================== */
+  // - employé coche Vu sur la note admin => noteSeenByEmpAt / noteSeenByEmpBy
+  // - admin coche Vu sur la réponse employé => replySeenByAdminAt / replySeenByAdminBy
+
+  const setNoteSeenFS = async (empId, blockKey, checked) => {
+    if (!empId || !blockKey) return;
     try {
-      return Number(localStorage.getItem(noteSeenKey(empId, blockKey)) || "0") || 0;
-    } catch {
-      return 0;
+      await setDoc(
+        noteDocRef(empId, blockKey),
+        checked
+          ? {
+              noteSeenByEmpAt: serverTimestamp(),
+              noteSeenByEmpBy: user?.email || "",
+            }
+          : {
+              noteSeenByEmpAt: deleteField(),
+              noteSeenByEmpBy: deleteField(),
+            },
+        { merge: true }
+      );
+    } catch (e) {
+      setError(e?.message || String(e));
     }
   };
-  const isNoteSeen = (empId, blockKey, noteUpdatedAtMs) => {
-    const seen = getNoteSeenMs(empId, blockKey);
+
+  const setReplySeenFS = async (empId, blockKey, checked) => {
+    if (!empId || !blockKey) return;
+    try {
+      await setDoc(
+        noteDocRef(empId, blockKey),
+        checked
+          ? {
+              replySeenByAdminAt: serverTimestamp(),
+              replySeenByAdminBy: user?.email || "",
+            }
+          : {
+              replySeenByAdminAt: deleteField(),
+              replySeenByAdminBy: deleteField(),
+            },
+        { merge: true }
+      );
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  };
+
+  const isNoteSeenFS = (noteUpdatedAtMs, noteSeenAtMs) => {
     if (!noteUpdatedAtMs) return true;
+    const seen = Number(noteSeenAtMs || 0) || 0;
     return noteUpdatedAtMs <= seen;
   };
-  const setNoteSeen = (empId, blockKey, noteUpdatedAtMs, checked) => {
-    try {
-      if (!checked) localStorage.removeItem(noteSeenKey(empId, blockKey));
-      else localStorage.setItem(noteSeenKey(empId, blockKey), String(Number(noteUpdatedAtMs || Date.now()) || Date.now()));
-    } catch {}
-    window.dispatchEvent(new Event("noteSeenChanged"));
+  const isReplySeenFS = (replyAtMs, replySeenAtMs) => {
+    if (!replyAtMs) return true;
+    const seen = Number(replySeenAtMs || 0) || 0;
+    return replyAtMs <= seen;
   };
 
-  /* ===================== ✅ NON-ADMIN: ALERTES NOTES (TOUS BLOCS) ===================== */
+  /* ===================== ✅ NON-ADMIN: ALERTES NOTES (TOUS BLOCS) via Firestore ===================== */
   const [myNotesMetaByBlock, setMyNotesMetaByBlock] = useState({});
-  const [mySeenBump, setMySeenBump] = useState(0);
-
-  useEffect(() => {
-    const onSeen = () => setMySeenBump((x) => x + 1);
-    window.addEventListener("noteSeenChanged", onSeen);
-    return () => window.removeEventListener("noteSeenChanged", onSeen);
-  }, []);
 
   useEffect(() => {
     setMyNotesMetaByBlock({});
@@ -892,10 +929,14 @@ export default function HistoriqueEmploye({
         snap.forEach((d) => {
           const data = d.data() || {};
           const blockKey = d.id;
+
           const noteText = String(data.note || "").trim();
           const hasText = !!noteText;
+
           const updMs = safeToMs(data.updatedAt);
-          map[blockKey] = { updMs, hasText };
+          const seenMs = safeToMs(data.noteSeenByEmpAt);
+
+          map[blockKey] = { updMs, seenMs, hasText };
         });
         setMyNotesMetaByBlock(map);
       },
@@ -912,15 +953,15 @@ export default function HistoriqueEmploye({
     for (const blockKey of blocks) {
       const meta = myNotesMetaByBlock[blockKey] || {};
       const updMs = Number(meta.updMs || 0) || 0;
+      const seenMs = Number(meta.seenMs || 0) || 0;
       const hasText = !!meta.hasText;
       if (!hasText || !updMs) continue;
 
-      const seenMs = getNoteSeenMs(derivedMeEmpId, blockKey);
       if (updMs > seenMs) out.push({ blockKey, updMs });
     }
     out.sort((a, b) => (b.updMs || 0) - (a.updMs || 0));
     return out;
-  }, [isAdmin, myNotesMetaByBlock, derivedMeEmpId, mySeenBump]);
+  }, [isAdmin, myNotesMetaByBlock]);
 
   const myUnseenNoteCount = myUnseenNoteDocs.length;
 
@@ -967,21 +1008,33 @@ export default function HistoriqueEmploye({
         });
 
         const atMs = safeToMs(data.replyAt);
+        const replySeenAtMs = safeToMs(data.replySeenByAdminAt);
+
         setReplyMeta((p) => ({
           ...(p || {}),
           [derivedMeEmpId]: {
             by: String(data.replyBy || ""),
             at: toJSDateMaybe(data.replyAt),
             atMs,
+            // ✅ NEW (admin read receipt visible to employee)
+            seenAt: toJSDateMaybe(data.replySeenByAdminAt),
+            seenAtMs: replySeenAtMs,
+            seenBy: String(data.replySeenByAdminBy || ""),
           },
         }));
 
         const updMs = safeToMs(data.updatedAt);
+        const noteSeenAtMs = safeToMs(data.noteSeenByEmpAt);
+
         setNoteMeta((p) => ({
           ...(p || {}),
           [derivedMeEmpId]: {
             updatedAtMs: updMs,
             updatedBy: String(data.updatedBy || ""),
+            // ✅ NEW (employee read receipt visible to admin)
+            seenAt: toJSDateMaybe(data.noteSeenByEmpAt),
+            seenAtMs: noteSeenAtMs,
+            seenBy: String(data.noteSeenByEmpBy || ""),
           },
         }));
       },
@@ -1018,21 +1071,33 @@ export default function HistoriqueEmploye({
           setRepliesFS((p) => ({ ...(p || {}), [empId]: reply }));
 
           const atMs = safeToMs(data.replyAt);
+          const replySeenAtMs = safeToMs(data.replySeenByAdminAt);
+
           setReplyMeta((p) => ({
             ...(p || {}),
             [empId]: {
               by: String(data.replyBy || ""),
               at: toJSDateMaybe(data.replyAt),
               atMs,
+              // ✅ NEW
+              seenAt: toJSDateMaybe(data.replySeenByAdminAt),
+              seenAtMs: replySeenAtMs,
+              seenBy: String(data.replySeenByAdminBy || ""),
             },
           }));
 
           const updMs = safeToMs(data.updatedAt);
+          const noteSeenAtMs = safeToMs(data.noteSeenByEmpAt);
+
           setNoteMeta((p) => ({
             ...(p || {}),
             [empId]: {
               updatedAtMs: updMs,
               updatedBy: String(data.updatedBy || ""),
+              // ✅ NEW
+              seenAt: toJSDateMaybe(data.noteSeenByEmpAt),
+              seenAtMs: noteSeenAtMs,
+              seenBy: String(data.noteSeenByEmpBy || ""),
             },
           }));
 
@@ -1055,30 +1120,7 @@ export default function HistoriqueEmploye({
     };
   }, [isAdmin, unlocked, payBlockKey, employes]);
 
-  /* ===================== ✅ ADMIN: "VU" + ALERTES (TOUS BLOCS) ===================== */
-  const [adminSeenBump, setAdminSeenBump] = useState(0);
-
-  const replySeenKey = (empId, blockKey) => `seen_reply_admin_${empId}_${blockKey}`;
-  const getReplySeenMs = (empId, blockKey) => {
-    try {
-      return Number(localStorage.getItem(replySeenKey(empId, blockKey)) || "0") || 0;
-    } catch {
-      return 0;
-    }
-  };
-  const isReplySeen = (empId, blockKey, replyAtMs) => {
-    const seen = getReplySeenMs(empId, blockKey);
-    if (!replyAtMs) return true;
-    return replyAtMs <= seen;
-  };
-  const setReplySeen = (empId, blockKey, replyAtMs, checked) => {
-    try {
-      if (!checked) localStorage.removeItem(replySeenKey(empId, blockKey));
-      else localStorage.setItem(replySeenKey(empId, blockKey), String(Number(replyAtMs || Date.now()) || Date.now()));
-    } catch {}
-    setAdminSeenBump((x) => x + 1);
-  };
-
+  /* ===================== ✅ ADMIN: ALERTES (TOUS BLOCS) via Firestore ===================== */
   const [allRepliesByDoc, setAllRepliesByDoc] = useState({});
   useEffect(() => {
     if (!isAdmin || !unlocked) return;
@@ -1099,12 +1141,15 @@ export default function HistoriqueEmploye({
           const blockKey = parts?.[3] || "";
           if (!empId || !blockKey) return;
 
+          const replySeenAtMs = safeToMs(data.replySeenByAdminAt);
+
           map[`${empId}__${blockKey}`] = {
             empId,
             blockKey,
             reply,
             atMs,
             by: String(data.replyBy || ""),
+            seenAtMs: replySeenAtMs,
           };
         });
         setAllRepliesByDoc(map);
@@ -1119,9 +1164,9 @@ export default function HistoriqueEmploye({
     if (!isAdmin || !unlocked) return [];
     const arr = Object.values(allRepliesByDoc || {});
     return arr
-      .filter((x) => !isReplySeen(x.empId, x.blockKey, x.atMs))
+      .filter((x) => !isReplySeenFS(x.atMs, x.seenAtMs))
       .sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
-  }, [isAdmin, unlocked, allRepliesByDoc, adminSeenBump]);
+  }, [isAdmin, unlocked, allRepliesByDoc]);
 
   const adminUnseenReplyCount = adminAlertList.length;
 
@@ -1185,7 +1230,7 @@ export default function HistoriqueEmploye({
     if (hasVac) {
       const p = parsePercentInput(rawVac);
       if (p == null) return setError("Vacance (%) invalide. Exemple: 4 ou 4,0");
-      payload.vacancePct = p; // ✅ nouveau champ
+      payload.vacancePct = p;
     }
 
     try {
@@ -1209,9 +1254,6 @@ export default function HistoriqueEmploye({
       setError(e?.message || String(e));
     }
   };
-
-  const saveRate = async (empId) => saveRateAndVac(empId);
-  const saveVac = async (empId) => saveRateAndVac(empId);
 
   /* ===================== NON-ADMIN : seulement moi ===================== */
   const myEmpObj = useMemo(
@@ -1590,7 +1632,6 @@ export default function HistoriqueEmploye({
     </div>
   );
 
-  // ✅ remplace ton const navBar = (...) par ceci :
   const navBar = (
     <div style={navWrap}>
       <button type="button" style={bigArrowBtn} onClick={goPrevPayBlock} title="Bloc précédent">
@@ -1598,7 +1639,6 @@ export default function HistoriqueEmploye({
       </button>
 
       <div style={{ display: "grid", gap: 8, textAlign: "center", justifyItems: "center" }}>
-        {/* ✅ on enlève "Historique" + le range en double, on met juste le select PP */}
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>PP</div>
 
@@ -1628,7 +1668,6 @@ export default function HistoriqueEmploye({
           </select>
         </div>
 
-        {/* ✅ on garde Sem1 / Sem2 */}
         <div
           style={{
             display: "flex",
@@ -1663,8 +1702,16 @@ export default function HistoriqueEmploye({
     const rst = replyStatus?.[derivedMeEmpId] || {};
 
     const myNoteUpdatedAtMs = Number(noteMeta?.[derivedMeEmpId]?.updatedAtMs || 0) || 0;
+    const myNoteSeenAtMs = Number(noteMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
+
     const hasNoteText = !!String(myNote || "").trim();
-    const noteSeen = hasNoteText ? isNoteSeen(derivedMeEmpId, payBlockKey, myNoteUpdatedAtMs) : true;
+    const noteSeen = hasNoteText ? isNoteSeenFS(myNoteUpdatedAtMs, myNoteSeenAtMs) : true;
+    const noteSeenAt = noteMeta?.[derivedMeEmpId]?.seenAt || null;
+
+    const myReplyAtMs = Number(replyMeta?.[derivedMeEmpId]?.atMs || 0) || 0;
+    const myReplySeenAtMs = Number(replyMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
+    const replySeenByAdmin = myReplyAtMs ? isReplySeenFS(myReplyAtMs, myReplySeenAtMs) : true;
+    const replySeenAt = replyMeta?.[derivedMeEmpId]?.seenAt || null;
 
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
@@ -1703,7 +1750,7 @@ export default function HistoriqueEmploye({
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
-                    🚨 Alertes — notes non vues (tous blocs)
+                    🚨 Alertes — notes non vues
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
                     Clique un bloc pour naviguer directement dessus.
@@ -1742,12 +1789,8 @@ export default function HistoriqueEmploye({
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 1000, fontSize: 16 }}>
-                    {myEmpObj?.nom || "Moi"}
-                  </div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                    {user?.email || ""}
-                  </div>
+                  <div style={{ fontWeight: 1000, fontSize: 16 }}>{myEmpObj?.nom || "Moi"}</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{user?.email || ""}</div>
                 </div>
 
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1764,6 +1807,7 @@ export default function HistoriqueEmploye({
                   </span>
                 </div>
               </div>
+
               <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
                 <div>
                   <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1 — {week1Label}</div>
@@ -1815,20 +1859,22 @@ export default function HistoriqueEmploye({
                             color: noteSeen ? "#166534" : "#b91c1c",
                             userSelect: "none",
                           }}
-                          title="Coche Vu pour arrêter le flash rouge en haut"
+                          title="Coche Vu pour arrêter le flash rouge"
                         >
                           <input
                             type="checkbox"
                             checked={noteSeen}
-                            onChange={(e) => setNoteSeen(derivedMeEmpId, payBlockKey, myNoteUpdatedAtMs, e.target.checked)}
+                            onChange={(e) => setNoteSeenFS(derivedMeEmpId, payBlockKey, e.target.checked)}
                           />
                           Vu
                           {!noteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
                         </label>
 
-                        <span style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                          Bloc: {currentPPInfo.pp} • {payBlockLabel}
-                        </span>
+                        {noteSeen && noteSeenAt ? (
+                          <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                            Je l'ai vu le {fmtDateTimeFR(noteSeenAt)}
+                          </span>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -1854,6 +1900,18 @@ export default function HistoriqueEmploye({
                         resize: "vertical",
                       }}
                     />
+
+                    <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      {myReplyAtMs ? (
+                        <span style={{ fontSize: 12, fontWeight: 900, color: replySeenByAdmin ? "#166534" : "#b91c1c" }}>
+                          {replySeenByAdmin && replySeenAt ? `Admin a vu le ${fmtDateTimeFR(replySeenAt)}` : "Admin n’a pas encore vu"}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                          (Aucune réponse envoyée pour ce bloc)
+                        </span>
+                      )}
+                    </div>
 
                     {rs ? (
                       <div
@@ -1915,7 +1973,7 @@ export default function HistoriqueEmploye({
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
-                  🚨 Alertes — réponses non vues (tous blocs)
+                  🚨 Alertes — réponses non vues
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
                   Clique un bloc pour naviguer directement dessus.
@@ -1948,12 +2006,7 @@ export default function HistoriqueEmploye({
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 1000, fontSize: 16 }}>Récap (tous employés)</div>
-                <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                  ✅ Clique un nom pour ouvrir le détail.<br />
-                  ✅ La note s’écrit directement ici (autosave).<br />
-                  ✅ La réponse employé apparaît en bulle jaune — coche <b>Vu</b> pour enlever l’alerte.
-                </div>
+                <div style={{ fontWeight: 1000, fontSize: 24 }}>Heures des employés</div>
               </div>
 
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -2004,11 +2057,19 @@ export default function HistoriqueEmploye({
 
                       const reply = String(repliesFS?.[r.id] || "").trim();
                       const replyAtMs = Number(replyMeta?.[r.id]?.atMs || 0) || 0;
+                      const replySeenAtMs = Number(replyMeta?.[r.id]?.seenAtMs || 0) || 0;
+                      const replySeenAt = replyMeta?.[r.id]?.seenAt || null;
 
                       const hasReply = !!reply;
-                      const seen = hasReply ? isReplySeen(r.id, payBlockKey, replyAtMs) : true;
+                      const seen = hasReply ? isReplySeenFS(replyAtMs, replySeenAtMs) : true;
 
                       const globalUnseenForEmp = adminAlertList.find((x) => x.empId === r.id);
+
+                      const noteUpdatedAtMs = Number(noteMeta?.[r.id]?.updatedAtMs || 0) || 0;
+                      const noteSeenByEmpAtMs = Number(noteMeta?.[r.id]?.seenAtMs || 0) || 0;
+                      const noteSeenByEmpAt = noteMeta?.[r.id]?.seenAt || null;
+                      const noteHasText = !!String(getDraft(r.id) || "").trim();
+                      const noteSeenByEmp = noteHasText ? isNoteSeenFS(noteUpdatedAtMs, noteSeenByEmpAtMs) : true;
 
                       return (
                         <tr key={r.id}>
@@ -2087,6 +2148,15 @@ export default function HistoriqueEmploye({
                                     {status}
                                   </div>
                                 ) : null}
+
+                                {/* ✅ vu de l'employé sur la note (visible admin) */}
+                                {noteHasText ? (
+                                  <div style={{ marginTop: 6, fontSize: 12, fontWeight: 900, color: noteSeenByEmp ? "#166534" : "#b91c1c" }}>
+                                    {noteSeenByEmp && noteSeenByEmpAt
+                                      ? `${r.nom || "Employé"} a vu la note le ${fmtDateTimeFR(noteSeenByEmpAt)}`
+                                      : `${r.nom || "Employé"} n’a pas encore vu la note`}
+                                  </div>
+                                ) : null}
                               </div>
 
                               {reply ? (
@@ -2103,16 +2173,22 @@ export default function HistoriqueEmploye({
                                       color: seen ? "#166534" : "#b91c1c",
                                       userSelect: "none",
                                     }}
-                                    title="Coche Vu pour arrêter le flash du titre Historique Admin"
+                                    title="Coche Vu pour arrêter le flash rouge"
                                   >
                                     <input
                                       type="checkbox"
                                       checked={seen}
-                                      onChange={(e) => setReplySeen(r.id, payBlockKey, replyAtMs, e.target.checked)}
+                                      onChange={(e) => setReplySeenFS(r.id, payBlockKey, e.target.checked)}
                                     />
                                     Vu
                                     {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
                                   </label>
+
+                                  {seen && replySeenAt ? (
+                                    <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                                      Vu le {fmtDateTimeFR(replySeenAt)}
+                                    </div>
+                                  ) : null}
                                 </div>
                               ) : null}
                             </div>
@@ -2262,6 +2338,22 @@ export default function HistoriqueEmploye({
                         resize: "vertical",
                       }}
                     />
+
+                    {/* ✅ vu de l'employé sur la note (visible admin) */}
+                    {(() => {
+                      const noteText = String(getDraft(detailEmpId) || "").trim();
+                      if (!noteText) return null;
+                      const updMs = Number(noteMeta?.[detailEmpId]?.updatedAtMs || 0) || 0;
+                      const seenMs = Number(noteMeta?.[detailEmpId]?.seenAtMs || 0) || 0;
+                      const seenAt = noteMeta?.[detailEmpId]?.seenAt || null;
+                      const ok = isNoteSeenFS(updMs, seenMs);
+                      return (
+                        <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, color: ok ? "#166534" : "#b91c1c" }}>
+                          {ok && seenAt ? `Employé a vu la note le ${fmtDateTimeFR(seenAt)}` : "Employé n’a pas encore vu la note"}
+                        </div>
+                      );
+                    })()}
+
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
                       <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
                         Bloc: {getPPFromPayBlockStart(payPeriodStart).pp} • {payBlockLabel} • Clé: {payBlockKey}
@@ -2290,27 +2382,38 @@ export default function HistoriqueEmploye({
 
                         {(() => {
                           const replyAtMs = Number(replyMeta?.[detailEmpId]?.atMs || 0) || 0;
-                          const seen = isReplySeen(detailEmpId, payBlockKey, replyAtMs);
+                          const replySeenAtMs = Number(replyMeta?.[detailEmpId]?.seenAtMs || 0) || 0;
+                          const replySeenAt = replyMeta?.[detailEmpId]?.seenAt || null;
+                          const seen = isReplySeenFS(replyAtMs, replySeenAtMs);
+
                           return (
-                            <label
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: 8,
-                                fontWeight: 1000,
-                                fontSize: 12,
-                                color: seen ? "#166534" : "#b91c1c",
-                                userSelect: "none",
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={seen}
-                                onChange={(e) => setReplySeen(detailEmpId, payBlockKey, replyAtMs, e.target.checked)}
-                              />
-                              Vu
-                              {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
-                            </label>
+                            <div style={{ display: "grid", gap: 6 }}>
+                              <label
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  fontWeight: 1000,
+                                  fontSize: 12,
+                                  color: seen ? "#166534" : "#b91c1c",
+                                  userSelect: "none",
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={seen}
+                                  onChange={(e) => setReplySeenFS(detailEmpId, payBlockKey, e.target.checked)}
+                                />
+                                Vu
+                                {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
+                              </label>
+
+                              {seen && replySeenAt ? (
+                                <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                                  Vu le {fmtDateTimeFR(replySeenAt)}
+                                </div>
+                              ) : null}
+                            </div>
                           );
                         })()}
                       </div>

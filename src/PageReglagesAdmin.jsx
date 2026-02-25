@@ -1021,12 +1021,6 @@ export default function PageReglagesAdmin() {
       {/* ===================== 1) GESTION DU TEMPS ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Gestion du temps (admin)</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Choisis une date, un type (Projet / Autre tâche) et (optionnel) un employé pour voir les blocs de temps, puis les modifier. Les changements sont appliqués au job (projet/autre tâche) et à l&apos;employé.
-          <br />
-          <strong>Note:</strong> le bouton poubelle (Supprimer) est disponible seulement pour <strong>Projet</strong>.
-        </div>
-
         {massDepunchMsg && (
           <div style={{ marginBottom: 8, padding: 6, borderRadius: 8, background: "#ecfdf3", border: "1px solid #bbf7d0", fontSize: 12, color: "#166534", fontWeight: 800 }}>
             {massDepunchMsg}
@@ -1232,8 +1226,6 @@ export default function PageReglagesAdmin() {
       {/* ===================== 3) TRAVAILLEURS ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Employés</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>Ajoute un employé avec son email + un code d’activation (utilisé dans “Activer mon compte”).</div>
-
         <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "end" }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <label style={label}>Nom</label>
@@ -1319,10 +1311,6 @@ export default function PageReglagesAdmin() {
       {/* ===================== 4) AUTRES TÂCHES (ADMIN) ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Autres tâches (admin)</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Gestion de la banque “Autres tâches”. <strong>Chaque tâche peut avoir son propre code</strong> (laisser vide = aucun code).
-        </div>
-
         {autresAdminError && <div style={alertErr}>{autresAdminError}</div>}
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", marginBottom: 10 }}>

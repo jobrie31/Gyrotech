@@ -1313,7 +1313,7 @@ export default function PageAccueil() {
               <table style={styles.table}>
                 <thead>
                   <tr>
-                    {["Nom", "Total (jour)", "Projet"].map((h, i) => (
+                    {["Nom", "Jour", "Projet"].map((h, i) => (
                       <th key={i} style={{ ...styles.th, background: "#e5e7eb", color: "#111827" }}>
                         {h}
                       </th>

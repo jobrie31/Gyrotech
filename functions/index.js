@@ -1,7 +1,8 @@
 /**
- * Cloud Functions v2 – envoi de facture par courriel avec Brevo (SMTP)
- * + Activation de compte (email + code + mot de passe)
- * + ✅ Purge auto des projets fermés complètement après 60 jours (deleteAt)
+ * Cloud Functions v2 – Gyrotech
+ * - Activation de compte (email + code + mot de passe)
+ * - Envoi de facture par courriel avec Brevo (SMTP)
+ * - ✅ Auto-dépunch de TOUS les employés à 17h (America/Toronto)
  */
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -56,7 +57,6 @@ exports.activateAccount = onCall(async (request) => {
 
     // 1) Trouver l’employé par emailLower
     const q = await db.collection("employes").where("emailLower", "==", email).limit(1).get();
-
     if (q.empty) {
       throw new HttpsError(
         "not-found",
@@ -74,7 +74,9 @@ exports.activateAccount = onCall(async (request) => {
     }
 
     // 3) Vérifier le code du travailleur (✅ fallback si ancien champ)
-    const expectedCode = String(empData.activationCode ?? empData.code ?? empData.activation ?? "").trim();
+    const expectedCode = String(
+      empData.activationCode ?? empData.code ?? empData.activation ?? ""
+    ).trim();
 
     if (!expectedCode) {
       throw new HttpsError(
@@ -166,7 +168,6 @@ exports.sendInvoiceEmail = onCall(
     }
 
     const subject = String(data.subject || `Facture Gyrotech – ${projetId || "Projet"}`).trim();
-
     const text = String(
       data.text || "Bonjour, veuillez trouver ci-joint la facture de votre intervention."
     );
@@ -226,7 +227,7 @@ exports.sendInvoiceEmail = onCall(
         `Facture envoyée à ${toEmails.join(", ")} pour projet ${projetId || "(sans projetId)"} (path=${pdfPath}).`
       );
 
-      // ✅ (optionnel) Supprimer le PDF après envoi (comme avant)
+      // ✅ Supprimer le PDF après envoi (comme avant)
       try {
         await file.delete({ ignoreNotFound: true });
         logger.info(`Facture supprimée du Storage: ${pdfPath}`);
@@ -249,71 +250,166 @@ exports.sendInvoiceEmail = onCall(
 );
 
 /* =========================
-   ✅ Purge automatique des projets fermés complètement (deleteAt)
-   ========================= */
-async function deleteFilesWithPrefix(bucket, prefix) {
-  try {
-    let pageToken = undefined;
-    do {
-      const [files, , apiResponse] = await bucket.getFiles({
-        prefix,
-        autoPaginate: false,
-        maxResults: 500,
-        pageToken,
-      });
+   ✅ Auto-dépunch de tous les employés à 17h (America/Toronto)
+   =========================
+   But:
+   - Fermer TOUS les segments employé ouverts (end=null) pour aujourd'hui
+   - Fermer les segments correspondants côté projets et autres tâches
+   - Mettre employes/{empId}/timecards/{day}.end = now
+*/
 
-      if (files && files.length) {
-        await Promise.all(files.map((f) => f.delete({ ignoreNotFound: true }).catch(() => null)));
-      }
+function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
+  // YYYY-MM-DD (en-CA -> 2026-02-25)
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
 
-      pageToken = apiResponse?.nextPageToken;
-    } while (pageToken);
-  } catch (e) {
-    logger.warn(`deleteFilesWithPrefix warning (${prefix}):`, e?.message || e);
+async function commitInChunks(db, ops, chunkSize = 450) {
+  // ops: array of { ref, data }
+  for (let i = 0; i < ops.length; i += chunkSize) {
+    const batch = db.batch();
+    const slice = ops.slice(i, i + chunkSize);
+    for (const op of slice) batch.update(op.ref, op.data);
+    await batch.commit();
   }
 }
 
-exports.purgeClosedProjects = onSchedule(
+async function closeProjSegmentsForEmp(db, projId, empId, dayKey, nowTs) {
+  const segsRef = db
+    .collection("projets")
+    .doc(projId)
+    .collection("timecards")
+    .doc(dayKey)
+    .collection("segments");
+
+  const snap = await segsRef.where("empId", "==", empId).where("end", "==", null).get();
+  if (snap.empty) return 0;
+
+  const ops = snap.docs.map((d) => ({
+    ref: d.ref,
+    data: { end: nowTs, updatedAt: nowTs },
+  }));
+
+  await commitInChunks(db, ops);
+  return ops.length;
+}
+
+async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, nowTs) {
+  const segsRef = db
+    .collection("autresProjets")
+    .doc(otherId)
+    .collection("timecards")
+    .doc(dayKey)
+    .collection("segments");
+
+  const snap = await segsRef.where("empId", "==", empId).where("end", "==", null).get();
+  if (snap.empty) return 0;
+
+  const ops = snap.docs.map((d) => ({
+    ref: d.ref,
+    data: { end: nowTs, updatedAt: nowTs },
+  }));
+
+  await commitInChunks(db, ops);
+  return ops.length;
+}
+
+exports.autoDepunchAllAt17 = onSchedule(
   {
-    schedule: "every day 03:15",
+    schedule: "every day 17:00",
     timeZone: "America/Toronto",
   },
   async () => {
     const db = admin.firestore();
-    const now = admin.firestore.Timestamp.now();
-    const bucket = admin.storage().bucket();
+    const nowTs = admin.firestore.Timestamp.now();
+    const dayKey = dayKeyInTZ(new Date(), "America/Toronto");
 
-    let deletedCount = 0;
+    const empsSnap = await db.collection("employes").get();
 
-    while (true) {
-      const snap = await db
-        .collection("projets")
-        .where("fermeComplet", "==", true)
-        .where("deleteAt", "<=", now)
-        .orderBy("deleteAt", "asc")
-        .limit(25)
-        .get();
+    let empsTouched = 0;
+    let closedEmpSegsTotal = 0;
+    let closedProjSegsTotal = 0;
+    let closedOtherSegsTotal = 0;
 
-      if (snap.empty) break;
+    for (const empDoc of empsSnap.docs) {
+      const empId = empDoc.id;
+      const empData = empDoc.data() || {};
 
-      for (const d of snap.docs) {
-        const projId = d.id;
+      try {
+        // Segments employés ouverts aujourd'hui
+        const empSegsRef = db
+          .collection("employes")
+          .doc(empId)
+          .collection("timecards")
+          .doc(dayKey)
+          .collection("segments");
 
-        try {
-          await bucket.file(`factures/${projId}.pdf`).delete({ ignoreNotFound: true }).catch(() => null);
-          await deleteFilesWithPrefix(bucket, `projets/${projId}/pdfs/`);
-          await db.recursiveDelete(d.ref);
+        const openEmpSnap = await empSegsRef.where("end", "==", null).get();
+        const openEmpDocs = openEmpSnap.docs;
 
-          deletedCount++;
-          logger.info(`purgeClosedProjects: projet supprimé: ${projId}`);
-        } catch (e) {
-          logger.error(`purgeClosedProjects FAILED (${projId}):`, e?.message || e);
+        // Rien à fermer → skip
+        if (openEmpDocs.length === 0) continue;
+
+        // Job tokens présents dans les segments ouverts
+        let jobTokens = Array.from(
+          new Set(
+            openEmpDocs
+              .map((d) => (d.data()?.jobId ? String(d.data().jobId) : ""))
+              .filter((s) => s && (s.startsWith("proj:") || s.startsWith("other:")))
+          )
+        );
+
+        // Fallback si jobId manquant (lastProjectId / lastOtherId)
+        if (jobTokens.length === 0) {
+          const lastProj = empData?.lastProjectId ? `proj:${String(empData.lastProjectId)}` : "";
+          const lastOther = empData?.lastOtherId ? `other:${String(empData.lastOtherId)}` : "";
+          if (lastProj) jobTokens.push(lastProj);
+          if (lastOther) jobTokens.push(lastOther);
         }
+
+        // Fermer côté projets/other
+        for (const t of jobTokens) {
+          if (t.startsWith("proj:")) {
+            const projId = t.slice(5);
+            closedProjSegsTotal += await closeProjSegmentsForEmp(db, projId, empId, dayKey, nowTs);
+          } else if (t.startsWith("other:")) {
+            const otherId = t.slice(6);
+            closedOtherSegsTotal += await closeOtherSegmentsForEmp(db, otherId, empId, dayKey, nowTs);
+          }
+        }
+
+        // Fermer segments employé + marquer day.end
+        const ops = openEmpDocs.map((d) => ({
+          ref: d.ref,
+          data: { end: nowTs, updatedAt: nowTs },
+        }));
+        await commitInChunks(db, ops);
+        closedEmpSegsTotal += ops.length;
+
+        // timecards/{day}.end = now (merge, au cas où le doc n'existe pas)
+        await db
+          .collection("employes")
+          .doc(empId)
+          .collection("timecards")
+          .doc(dayKey)
+          .set({ end: nowTs, updatedAt: nowTs }, { merge: true });
+
+        empsTouched += 1;
+
+        logger.info(
+          `autoDepunchAllAt17: depunch emp=${empId} segs=${ops.length} tokens=${jobTokens.join(",")}`
+        );
+      } catch (e) {
+        logger.error(`autoDepunchAllAt17 FAILED (${empId}):`, e?.message || e);
       }
     }
 
-    if (deletedCount > 0) {
-      logger.info(`purgeClosedProjects: total supprimés = ${deletedCount}`);
-    }
+    logger.info(
+      `autoDepunchAllAt17 DONE day=${dayKey} empsTouched=${empsTouched} closedEmpSegs=${closedEmpSegsTotal} closedProjSegs=${closedProjSegsTotal} closedOtherSegs=${closedOtherSegsTotal}`
+    );
   }
 );

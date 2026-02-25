@@ -1,5 +1,5 @@
 // App.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebaseConfig";
 
@@ -35,20 +35,6 @@ function getRouteFromHash() {
 }
 
 /* ---------------------- utils ---------------------- */
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-function dayKey(d) {
-  const x = d instanceof Date ? d : new Date(d);
-  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
-}
-function startOfSunday(d) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  const day = x.getDay(); // 0=dim
-  x.setDate(x.getDate() - day);
-  return x;
-}
 function safeToMs(ts) {
   if (!ts) return 0;
   if (typeof ts.toMillis === "function") return ts.toMillis();
@@ -68,15 +54,12 @@ export default function App() {
   const [me, setMe] = useState(null);
   const [meLoading, setMeLoading] = useState(true);
 
-  // ✅ Notif clignotante (note admin pour l’employé connecté) — maintenant: TOUS BLOCS
+  // ✅ Notif clignotante (note admin pour l’employé connecté) — TOUS BLOCS
   const [noteNotifOn, setNoteNotifOn] = useState(false);
 
-  // ✅ meta cache des notes (pour recompute au tick “Vu”)
-  // blockKey -> { updMs, hasText }
+  // ✅ meta cache des notes (Firestore)
+  // blockKey -> { updMs, seenMs, hasText }
   const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
-
-  // ✅ permet de re-check le localStorage quand l’employé coche "Vu"
-  const [seenBump, setSeenBump] = useState(0);
 
   // router
   useEffect(() => {
@@ -175,14 +158,7 @@ export default function App() {
     window.location.hash = "#/accueil";
   };
 
-  /* ===================== 🔔 NOTIF NOTE ADMIN (NON-ADMIN) — TOUS BLOCS ===================== */
-
-  // écoute l'event envoyé par HistoriqueEmploye quand on coche "Vu"
-  useEffect(() => {
-    const onSeenChanged = () => setSeenBump((x) => x + 1);
-    window.addEventListener("noteSeenChanged", onSeenChanged);
-    return () => window.removeEventListener("noteSeenChanged", onSeenChanged);
-  }, []);
+  /* ===================== 🔔 NOTIF NOTE ADMIN (NON-ADMIN) — TOUS BLOCS (Firestore) ===================== */
 
   // reset quand on change de user/me
   useEffect(() => {
@@ -190,23 +166,18 @@ export default function App() {
     setNotesMetaByBlock({});
   }, [user?.uid, me?.id]);
 
-  const recomputeNotifFromLocal_AllBlocks = (empId, metaByBlock) => {
-    try {
-      const blocks = Object.keys(metaByBlock || {});
-      for (const blockKey of blocks) {
-        const meta = metaByBlock[blockKey] || {};
-        const updMs = Number(meta.updMs || 0) || 0;
-        const hasText = !!meta.hasText;
+  const recomputeNotifFromFS_AllBlocks = (metaByBlock) => {
+    const blocks = Object.keys(metaByBlock || {});
+    for (const blockKey of blocks) {
+      const meta = metaByBlock[blockKey] || {};
+      const updMs = Number(meta.updMs || 0) || 0;
+      const seenMs = Number(meta.seenMs || 0) || 0;
+      const hasText = !!meta.hasText;
 
-        if (!hasText || !updMs) continue;
+      if (!hasText || !updMs) continue;
 
-        const LS_KEY = `seen_note_${empId}_${blockKey}`;
-        const seenMs = Number(localStorage.getItem(LS_KEY) || "0") || 0;
-
-        if (updMs > seenMs) return true; // au moins 1 bloc non vu
-      }
-    } catch {
-      // ignore
+      // ✅ non vu si updatedAt > noteSeenByEmpAt
+      if (updMs > seenMs) return true;
     }
     return false;
   };
@@ -232,12 +203,13 @@ export default function App() {
           const hasText = !!noteText;
 
           const updMs = safeToMs(data.updatedAt);
+          const seenMs = safeToMs(data.noteSeenByEmpAt); // ✅ Firestore "Vu" employé
 
-          meta[blockKey] = { updMs, hasText };
+          meta[blockKey] = { updMs, seenMs, hasText };
         });
 
         setNotesMetaByBlock(meta);
-        setNoteNotifOn(recomputeNotifFromLocal_AllBlocks(empId, meta));
+        setNoteNotifOn(recomputeNotifFromFS_AllBlocks(meta));
       },
       (err) => {
         console.error("note notif snapshot error:", err);
@@ -248,16 +220,6 @@ export default function App() {
 
     return () => unsub();
   }, [user, me?.id, isAdmin]);
-
-  // Re-check quand on coche "Vu" (localStorage a changé)
-  useEffect(() => {
-    if (!user) return;
-    if (!me?.id) return;
-    if (isAdmin) return;
-
-    setNoteNotifOn(recomputeNotifFromLocal_AllBlocks(me.id, notesMetaByBlock));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seenBump]);
 
   /* ===================== UI ===================== */
   if (user === undefined) {
@@ -384,6 +346,7 @@ export default function App() {
       {route === "historique" && (
         <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />
       )}
+
       {route === "feuille-depenses" && (
         <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />
       )}
