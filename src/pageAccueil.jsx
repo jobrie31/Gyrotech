@@ -1,4 +1,4 @@
-// PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
+// src/PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
 //
 // ✅ FIX "temps mismatch":
 // - Punch Projet / Autre tâche = écritures ATOMIQUES (writeBatch)
@@ -8,6 +8,10 @@
 // ✅ FIX (repunch après dépunch auto midi):
 // - Quand on REPUNCH, on remet timecards/{day}.end = null (doc day redevient "ouvert")
 //   La présence reste basée sur segments (end:null), mais le doc day ne reste plus figé à midi.
+//
+// ✅ FIX (2026-02-28) IDs segments projet = IDs segments employé:
+// - Pour que l’auto-close "béton" par segId marche vraiment, on force le segment PROJET
+//   à utiliser le même docId que le segment EMPLOYÉ (empSegRef.id)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -115,6 +119,7 @@ function projDayRef(projId, key) {
 function projSegCol(projId, key) {
   return collection(db, "projets", projId, "timecards", key, "segments");
 }
+// ⚠️ on garde la fonction, mais on ne l'utilise plus pour le punch (on veut même id)
 function newProjSegRef(projId, key) {
   return doc(projSegCol(projId, key)); // auto id
 }
@@ -305,6 +310,7 @@ function usePresenceToday(empId, setError) {
  * - crée segment employé (jobId=proj:xxx) + segment projet (empId) dans le même batch
  * - start day employé/projet si vide
  * - ✅ FIX: quand on punch, on remet day.end = null (doc day redevient "ouvert")
+ * - ✅ FIX 2026-02-28: segment projet = même docId que segment employé
  */
 async function doPunchWithProject(emp, proj) {
   const key = todayKey();
@@ -319,15 +325,17 @@ async function doPunchWithProject(emp, proj) {
   // Si déjà punché (devrait pas arriver), on force juste la cohérence
   const openEmp = await getOpenEmpSegments(emp.id, key);
   if (openEmp.length > 0) {
-    const ref = openEmp[0].ref;
+    const empSegDoc = openEmp[0]; // QueryDocumentSnapshot
+    const empSegRef = empSegDoc.ref;
 
     if (chosenProjId) {
       await ensureProjDay(chosenProjId, key);
-      await updateDoc(ref, { jobId: `proj:${chosenProjId}`, jobName: projName, updatedAt: now });
+      await updateDoc(empSegRef, { jobId: `proj:${chosenProjId}`, jobName: projName, updatedAt: now });
 
       const openP = await getOpenProjSegsForEmp(chosenProjId, emp.id, key);
       if (openP.length === 0) {
-        await addDoc(projSegCol(chosenProjId, key), {
+        // ✅ même ID que le segment employé
+        await setDoc(doc(projSegCol(chosenProjId, key), empSegRef.id), {
           empId: emp.id,
           empName: emp.nom || null,
           start: now,
@@ -343,7 +351,7 @@ async function doPunchWithProject(emp, proj) {
         lastProjectUpdatedAt: now,
       });
     } else {
-      await updateDoc(ref, { jobId: null, jobName: null, updatedAt: now });
+      await updateDoc(empSegRef, { jobId: null, jobName: null, updatedAt: now });
     }
 
     // ✅ doc day employé: start si vide + end=null (repunch après dépunch auto)
@@ -390,7 +398,8 @@ async function doPunchWithProject(emp, proj) {
   if (chosenProjId) {
     await ensureProjDay(chosenProjId, key);
 
-    const projSegRef = newProjSegRef(chosenProjId, key);
+    // ✅ segment projet = même id que empSegRef.id
+    const projSegRef = doc(projSegCol(chosenProjId, key), empSegRef.id);
     batch.set(projSegRef, {
       empId: emp.id,
       empName: emp.nom || null,
@@ -884,8 +893,7 @@ function ClockBadge({ now }) {
         borderRadius: 14,
         padding: "10px 14px",
         boxShadow: "0 10px 24px rgba(0,0,0,0.15)",
-        fontFamily:
-          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
         color: "#111827",
         textAlign: "center",
         minWidth: 220,
@@ -1323,13 +1331,7 @@ export default function PageAccueil() {
 
                 <tbody>
                   {visibleEmployes.map((e) => (
-                    <LigneEmploye
-                      key={e.id}
-                      emp={e}
-                      setError={setError}
-                      projets={projetsOuverts}
-                      autresProjets={autresProjets}
-                    />
+                    <LigneEmploye key={e.id} emp={e} setError={setError} projets={projetsOuverts} autresProjets={autresProjets} />
                   ))}
 
                   {visibleEmployes.length === 0 && (

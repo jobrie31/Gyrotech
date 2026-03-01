@@ -431,8 +431,17 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
   const [error, setError] = useState(null);
   const [histRows, setHistRows] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
+
+  // NOTE: "Total d'heures compilées" sera le total de ce qu'on charge.
+  // Ici, par défaut on charge juste ce qu'il faut pour 10 lignes => total "partiel".
   const [totalMsAll, setTotalMsAll] = useState(0);
-  const [histReload] = useState(0);
+
+  const [showAll, setShowAll] = useState(false);
+
+  // reset quand on ouvre un autre projet
+  useEffect(() => {
+    if (open) setShowAll(false);
+  }, [open, projet?.id]);
 
   useEffect(() => {
     if (!open || !projet?.id) return;
@@ -440,16 +449,21 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
     (async () => {
       setHistLoading(true);
       try {
+        const PAGE_SIZE = 10;
+
+        // 1) On récupère juste la liste des jours (IDs) — léger
         const daysSnap = await getDocs(collection(db, "autresProjets", projet.id, "timecards"));
         const days = [];
         daysSnap.forEach((d) => days.push(d.id));
-        days.sort((a, b) => b.localeCompare(a));
+        days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD => tri OK
 
+        // 2) On lit les segments jour par jour, et on arrête dès qu'on a 10 lignes (sauf si showAll)
         const map = new Map();
-        let sumAllMs = 0;
+        let sumMs = 0;
 
         for (const key of days) {
           const segSnap = await getDocs(collection(db, "autresProjets", projet.id, "timecards", key, "segments"));
+
           segSnap.forEach((sdoc) => {
             const s = sdoc.data();
             const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
@@ -457,7 +471,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
             if (!st) return;
 
             const ms = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
-            sumAllMs += ms;
+            sumMs += ms;
 
             const empName = s.empName || "—";
             const empKey = s.empId || empName;
@@ -467,15 +481,18 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
             prev.totalMs += ms;
             map.set(k, prev);
           });
+
+          // ✅ stop tôt: on ne charge pas le reste
+          if (!showAll && map.size >= PAGE_SIZE) break;
         }
 
-        const rows = Array.from(map.values()).sort((a, b) => {
+        const allRows = Array.from(map.values()).sort((a, b) => {
           if (a.date !== b.date) return b.date.localeCompare(a.date);
           return (a.empName || "").localeCompare(b.empName || "");
         });
 
-        setHistRows(rows);
-        setTotalMsAll(sumAllMs);
+        setHistRows(showAll ? allRows : allRows.slice(0, PAGE_SIZE));
+        setTotalMsAll(sumMs);
       } catch (e) {
         console.error(e);
         setError(e?.message || String(e));
@@ -483,7 +500,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
         setHistLoading(false);
       }
     })();
-  }, [open, projet?.id, histReload]);
+  }, [open, projet?.id, showAll]);
 
   if (!open || !projet) return null;
 
@@ -561,7 +578,19 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
           <CardKV k="Total d'heures compilées" v={fmtHM(totalMsAll)} />
         </div>
 
-        <div style={{ fontWeight: 800, margin: "4px 0 6px", fontSize: 12 }}>Historique — tout</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 0 6px" }}>
+          <div style={{ fontWeight: 800, fontSize: 12 }}>Historique — {showAll ? "tout" : "10 derniers"}</div>
+          <button
+            onClick={() => setShowAll((v) => !v)}
+            style={btnSecondary}
+            type="button"
+            disabled={histLoading}
+            title={showAll ? "Revenir au mode 10 derniers" : "Charger tout l’historique"}
+          >
+            {showAll ? "Voir moins" : "Voir tout"}
+          </button>
+        </div>
+
         <table
           style={{
             width: "100%",

@@ -17,15 +17,10 @@ import FeuilleDepensesExcel from "./FeuilleDepensesExcel";
 // ✅ AJOUT: page test OCR
 import Test from "./Test";
 
-import {
-  collection,
-  getDocs,
-  limit,
-  onSnapshot,
-  query,
-  where,
-  doc,
-} from "firebase/firestore";
+// ✅ AJOUT: gate "Commencer la journée" (1x/jour + reset minuit + reload)
+import StartDayGate from "./StartDayGate";
+
+import { collection, getDocs, limit, onSnapshot, query, where, doc } from "firebase/firestore";
 
 // ➜ Supporte aussi les sous-chemins (#/historique/<empId>, etc.)
 function getRouteFromHash() {
@@ -92,19 +87,11 @@ export default function App() {
         const uid = user.uid;
         const emailLower = String(user.email || "").trim().toLowerCase();
 
-        let q1 = query(
-          collection(db, "employes"),
-          where("uid", "==", uid),
-          limit(1)
-        );
+        let q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
         let snap = await getDocs(q1);
 
         if (snap.empty && emailLower) {
-          q1 = query(
-            collection(db, "employes"),
-            where("emailLower", "==", emailLower),
-            limit(1)
-          );
+          q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
           snap = await getDocs(q1);
         }
 
@@ -273,8 +260,7 @@ export default function App() {
     ? {
         animation: "notifBlinkVIF 0.55s infinite",
         borderBottom: "2px solid #ff0000",
-        boxShadow:
-          "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
+        boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
       }
     : null;
 
@@ -334,6 +320,14 @@ export default function App() {
         </div>
       </div>
 
+      {/* ✅ Gate "Commencer la journée" — visible pour ADMIN + NON-ADMIN */}
+      <StartDayGate
+        userKey={(user?.uid || user?.email || "").toLowerCase()}
+        enabled={!meLoading} // ✅ tout le monde, une fois que "me" est chargé
+        title="Commencer la journée"
+        subtitle="Clique ici pour actualiser l’application et repartir propre."
+      />
+
       <BurgerMenu pages={pages} />
 
       {route === "accueil" && <PageAccueil />}
@@ -343,13 +337,9 @@ export default function App() {
       {route === "reglages-admin" && <PageReglagesAdmin />}
 
       {/* ✅ on passe isAdmin + meEmpId */}
-      {route === "historique" && (
-        <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />
-      )}
+      {route === "historique" && <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />}
 
-      {route === "feuille-depenses" && (
-        <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />
-      )}
+      {route === "feuille-depenses" && <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />}
 
       {route === "test-ocr" && <Test />}
 

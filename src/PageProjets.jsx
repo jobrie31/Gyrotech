@@ -10,6 +10,10 @@
 //   employes/{empId}/timecards/{day}/segments/{segId}
 //   -> si le seg employé n'existe pas / est fermé => on ferme le seg projet
 //   -> fallback sur l'ancien query (end==null & jobId==proj:...) si besoin
+//
+// ✅ FIX (2026-02-28) total "roule" + auto-close qui ferme à tort:
+// - empHasOpenJob devient ROBUSTE (lit segments du jour + filtre JS end==null)
+// - Total affiché = (passé sans aujourd’hui) + (aujourd’hui live via usePresenceTodayP.totalMs) + tempsOuvertureMinutes
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage } from "./firebaseConfig";
@@ -131,12 +135,15 @@ function parseEmpAndDayFromSegPath(path) {
   return { empId: m[1], key: m[2] };
 }
 
-/* ✅ check si un employé est encore punché sur proj:<projId> */
+/* ✅ check si un employé est encore punché sur proj:<projId>
+   ✅ ROBUSTE: lit les segments du jour + filtre JS (end == null marche pour null OU champ absent) */
 async function empHasOpenJob(empId, key, jobId) {
   if (!empId || !key || !jobId) return false;
-  const qOpen = query(empSegCol(empId, key), where("end", "==", null), where("jobId", "==", jobId));
-  const snap = await getDocs(qOpen);
-  return !snap.empty;
+  const snap = await getDocs(empSegCol(empId, key));
+  return snap.docs.some((d) => {
+    const s = d.data() || {};
+    return s.end == null && String(s.jobId || "") === String(jobId || "");
+  });
 }
 
 /* ✅ NEW: check béton par docId segment (si on a segId) */
@@ -168,7 +175,9 @@ async function depunchWorkersOnProject(projId) {
     daysSnap.forEach((d) => dayIds.push(d.id));
 
     for (const key of dayIds) {
-      const segsOpenSnap = await getDocs(query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null)));
+      const segsOpenSnap = await getDocs(
+        query(collection(db, "projets", projId, "timecards", key, "segments"), where("end", "==", null))
+      );
       const tasks = [];
       segsOpenSnap.forEach((sdoc) => tasks.push(updateDoc(sdoc.ref, { end: now, updatedAt: now })));
       if (tasks.length) await Promise.all(tasks);
@@ -364,16 +373,14 @@ function usePresenceTodayP(projId, setError) {
           if (age < GRACE_MS) continue;
         }
 
-        // ✅ 1) Match béton par docId côté employé (seg.id)
+        // ✅ 1) Match béton par docId côté employé (seg.id) (marche si IDs alignés)
         let still = null;
         try {
           const byId = await empHasOpenBySegId(empId, key, seg.id, jobId);
-          if (byId.ok) {
-            still = byId.result;
-          }
+          if (byId.ok) still = byId.result;
         } catch {}
 
-        // ✅ 2) Fallback ancien (query)
+        // ✅ 2) Fallback robuste (JS) — ne ferme PAS à tort
         if (still == null) {
           try {
             still = await empHasOpenJob(empId, key, jobId);
@@ -407,10 +414,14 @@ function usePresenceTodayP(projId, setError) {
   return { key, card, sessions, totalMs, hasOpen };
 }
 
+/**
+ * ✅ Stats "passé" (SANS aujourd'hui)
+ * OnSnapshot sur timecards (days) ne rerun pas quand segments changent.
+ * Donc on calcule le passé ici, et aujourd'hui vient live via usePresenceTodayP.totalMs.
+ */
 function useProjectLifetimeStats(projId, setError) {
   const [firstEverStart, setFirstEverStart] = useState(null);
-  const [totalClosedMs, setTotalClosedMs] = useState(0);
-  const [openStarts, setOpenStarts] = useState([]);
+  const [totalClosedMs, setTotalClosedMs] = useState(0); // passé sans today
 
   useEffect(() => {
     if (!projId) return;
@@ -420,11 +431,14 @@ function useProjectLifetimeStats(projId, setError) {
       col,
       async (daysSnap) => {
         try {
+          const today = todayKey();
+
           let first = null;
           let totalClosed = 0;
-          const open = [];
 
           for (const d of daysSnap.docs) {
+            const isToday = d.id === today;
+
             const segSnap = await getDocs(query(collection(d.ref, "segments"), orderBy("start", "asc")));
             segSnap.forEach((seg) => {
               const s = seg.data();
@@ -434,17 +448,17 @@ function useProjectLifetimeStats(projId, setError) {
 
               if (!first || st < first) first = st;
 
-              if (!en) {
-                open.push(st.getTime());
-                return;
-              }
+              // aujourd'hui géré live
+              if (isToday) return;
+
+              // passé: seulement fermé
+              if (!en) return;
               totalClosed += Math.max(0, en.getTime() - st.getTime());
             });
           }
 
           setFirstEverStart(first);
           setTotalClosedMs(totalClosed);
-          setOpenStarts(open);
         } catch (err) {
           console.error(err);
           setError?.(err?.message || String(err));
@@ -456,7 +470,7 @@ function useProjectLifetimeStats(projId, setError) {
     return () => unsub();
   }, [projId, setError]);
 
-  return { firstEverStart, totalClosedMs, openStarts };
+  return { firstEverStart, totalClosedMs };
 }
 
 /* ---------------------- UI helpers ---------------------- */
@@ -1192,7 +1206,11 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>Détails – {title}</div>
-          <button onClick={onClose} title="Fermer" style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}>
+          <button
+            onClick={onClose}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}
+          >
             ×
           </button>
         </div>
@@ -1322,7 +1340,14 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
             </div>
 
             {(saving || saveMsg) && (
-              <div style={{ marginTop: 10, fontSize: 14, fontWeight: 1000, color: saveMsg.startsWith("❌") ? "#b91c1c" : "#166534" }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  fontSize: 14,
+                  fontWeight: 1000,
+                  color: saveMsg.startsWith("❌") ? "#b91c1c" : "#166534",
+                }}
+              >
                 {saving ? "⏳ Sauvegarde..." : saveMsg}
               </div>
             )}
@@ -1377,21 +1402,20 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
 
 /* ---------------------- Ligne / Tableau (avec mêmes Actions) ---------------------- */
 function LigneProjet({ proj, idx = 0, tick, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT, setError }) {
-  const { hasOpen } = usePresenceTodayP(proj.id, setError);
-  const { firstEverStart, totalClosedMs, openStarts } = useProjectLifetimeStats(proj.id, setError);
+  // ✅ aujourd'hui live
+  const { hasOpen, totalMs: todayTotalMs } = usePresenceTodayP(proj.id, setError);
+
+  // ✅ passé (sans aujourd'hui)
+  const { firstEverStart, totalClosedMs } = useProjectLifetimeStats(proj.id, setError);
 
   const statutLabel = hasOpen ? "En cours" : "—";
   const statutStyle = { fontWeight: 900, color: hasOpen ? "#166534" : "#6b7280" };
 
-  const openExtraMs = useMemo(() => {
-    const now = Date.now();
-    return (openStarts || []).reduce((sum, stMs) => sum + Math.max(0, now - stMs), 0);
-  }, [openStarts, tick]);
-
   const tempsOuvertureMinutes = Number(proj.tempsOuvertureMinutes || 0) || 0;
-  const totalAllMsWithOpen = totalClosedMs + openExtraMs + tempsOuvertureMinutes * 60 * 1000;
+  const totalAllMsWithOpen = totalClosedMs + (todayTotalMs || 0) + tempsOuvertureMinutes * 60 * 1000;
 
   const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff";
+  void tick;
 
   return (
     <tr
