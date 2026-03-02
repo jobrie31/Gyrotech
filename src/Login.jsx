@@ -1,5 +1,5 @@
 // src/Login.jsx
-import { useState } from "react";
+import { useEffect, useState } from "react"; // ✅ useEffect ajouté
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { auth, functions } from "./firebaseConfig";
@@ -20,11 +20,21 @@ export default function Login() {
   const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // ✅ Message 1 fois après "kick" (mise à jour)
+  useEffect(() => {
+    try {
+      const flag = window.localStorage?.getItem("sessionKickMsg");
+      if (flag === "1") {
+        setInfo("Une mise à jour a été fait");
+        window.localStorage?.removeItem("sessionKickMsg");
+      }
+    } catch {}
+  }, []);
+
   async function handleLogin(e) {
     e.preventDefault();
     setBusy(true);
     setError("");
-    setInfo("");
 
     const emailClean = (email || "").trim().toLowerCase();
 
@@ -41,8 +51,6 @@ export default function Login() {
     e.preventDefault();
     setBusy(true);
     setError("");
-    setInfo("");
-
     const emailClean = (email || "").trim().toLowerCase();
     const codeClean = (code || "").trim();
     const p1 = (newPass || "").trim();

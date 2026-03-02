@@ -3,6 +3,8 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { db, auth } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "./firebaseConfig";
 import {
   doc,
   getDoc,
@@ -163,6 +165,41 @@ export default function PageReglagesAdmin() {
   };
 
   const canUseAdminPage = canShowAdmin && adminAccessGranted;
+
+  /* ================== 🔐 SÉCURITÉ (ADMIN) ================== */
+  const [kickAllLoading, setKickAllLoading] = useState(false);
+  const [kickAllMsg, setKickAllMsg] = useState("");
+
+  const kickAllUsers = async () => {
+    if (!canUseAdminPage) return;
+
+    const ok = window.confirm(
+      "Déconnecter TOUT le monde maintenant?\n\n" +
+        "➡️ Tous les utilisateurs devront se reconnecter (email + mot de passe).\n" +
+        "➡️ L’app va forcer un hard refresh sur leurs devices.\n" +
+        "➡️ Aucune donnée ne sera supprimée."
+    );
+    if (!ok) return;
+
+    try {
+      setKickAllLoading(true);
+      setKickAllMsg("");
+
+      // ✅ Cloud Function = revokeRefreshTokens pour TOUS les users
+      const fn = httpsCallable(functions, "kickAllUsers");
+      const res = await fn({});
+
+      const total = res?.data?.total ?? null;
+      setKickAllMsg(
+        `✅ Shutdown envoyé. ${typeof total === "number" ? `${total} compte(s) révoqué(s).` : ""} Tout le monde va être forcé à se reconnecter.`
+      );
+    } catch (e) {
+      console.error(e);
+      setKickAllMsg("❌ Erreur: " + (e?.message || String(e)));
+    } finally {
+      setKickAllLoading(false);
+    }
+  };
 
   /* ================== ⚙️ Facture ================== */
   const [factureNom, setFactureNom] = useState("Gyrotech");
@@ -1076,6 +1113,47 @@ export default function PageReglagesAdmin() {
         </div>
       </div>
 
+      {/* ===================== 0) SÉCURITÉ ===================== */}
+      <section style={section}>
+        <h3 style={h3Bold}>Sécurité</h3>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          Force une reconnexion pour tout le monde (email + mot de passe). Aucune donnée n’est supprimée.
+        </div>
+
+        {kickAllMsg && (
+          <div
+            style={{
+              marginBottom: 8,
+              padding: 8,
+              borderRadius: 10,
+              border: "2px solid #111",
+              background: kickAllMsg.startsWith("✅") ? "#dcfce7" : "#fee2e2",
+              fontWeight: 900,
+              fontSize: 12,
+            }}
+          >
+            {kickAllMsg}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={kickAllUsers}
+          disabled={kickAllLoading}
+          style={{
+            border: "2px solid #111",
+            background: "#fee2e2",
+            color: "#111",
+            borderRadius: 12,
+            padding: "10px 14px",
+            cursor: "pointer",
+            fontWeight: 1000,
+          }}
+        >
+          {kickAllLoading ? "..." : "🚫 Déconnecter tout le monde"}
+        </button>
+      </section>
+
       {/* ===================== 1) GESTION DU TEMPS ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Gestion du temps (admin)</h3>
@@ -1538,7 +1616,16 @@ const section = { border: "1px solid #111", borderRadius: 12, padding: 12, margi
 const h3Bold = { margin: "0 0 10px 0", fontWeight: 900 };
 const label = { display: "block", fontSize: 11, color: "#444", marginBottom: 4, fontWeight: 900 };
 const input = { width: 240, padding: "8px 10px", border: "1px solid #111", borderRadius: 8, background: "#fff" };
-const btnPrimary = { border: "none", background: "#2563eb", color: "#fff", borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontWeight: 900, boxShadow: "0 8px 18px rgba(37,99,235,0.25)" };
+const btnPrimary = {
+  border: "none",
+  background: "#2563eb",
+  color: "#fff",
+  borderRadius: 10,
+  padding: "8px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+  boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
+};
 const btnPrimarySmall = { ...btnPrimary, padding: "4px 10px", boxShadow: "none", fontSize: 12 };
 const btnDangerSmall = { border: "1px solid #111", background: "#fee2e2", color: "#111", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 900, fontSize: 12 };
 
@@ -1552,4 +1639,16 @@ const tdTime = { padding: 8, borderBottom: "1px solid #111" };
 const alertErr = { background: "#fee2e2", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };
 const alertOk = { background: "#dcfce7", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };
 
-const btnAccueil = { display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 14, border: "1px solid #eab308", background: "#facc15", color: "#111827", textDecoration: "none", fontWeight: 900, boxShadow: "0 10px 24px rgba(0,0,0,0.10)" };
+const btnAccueil = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 14px",
+  borderRadius: 14,
+  border: "1px solid #eab308",
+  background: "#facc15",
+  color: "#111827",
+  textDecoration: "none",
+  fontWeight: 900,
+  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+};

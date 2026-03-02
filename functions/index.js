@@ -3,6 +3,7 @@
  * - Activation de compte (email + code + mot de passe)
  * - Envoi de facture par courriel avec Brevo (SMTP)
  * - ✅ Auto-dépunch de TOUS les employés à 17h (America/Toronto)
+ * - ✅ SHUTDOWN GLOBAL: kickAllUsers (revokeRefreshTokens) + sessionVersion++
  */
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -19,6 +20,71 @@ setGlobalOptions({
 });
 
 admin.initializeApp();
+
+/* =========================
+   ✅ SHUTDOWN GLOBAL (Admin) — Kick ALL users
+   =========================
+   But:
+   - Révoquer les refresh tokens Auth de TOUS les utilisateurs
+   - Incrémenter config/security.sessionVersion pour forcer logout + hard reload côté client
+   Sécurité:
+   - Seuls les admins (employes where uid==request.auth.uid && isAdmin==true) peuvent l'utiliser
+*/
+exports.kickAllUsers = onCall(async (request) => {
+  try {
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Vous devez être connecté.");
+    }
+
+    const uid = request.auth.uid;
+    const db = admin.firestore();
+
+    // ✅ Vérifier admin via collection "employes"
+    const q = await db.collection("employes").where("uid", "==", uid).limit(1).get();
+    if (q.empty) {
+      throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
+    }
+    const me = q.docs[0].data() || {};
+    if (me.isAdmin !== true) {
+      throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
+    }
+
+    // ✅ Révoquer tokens pour tous les users Auth
+    let pageToken = undefined;
+    let total = 0;
+
+    do {
+      const res = await admin.auth().listUsers(1000, pageToken);
+      pageToken = res.pageToken;
+
+      // On révoque en chunks pour éviter trop de promesses d'un coup
+      const uids = res.users.map((u) => u.uid);
+      for (let i = 0; i < uids.length; i += 50) {
+        const slice = uids.slice(i, i + 50);
+        await Promise.all(slice.map((x) => admin.auth().revokeRefreshTokens(x)));
+        total += slice.length;
+      }
+    } while (pageToken);
+
+    // ✅ sessionVersion++ pour que les clients se déconnectent + hard reload
+    await db.doc("config/security").set(
+      {
+        sessionVersion: admin.firestore.FieldValue.increment(1),
+        kickedAt: admin.firestore.FieldValue.serverTimestamp(),
+        kickedBy: request.auth.token?.email || null,
+        kickedByUid: uid,
+      },
+      { merge: true }
+    );
+
+    logger.info(`kickAllUsers DONE total=${total} by=${request.auth.token?.email || uid}`);
+    return { ok: true, total };
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    logger.error("kickAllUsers error:", err);
+    throw new HttpsError("internal", "Erreur lors du shutdown global.");
+  }
+});
 
 /* =========================
    ✅ Secrets Brevo (SMTP)
@@ -58,10 +124,7 @@ exports.activateAccount = onCall(async (request) => {
     // 1) Trouver l’employé par emailLower
     const q = await db.collection("employes").where("emailLower", "==", email).limit(1).get();
     if (q.empty) {
-      throw new HttpsError(
-        "not-found",
-        "Email non autorisé (introuvable dans la liste des travailleurs)."
-      );
+      throw new HttpsError("not-found", "Email non autorisé (introuvable dans la liste des travailleurs).");
     }
 
     const empDoc = q.docs[0];
@@ -74,9 +137,7 @@ exports.activateAccount = onCall(async (request) => {
     }
 
     // 3) Vérifier le code du travailleur (✅ fallback si ancien champ)
-    const expectedCode = String(
-      empData.activationCode ?? empData.code ?? empData.activation ?? ""
-    ).trim();
+    const expectedCode = String(empData.activationCode ?? empData.code ?? empData.activation ?? "").trim();
 
     if (!expectedCode) {
       throw new HttpsError(
@@ -158,9 +219,7 @@ exports.sendInvoiceEmail = onCall(
       toEmails = toEmailRaw.map((x) => String(x).trim()).filter(Boolean);
     } else {
       const s = String(toEmailRaw || "").trim();
-      toEmails = s.includes(",")
-        ? s.split(",").map((x) => x.trim()).filter(Boolean)
-        : (s ? [s] : []);
+      toEmails = s.includes(",") ? s.split(",").map((x) => x.trim()).filter(Boolean) : s ? [s] : [];
     }
 
     if (!toEmails.length) {
@@ -168,20 +227,13 @@ exports.sendInvoiceEmail = onCall(
     }
 
     const subject = String(data.subject || `Facture Gyrotech – ${projetId || "Projet"}`).trim();
-    const text = String(
-      data.text || "Bonjour, veuillez trouver ci-joint la facture de votre intervention."
-    );
+    const text = String(data.text || "Bonjour, veuillez trouver ci-joint la facture de votre intervention.");
 
     // ✅ pdfPath: si fourni on l’utilise, sinon on construit avec projetId
-    const pdfPath =
-      String(data.pdfPath || "").trim() ||
-      (projetId ? `factures/${projetId}.pdf` : "");
+    const pdfPath = String(data.pdfPath || "").trim() || (projetId ? `factures/${projetId}.pdf` : "");
 
     if (!pdfPath) {
-      throw new HttpsError(
-        "invalid-argument",
-        "Arguments invalides : pdfPath est requis si projetId est absent."
-      );
+      throw new HttpsError("invalid-argument", "Arguments invalides : pdfPath est requis si projetId est absent.");
     }
 
     // 1) Charger le PDF depuis Storage
@@ -211,7 +263,7 @@ exports.sendInvoiceEmail = onCall(
     try {
       await transporter.sendMail({
         from: MAIL_FROM.value(), // ex: "Gyrotech <groupegyrotech@gmail.com>"
-        to: toEmails,            // ✅ multiple destinataires
+        to: toEmails, // ✅ multiple destinataires
         subject,
         text,
         attachments: [
@@ -223,9 +275,7 @@ exports.sendInvoiceEmail = onCall(
         ],
       });
 
-      logger.info(
-        `Facture envoyée à ${toEmails.join(", ")} pour projet ${projetId || "(sans projetId)"} (path=${pdfPath}).`
-      );
+      logger.info(`Facture envoyée à ${toEmails.join(", ")} pour projet ${projetId || "(sans projetId)"} (path=${pdfPath}).`);
 
       // ✅ Supprimer le PDF après envoi (comme avant)
       try {
@@ -279,12 +329,7 @@ async function commitInChunks(db, ops, chunkSize = 450) {
 }
 
 async function closeProjSegmentsForEmp(db, projId, empId, dayKey, nowTs) {
-  const segsRef = db
-    .collection("projets")
-    .doc(projId)
-    .collection("timecards")
-    .doc(dayKey)
-    .collection("segments");
+  const segsRef = db.collection("projets").doc(projId).collection("timecards").doc(dayKey).collection("segments");
 
   const snap = await segsRef.where("empId", "==", empId).where("end", "==", null).get();
   if (snap.empty) return 0;
@@ -299,12 +344,7 @@ async function closeProjSegmentsForEmp(db, projId, empId, dayKey, nowTs) {
 }
 
 async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, nowTs) {
-  const segsRef = db
-    .collection("autresProjets")
-    .doc(otherId)
-    .collection("timecards")
-    .doc(dayKey)
-    .collection("segments");
+  const segsRef = db.collection("autresProjets").doc(otherId).collection("timecards").doc(dayKey).collection("segments");
 
   const snap = await segsRef.where("empId", "==", empId).where("end", "==", null).get();
   if (snap.empty) return 0;
@@ -341,12 +381,7 @@ exports.autoDepunchAllAt17 = onSchedule(
 
       try {
         // Segments employés ouverts aujourd'hui
-        const empSegsRef = db
-          .collection("employes")
-          .doc(empId)
-          .collection("timecards")
-          .doc(dayKey)
-          .collection("segments");
+        const empSegsRef = db.collection("employes").doc(empId).collection("timecards").doc(dayKey).collection("segments");
 
         const openEmpSnap = await empSegsRef.where("end", "==", null).get();
         const openEmpDocs = openEmpSnap.docs;
@@ -391,18 +426,11 @@ exports.autoDepunchAllAt17 = onSchedule(
         closedEmpSegsTotal += ops.length;
 
         // timecards/{day}.end = now (merge, au cas où le doc n'existe pas)
-        await db
-          .collection("employes")
-          .doc(empId)
-          .collection("timecards")
-          .doc(dayKey)
-          .set({ end: nowTs, updatedAt: nowTs }, { merge: true });
+        await db.collection("employes").doc(empId).collection("timecards").doc(dayKey).set({ end: nowTs, updatedAt: nowTs }, { merge: true });
 
         empsTouched += 1;
 
-        logger.info(
-          `autoDepunchAllAt17: depunch emp=${empId} segs=${ops.length} tokens=${jobTokens.join(",")}`
-        );
+        logger.info(`autoDepunchAllAt17: depunch emp=${empId} segs=${ops.length} tokens=${jobTokens.join(",")}`);
       } catch (e) {
         logger.error(`autoDepunchAllAt17 FAILED (${empId}):`, e?.message || e);
       }

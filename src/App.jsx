@@ -1,5 +1,6 @@
 // App.jsx
-import React, { useEffect, useState } from "react";
+
+import React, { useEffect, useState, useRef } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebaseConfig";
 
@@ -120,6 +121,100 @@ export default function App() {
   }, [user?.uid, user?.email]);
 
   const isAdmin = me?.isAdmin === true;
+
+  /* ===================== 🔐 SHUTDOWN GLOBAL (security) ===================== */
+
+  // 1) Listener sur config/security.sessionVersion (reçoit l'ordre de shutdown)
+  useEffect(() => {
+    if (!user) return;
+
+    const ref = doc(db, "config", "security");
+
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const data = snap.exists() ? snap.data() || {} : {};
+        const v = Number(data.sessionVersion || 0) || 0;
+
+        const key = "globalSessionVersion";
+        const localRaw = window.localStorage?.getItem(key);
+        const localV = Number(localRaw || 0) || 0;
+
+        // ✅ Si Firestore est plus haut que le device => shutdown immédiat
+        if (v > localV) {
+          try {
+            window.localStorage?.setItem(key, String(v));
+            window.localStorage?.setItem("sessionKickMsg", "1"); // message login
+          } catch {}
+
+          signOut(auth).finally(() => {
+            // ✅ hard refresh pour prendre le dernier build
+            try {
+              window.location.href = "/#/accueil";
+              window.location.reload();
+            } catch {
+              window.location.hash = "#/accueil";
+            }
+          });
+          return;
+        }
+
+        // sync (au cas où)
+        if (v !== localV) {
+          try {
+            window.localStorage?.setItem(key, String(v));
+          } catch {}
+        }
+      },
+      (err) => console.error("security listener error:", err)
+    );
+
+    return () => unsub();
+  }, [user?.uid]);
+
+  // 2) Vérification token (révocation serveur) pour forcer le logout même si le device a raté le listener
+  useEffect(() => {
+    if (!user) return;
+
+    let alive = true;
+
+    const forceCheck = async () => {
+      try {
+        // ✅ force refresh token -> si révoqué, ça throw
+        await user.getIdToken(true);
+      } catch (e) {
+        if (!alive) return;
+
+        try {
+          window.localStorage?.setItem("sessionKickMsg", "1");
+        } catch {}
+
+        await signOut(auth);
+        try {
+          window.location.href = "/#/accueil";
+          window.location.reload();
+        } catch {
+          window.location.hash = "#/accueil";
+        }
+      }
+    };
+
+    // au retour au premier plan
+    const onVis = () => {
+      if (document.visibilityState === "visible") forceCheck();
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    // toutes les 30s (tu peux mettre 10s si tu veux ultra agressif)
+    const t = window.setInterval(forceCheck, 30 * 1000);
+    forceCheck();
+
+    return () => {
+      alive = false;
+      document.removeEventListener("visibilitychange", onVis);
+      window.clearInterval(t);
+    };
+  }, [user?.uid]);
 
   // 🔒 redirects si non-admin tente d'aller sur pages admin (inclut test-ocr)
   useEffect(() => {

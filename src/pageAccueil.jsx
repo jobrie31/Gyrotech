@@ -12,6 +12,13 @@
 // ✅ FIX (2026-02-28) IDs segments projet = IDs segments employé:
 // - Pour que l’auto-close "béton" par segId marche vraiment, on force le segment PROJET
 //   à utiliser le même docId que le segment EMPLOYÉ (empSegRef.id)
+//
+// ✅ NOUVEAU (2026-03-02):
+// - En cliquant sur une personne (ligne), on voit sur quoi elle s'est punch aujourd'hui (modal)
+//
+// ✅ AJOUT (2026-03-02):
+// - appBuild écrit dans les segments (debug cache / version). Si quelqu’un crée IDs différents,
+//   c’est qu’il roule un vieux build (cache/PWA).
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -37,6 +44,9 @@ import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
 
+// ✅ BUILD TAG (debug cache / versions)
+const APP_BUILD = "2026-03-02_ids-align_v1";
+
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
   return n.toString().padStart(2, "0");
@@ -53,6 +63,11 @@ function fmtHM(ms) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return `${h}:${m.toString().padStart(2, "0")}`;
+}
+function fmtHMFromDate(d) {
+  if (!d) return "—";
+  const dt = d instanceof Date ? d : new Date(d);
+  return dt.toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 /* ✅ NOUVEAU: fallback nom projet = nom || clientNom */
@@ -311,6 +326,7 @@ function usePresenceToday(empId, setError) {
  * - start day employé/projet si vide
  * - ✅ FIX: quand on punch, on remet day.end = null (doc day redevient "ouvert")
  * - ✅ FIX 2026-02-28: segment projet = même docId que segment employé
+ * - ✅ AJOUT: appBuild écrit dans les deux segments (debug version)
  */
 async function doPunchWithProject(emp, proj) {
   const key = todayKey();
@@ -330,18 +346,42 @@ async function doPunchWithProject(emp, proj) {
 
     if (chosenProjId) {
       await ensureProjDay(chosenProjId, key);
-      await updateDoc(empSegRef, { jobId: `proj:${chosenProjId}`, jobName: projName, updatedAt: now });
 
-      const openP = await getOpenProjSegsForEmp(chosenProjId, emp.id, key);
-      if (openP.length === 0) {
-        // ✅ même ID que le segment employé
-        await setDoc(doc(projSegCol(chosenProjId, key), empSegRef.id), {
+      await updateDoc(empSegRef, {
+        jobId: `proj:${chosenProjId}`,
+        jobName: projName,
+        updatedAt: now,
+        appBuild: APP_BUILD, // ✅ AJOUT
+      });
+
+      const projSegSameIdRef = doc(projSegCol(chosenProjId, key), empSegRef.id);
+
+      // ✅ Assure que le segment PROJET existe VRAIMENT avec le même ID
+      const pSnap = await getDoc(projSegSameIdRef);
+      if (!pSnap.exists()) {
+        await setDoc(projSegSameIdRef, {
+          appBuild: APP_BUILD, // ✅ AJOUT
           empId: emp.id,
           empName: emp.nom || null,
           start: now,
           end: null,
           createdAt: now,
           updatedAt: now,
+
+          // ✅ utile debug + cohérence
+          jobId: `proj:${chosenProjId}`,
+          jobName: projName || null,
+        });
+      } else {
+        // s'il existe déjà, on s'assure qu'il est open et cohérent
+        await updateDoc(projSegSameIdRef, {
+          appBuild: APP_BUILD, // ✅ AJOUT
+          end: null,
+          updatedAt: now,
+          empId: emp.id,
+          empName: emp.nom || null,
+          jobId: `proj:${chosenProjId}`,
+          jobName: projName || null,
         });
       }
 
@@ -351,7 +391,7 @@ async function doPunchWithProject(emp, proj) {
         lastProjectUpdatedAt: now,
       });
     } else {
-      await updateDoc(empSegRef, { jobId: null, jobName: null, updatedAt: now });
+      await updateDoc(empSegRef, { jobId: null, jobName: null, updatedAt: now, appBuild: APP_BUILD }); // ✅ AJOUT
     }
 
     // ✅ doc day employé: start si vide + end=null (repunch après dépunch auto)
@@ -380,6 +420,7 @@ async function doPunchWithProject(emp, proj) {
 
   const empSegRef = newEmpSegRef(emp.id, key);
   batch.set(empSegRef, {
+    appBuild: APP_BUILD, // ✅ AJOUT
     jobId: chosenProjId ? `proj:${chosenProjId}` : null,
     jobName: chosenProjId ? projName : null,
     start: now,
@@ -401,12 +442,17 @@ async function doPunchWithProject(emp, proj) {
     // ✅ segment projet = même id que empSegRef.id
     const projSegRef = doc(projSegCol(chosenProjId, key), empSegRef.id);
     batch.set(projSegRef, {
+      appBuild: APP_BUILD, // ✅ AJOUT
       empId: emp.id,
       empName: emp.nom || null,
       start: now,
       end: null,
       createdAt: now,
       updatedAt: now,
+
+      // ✅ debug (facultatif mais pratique)
+      jobId: `proj:${chosenProjId}`,
+      jobName: projName || null,
     });
 
     // ✅ doc day projet: start si vide + end=null
@@ -841,6 +887,171 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   return ReactDOM.createPortal(modal, document.body);
 }
 
+/* ✅ NOUVEAU: modal détails punch aujourd'hui */
+function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autresProjets, onClose }) {
+  const [extraProjNames, setExtraProjNames] = useState({}); // { [projId]: nom }
+  const key = todayKey();
+
+  useEffect(() => {
+    if (!open) return;
+
+    const projIdsToFetch = Array.from(
+      new Set(
+        (sessions || [])
+          .map((s) => String(s?.jobId || ""))
+          .filter((jid) => jid.startsWith("proj:"))
+          .map((jid) => jid.slice(5))
+      )
+    ).filter((id) => id && !projets.some((p) => p.id === id) && !extraProjNames[id]);
+
+    if (projIdsToFetch.length === 0) return;
+
+    let alive = true;
+    (async () => {
+      try {
+        const out = {};
+        await Promise.all(
+          projIdsToFetch.map(async (pid) => {
+            try {
+              const snap = await getDoc(doc(db, "projets", pid));
+              if (snap.exists()) out[pid] = getProjetNom(snap.data()) || pid;
+              else out[pid] = pid;
+            } catch {
+              out[pid] = pid;
+            }
+          })
+        );
+        if (alive) setExtraProjNames((m) => ({ ...m, ...out }));
+      } catch {}
+    })();
+
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sessions, projets]);
+
+  const resolveJobLabel = (s) => {
+    const jid = String(s?.jobId || "");
+    const jn = String(s?.jobName || "").trim();
+
+    if (!jid) return jn || "Aucun projet";
+    if (jid.startsWith("other:")) {
+      const oid = jid.slice(6);
+      const fromList = autresProjets?.find?.((x) => x.id === oid)?.nom;
+      return jn || fromList || "Autre tâche";
+    }
+    if (jid.startsWith("proj:")) {
+      const pid = jid.slice(5);
+      const fromOpen = projets?.find?.((p) => p.id === pid);
+      return jn || (fromOpen ? getProjetLabel(fromOpen) : null) || extraProjNames[pid] || pid;
+    }
+    return jn || jid;
+  };
+
+  const rows = useMemo(() => {
+    const nowMs = Date.now();
+    return (sessions || []).map((s) => {
+      const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
+      const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
+      const durMs = st ? Math.max(0, (en ? en.getTime() : nowMs) - st.getTime()) : 0;
+      return {
+        id: s.id,
+        label: resolveJobLabel(s),
+        start: st,
+        end: en,
+        durMs,
+        open: !en,
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, projets, autresProjets, extraProjNames]);
+
+  if (!open) return null;
+
+  const modal = (
+    <div role="dialog" aria-modal="true" onClick={onClose} style={styles.modalBackdrop}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...styles.modalCard, width: "min(900px, 96vw)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 22 }}>{emp?.nom || "Employé(e)"}</div>
+            <div style={{ color: "#64748b", marginTop: 2 }}>
+              Aujourd’hui ({key}) — Total: <strong>{fmtHM(totalMs)}</strong>
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 120px 120px 120px", background: "#f3f4f6" }}>
+            {["Projet / tâche", "Début", "Fin", "Durée"].map((h) => (
+              <div key={h} style={{ padding: "10px 12px", fontWeight: 900, color: "#111827" }}>
+                {h}
+              </div>
+            ))}
+          </div>
+
+          {rows.map((r) => (
+            <div
+              key={r.id}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1.5fr 120px 120px 120px",
+                borderTop: "1px solid #e5e7eb",
+                alignItems: "center",
+              }}
+            >
+              <div style={{ padding: "10px 12px", fontWeight: 800, minWidth: 0 }}>
+                <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.label}>
+                  {r.label}
+                </div>
+                {r.open && (
+                  <div style={{ marginTop: 4, display: "inline-flex", gap: 8, alignItems: "center" }}>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 900,
+                        color: "#065f46",
+                        background: "#d1fae5",
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                      }}
+                    >
+                      EN COURS
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div style={{ padding: "10px 12px", fontWeight: 800 }}>{fmtHMFromDate(r.start)}</div>
+              <div style={{ padding: "10px 12px", fontWeight: 800 }}>{r.open ? "—" : fmtHMFromDate(r.end)}</div>
+              <div style={{ padding: "10px 12px", fontWeight: 900 }}>{fmtHM(r.durMs)}</div>
+            </div>
+          ))}
+
+          {rows.length === 0 && (
+            <div style={{ padding: 12, color: "#64748b" }}>Aucun segment aujourd’hui (pas punché / pas de données).</div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
+          <Button variant="neutral" onClick={onClose}>
+            Fermer
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return ReactDOM.createPortal(modal, document.body);
+}
+
 /* ✅ UI flottante (logo dans la marge + horloge à droite) */
 const APP_TOP = 38;
 const LEFT_RAIL_W = 270;
@@ -940,6 +1151,9 @@ function LigneEmploye({ emp, setError, projets, autresProjets }) {
 
   const [codeOpen, setCodeOpen] = useState(false);
   const [pendingOther, setPendingOther] = useState(null);
+
+  // ✅ NOUVEAU: modal "sur quoi il s'est punch"
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const currentOpen = useMemo(() => sessions.find((s) => !s.end) || null, [sessions]);
   const currentJobName = currentOpen?.jobName || null;
@@ -1070,10 +1284,12 @@ function LigneEmploye({ emp, setError, projets, autresProjets }) {
           ...styles.row,
           background: rowBg,
           transition: "background 0.25s ease-out",
-          cursor: "default",
+          cursor: "pointer", // ✅ clickable (ouvre le modal)
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        onClick={() => setDetailsOpen(true)} // ✅ NOUVEAU
+        title="Clique pour voir les détails du punch aujourd’hui"
       >
         <td style={{ ...styles.td, whiteSpace: "nowrap", fontWeight: 900 }}>{emp.nom || "—"}</td>
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
@@ -1183,6 +1399,17 @@ function LigneEmploye({ emp, setError, projets, autresProjets }) {
           </div>
         </td>
       </tr>
+
+      {/* ✅ NOUVEAU: détails punch */}
+      <EmployePunchDetailsModal
+        open={detailsOpen}
+        emp={emp}
+        sessions={sessions}
+        totalMs={totalMs}
+        projets={projets}
+        autresProjets={autresProjets}
+        onClose={() => setDetailsOpen(false)}
+      />
 
       <MiniConfirm
         open={confirmOpen}
@@ -1337,14 +1564,16 @@ export default function PageAccueil() {
                   {visibleEmployes.length === 0 && (
                     <tr>
                       <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                        {isAdmin
-                          ? "Aucun employé(e) pour l’instant."
-                          : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
+                        {isAdmin ? "Aucun employé(e) pour l’instant." : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
+            </div>
+
+            <div style={{ marginTop: 10, color: "#64748b", fontSize: 13 }}>
+              Astuce: clique sur une ligne (nom) pour voir le détail des segments d’aujourd’hui.
             </div>
           </Card>
 
@@ -1358,9 +1587,12 @@ export default function PageAccueil() {
         </div>
       </PageContainer>
 
-      {materialProjId && (
-        <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />
-      )}
+      {materialProjId && <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />}
+
+      {/* ✅ build visible (pour savoir si les autres ont la maj) */}
+      <div style={{ position: "fixed", bottom: 8, right: 12, fontSize: 12, opacity: 0.5, zIndex: 99999 }}>
+        build: {APP_BUILD}
+      </div>
     </>
   );
 }

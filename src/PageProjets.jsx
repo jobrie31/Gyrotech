@@ -151,7 +151,7 @@ async function empHasOpenBySegId(empId, key, segId, expectedJobId) {
   if (!empId || !key || !segId) return { ok: false, result: false };
   try {
     const s = await getDoc(empSegRef(empId, key, segId));
-    if (!s.exists()) return { ok: true, result: false };
+    if (!s.exists()) return { ok: false, result: false }; // ✅ force fallback
     const d = s.data() || {};
     if (expectedJobId && String(d.jobId || "") !== String(expectedJobId || "")) {
       // segId existe mais pas le bon job (rare) -> considérer comme "pas open"
