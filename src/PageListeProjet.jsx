@@ -1290,6 +1290,27 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
   const lastSentRef = useRef({});
   const isFirstLoadRef = useRef(true);
 
+  const NOTE_MIN_ROWS = 5;
+  const NOTE_MAX_ROWS = 15;
+  const NOTE_LINE_HEIGHT_PX = 24;
+
+  const noteRef = useRef(null);
+
+  const autoSizeNote = () => {
+    const el = noteRef.current;
+    if (!el) return;
+
+    el.style.height = "auto";
+
+    const minH = NOTE_MIN_ROWS * NOTE_LINE_HEIGHT_PX;
+    const maxH = NOTE_MAX_ROWS * NOTE_LINE_HEIGHT_PX;
+
+    const nextH = Math.max(minH, Math.min(el.scrollHeight, maxH));
+    el.style.height = `${nextH}px`;
+
+    el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
+  };
+
   useEffect(() => {
     if (!open || !projId) {
       setLive(null);
@@ -1306,6 +1327,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
           const obj = { id: snap.id, ...data };
 
           setLive(obj);
+          setTimeout(autoSizeNote, 0);
 
           // premier load: on initialise lastSentRef (pour éviter d'écrire direct)
           if (isFirstLoadRef.current) {
@@ -1407,6 +1429,8 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
     gridTemplateColumns: "1fr 1fr",
     gap: 10,
   };
+
+  
 
   return (
     <div
@@ -1614,19 +1638,24 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #e5e7eb" }}>
               <div style={{ fontWeight: 1000, marginBottom: 6, fontSize: 18 }}>Notes / Travaux à effectuer</div>
               <textarea
+                ref={noteRef}
                 value={(p.note ?? "").toString()}
                 onChange={(e) => {
                   const v = e.target.value;
                   setLive((prev) => (prev ? { ...prev, note: v } : prev));
                   commitPatchDebounced({ note: v });
+                  setTimeout(autoSizeNote, 0);
                 }}
                 placeholder="Écris les notes ici…"
+                rows={NOTE_MIN_ROWS} // ✅ démarre à 5 lignes
                 style={{
                   ...inputInline,
-                  minHeight: 120,
-                  resize: "vertical",
+                  resize: "none",
+                  overflowY: "hidden",          // ✅ pas besoin de drag (ça grandit tout seul)
                   whiteSpace: "pre-wrap",
-                  fontWeight: 800,
+                  fontWeight: 900,
+                  fontSize: 18,
+                  lineHeight: `${NOTE_LINE_HEIGHT_PX}px`, // ✅ pour que 5-15 lignes soient exactes
                 }}
               />
             </div>

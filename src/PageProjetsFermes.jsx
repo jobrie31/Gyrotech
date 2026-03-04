@@ -20,6 +20,7 @@ import {
   where,
   Timestamp,
   limit,
+  writeBatch,
 } from "firebase/firestore";
 import { db, storage, functions, auth } from "./firebaseConfig";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
@@ -323,33 +324,66 @@ async function recordCloseBTTime({ projet, startMs, endDate }) {
   if (end.getTime() <= startDate.getTime()) return;
 
   const key = dayKey(startDate);
+  const now = new Date();
 
-  // Projet
+  // ✅ employé lié au user (si dispo)
+  const emp = await getEmpFromAuth(); // { empId, empName } | null
+
+  // ensure day docs
   await ensureProjDay(projet.id, key);
-  await addDoc(projSegCol(projet.id, key), {
-    empId: null,
-    empName: null,
+  if (emp?.empId) await ensureEmpDay(emp.empId, key);
+
+  // ✅ 1 seul segId pour les 2 côtés
+  // (on génère un id à partir d’un docRef dans la sous-collection employé, sans l’écrire encore)
+  const segId = doc(empSegCol(emp?.empId || "_dummy_", key)).id;
+
+  const projSegRef = doc(db, "projets", projet.id, "timecards", key, "segments", segId);
+
+  // ⚠️ seulement si on a un empId réel
+  const empSegRef = emp?.empId ? doc(db, "employes", emp.empId, "timecards", key, "segments", segId) : null;
+
+  const projName = projet.nom || projet.clientNom || null;
+
+  const batch = writeBatch(db);
+
+  // ✅ Segment PROJET (fermé)
+  batch.set(projSegRef, {
+    // lien “logique”
+    empId: emp?.empId || null,
+    empName: emp?.empName || null,
+
+    // temps
     start: startDate,
-    end,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    end: end,
+
+    // meta
+    createdAt: now,
+    updatedAt: now,
     source: "close_bt_wizard",
+    phase: "close_bt",
+
+    // ✅ optionnel mais utile pour debug/filtrage
+    jobId: `proj:${projet.id}`,
+    jobName: projName,
   });
 
-  // Employé
-  const emp = await getEmpFromAuth();
-  if (emp?.empId) {
-    await ensureEmpDay(emp.empId, key);
-    await addDoc(empSegCol(emp.empId, key), {
+  // ✅ Segment EMPLOYÉ (fermé) — même segId
+  if (empSegRef) {
+    batch.set(empSegRef, {
       jobId: `proj:${projet.id}`,
-      jobName: projet.nom || projet.clientNom || null,
+      jobName: projName,
+
       start: startDate,
-      end,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      end: end,
+
+      createdAt: now,
+      updatedAt: now,
       source: "close_bt_wizard",
+      phase: "close_bt",
     });
   }
+
+  await batch.commit();
 }
 
 /* ---------------------- PDF VECTOR ---------------------- */

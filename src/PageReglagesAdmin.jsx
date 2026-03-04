@@ -1117,7 +1117,7 @@ export default function PageReglagesAdmin() {
       <section style={section}>
         <h3 style={h3Bold}>Sécurité</h3>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Force une reconnexion pour tout le monde (email + mot de passe). Aucune donnée n’est supprimée.
+          Pour déconnecter tout le monde (mise à jour, etc). Aucune donnée n’est supprimée.
         </div>
 
         {kickAllMsg && (

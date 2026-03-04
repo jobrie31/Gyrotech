@@ -21,7 +21,17 @@ import Test from "./Test";
 // ✅ AJOUT: gate "Commencer la journée" (1x/jour + reset minuit + reload)
 import StartDayGate from "./StartDayGate";
 
-import { collection, getDocs, limit, onSnapshot, query, where, doc } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  limit,
+  onSnapshot,
+  query,
+  where,
+  doc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 
 // ➜ Supporte aussi les sous-chemins (#/historique/<empId>, etc.)
 function getRouteFromHash() {
@@ -56,6 +66,17 @@ export default function App() {
   // ✅ meta cache des notes (Firestore)
   // blockKey -> { updMs, seenMs, hasText }
   const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
+
+  /* ===================== 📣 BROADCAST GLOBAL (message admin + "VU") ===================== */
+
+  const [broadcastText, setBroadcastText] = useState("");
+  const [broadcastUpdMs, setBroadcastUpdMs] = useState(0);
+  const [broadcastSeenMs, setBroadcastSeenMs] = useState(0);
+  const [broadcastNotifOn, setBroadcastNotifOn] = useState(false);
+
+  // UI admin
+  const [broadcastEditOpen, setBroadcastEditOpen] = useState(false);
+  const [broadcastDraft, setBroadcastDraft] = useState("");
 
   // router
   useEffect(() => {
@@ -303,6 +324,96 @@ export default function App() {
     return () => unsub();
   }, [user, me?.id, isAdmin]);
 
+  /* ===================== 📣 LISTENERS BROADCAST ===================== */
+
+  // doc message global: config/broadcast
+  useEffect(() => {
+    if (!user) return;
+
+    const ref = doc(db, "config", "broadcast");
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const data = snap.exists() ? snap.data() || {} : {};
+        const text = String(data.text || "").trim();
+        const updMs = safeToMs(data.updatedAt);
+
+        setBroadcastText(text);
+        setBroadcastUpdMs(updMs);
+      },
+      (err) => {
+        console.error("broadcast listener error:", err);
+        setBroadcastText("");
+        setBroadcastUpdMs(0);
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid]);
+
+  // doc vu employé: employes/{empId}/ui/broadcast
+  useEffect(() => {
+    if (!user) return;
+    if (!me?.id) return;
+
+    const ref = doc(db, "employes", me.id, "ui", "broadcast");
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const data = snap.exists() ? snap.data() || {} : {};
+        const seenMs = safeToMs(data.seenAt);
+        setBroadcastSeenMs(seenMs);
+      },
+      (err) => {
+        console.error("broadcast seen listener error:", err);
+        setBroadcastSeenMs(0);
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid, me?.id]);
+
+  // compute blink bleu si non vu
+  useEffect(() => {
+    const hasText = !!String(broadcastText || "").trim();
+    const nonVu = hasText && (broadcastUpdMs || 0) > (broadcastSeenMs || 0);
+    setBroadcastNotifOn(nonVu);
+  }, [broadcastText, broadcastUpdMs, broadcastSeenMs]);
+
+  // ✅ action "VU" (tout le monde)
+  const markBroadcastSeen = async () => {
+    if (!me?.id) return;
+    try {
+      const ref = doc(db, "employes", me.id, "ui", "broadcast");
+      await setDoc(ref, { seenAt: serverTimestamp() }, { merge: true });
+    } catch (e) {
+      console.error("markBroadcastSeen error:", e);
+    }
+  };
+
+  // ✅ action admin: enregistrer message
+  const adminSaveBroadcast = async () => {
+    if (!isAdmin) return;
+    const txt = String(broadcastDraft || "").trim();
+
+    try {
+      const ref = doc(db, "config", "broadcast");
+      await setDoc(
+        ref,
+        {
+          text: txt, // vide = effacer
+          updatedAt: serverTimestamp(),
+          updatedBy: String(user?.email || ""),
+        },
+        { merge: true }
+      );
+
+      setBroadcastEditOpen(false);
+    } catch (e) {
+      console.error("adminSaveBroadcast error:", e);
+    }
+  };
+
   /* ===================== UI ===================== */
   if (user === undefined) {
     return <div style={{ padding: 24 }}>Chargement...</div>;
@@ -350,30 +461,42 @@ export default function App() {
     background: "#fff",
   };
 
-  // 🔥 FLASH PLUS VIF
+  // 🔥 FLASH: priorise ROUGE (notes) sinon BLEU (broadcast)
   const topBarBlink = noteNotifOn
     ? {
         animation: "notifBlinkVIF 0.55s infinite",
         borderBottom: "2px solid #ff0000",
         boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
       }
+    : broadcastNotifOn
+    ? {
+        animation: "notifBlinkBLEU 0.70s infinite",
+        borderBottom: "2px solid #2563eb",
+        boxShadow: "0 0 0 2px rgba(37,99,235,0.18) inset, 0 0 22px rgba(37,99,235,0.28)",
+      }
     : null;
 
-  const connectedStyle = noteNotifOn
-    ? {
-        color: "#ffffff",
-        fontWeight: 1000,
-        textShadow: "0 2px 10px rgba(0,0,0,0.25)",
-      }
-    : { color: "#64748b", fontWeight: 700 };
+  const connectedStyle =
+    noteNotifOn || broadcastNotifOn
+      ? {
+          color: "#ffffff",
+          fontWeight: 1000,
+          textShadow: "0 2px 10px rgba(0,0,0,0.25)",
+        }
+      : { color: "#64748b", fontWeight: 700 };
 
   return (
     <div>
-      {/* ✅ Keyframes flash vif */}
+      {/* ✅ Keyframes flash */}
       <style>{`
         @keyframes notifBlinkVIF {
           0%   { background: #ffffff; }
           50%  { background: #ff0000; }
+          100% { background: #ffffff; }
+        }
+        @keyframes notifBlinkBLEU {
+          0%   { background: #ffffff; }
+          50%  { background: #2563eb; }
           100% { background: #ffffff; }
         }
       `}</style>
@@ -387,11 +510,80 @@ export default function App() {
             justifySelf: "center",
             fontSize: 12,
             lineHeight: 1.2,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
             ...connectedStyle,
           }}
         >
-          Connecté comme: {user.email}
-          {isAdmin ? " — Admin" : ""}
+          <span>
+            Connecté: {user.email}
+            {isAdmin ? " — Admin" : ""}
+          </span>
+
+          {/* ✅ Message global visible à tous */}
+          {String(broadcastText || "").trim() ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span
+                title={broadcastText}
+                style={{
+                  maxWidth: 520,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  background: broadcastNotifOn ? "rgba(255,255,255,0.22)" : "rgba(148,163,184,0.18)",
+                  border: broadcastNotifOn
+                    ? "1px solid rgba(255,255,255,0.55)"
+                    : "1px solid rgba(148,163,184,0.35)",
+                }}
+              >
+                📣 {broadcastText}
+              </span>
+
+              {broadcastNotifOn ? (
+                <button
+                  onClick={markBroadcastSeen}
+                  style={{
+                    border: "1px solid rgba(255,255,255,0.7)",
+                    background: "rgba(255,255,255,0.20)",
+                    color: "inherit",
+                    borderRadius: 10,
+                    padding: "4px 10px",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  VU
+                </button>
+              ) : (
+                <span style={{ opacity: 0.85, fontWeight: 800 }}>Vu</span>
+              )}
+            </div>
+          ) : null}
+
+          {/* ✅ Admin: ajouter/modifier message */}
+          {isAdmin ? (
+            <button
+              onClick={() => {
+                setBroadcastDraft(String(broadcastText || ""));
+                setBroadcastEditOpen(true);
+              }}
+              style={{
+                border: "1px solid #cbd5e1",
+                background: "#fff",
+                color: "#0f172a",
+                borderRadius: 10,
+                padding: "4px 10px",
+                fontWeight: 900,
+                cursor: "pointer",
+              }}
+            >
+              + Message
+            </button>
+          ) : null}
         </div>
 
         <div style={{ justifySelf: "end" }}>
@@ -414,6 +606,85 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* ✅ Modale admin message */}
+      {isAdmin && broadcastEditOpen ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: 16,
+          }}
+          onClick={() => setBroadcastEditOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(720px, 96vw)",
+              background: "#fff",
+              borderRadius: 14,
+              padding: 14,
+              border: "1px solid #e5e7eb",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.22)",
+            }}
+          >
+            <div style={{ fontWeight: 1000, marginBottom: 8 }}>
+              Message global (tout le monde doit cliquer “VU”)
+            </div>
+
+            <textarea
+              value={broadcastDraft}
+              onChange={(e) => setBroadcastDraft(e.target.value)}
+              rows={4}
+              placeholder="Écris le message… (vide = effacer)"
+              style={{
+                width: "100%",
+                borderRadius: 12,
+                border: "1px solid #cbd5e1",
+                padding: 10,
+                fontSize: 14,
+                outline: "none",
+              }}
+            />
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
+              <button
+                onClick={() => setBroadcastEditOpen(false)}
+                style={{
+                  border: "1px solid #cbd5e1",
+                  background: "#fff",
+                  borderRadius: 10,
+                  padding: "8px 12px",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+              >
+                Annuler
+              </button>
+
+              <button
+                onClick={adminSaveBroadcast}
+                style={{
+                  border: "1px solid #0f172a",
+                  background: "#0f172a",
+                  color: "#fff",
+                  borderRadius: 10,
+                  padding: "8px 12px",
+                  fontWeight: 1000,
+                  cursor: "pointer",
+                }}
+              >
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* ✅ Gate "Commencer la journée" — visible pour ADMIN + NON-ADMIN */}
       <StartDayGate
