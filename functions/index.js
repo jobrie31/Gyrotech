@@ -12,6 +12,7 @@ const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 
 // Options globales
 setGlobalOptions({
@@ -20,6 +21,81 @@ setGlobalOptions({
 });
 
 admin.initializeApp();
+
+/* =========================
+   ✅ BÉTON: si segment EMPLOYÉ (segId) ferme => segment PROJET (même segId) ferme aussi
+   Trigger:
+   employes/{empId}/timecards/{day}/segments/{segId}
+
+   ✅ FIX v2/Eventarc:
+   - La région du trigger Firestore doit matcher la région Firestore
+   - Ton erreur montre un trigger créé en northamerica-northeast1
+   ========================= */
+exports.syncProjectSegOnEmpClose = onDocumentUpdated(
+  {
+    document: "employes/{empId}/timecards/{day}/segments/{segId}",
+    region: "northamerica-northeast1", // ✅ IMPORTANT: match Firestore (Canada)
+  },
+  async (event) => {
+    const before = event.data?.before?.data?.() || null;
+    const after = event.data?.after?.data?.() || null;
+    const params = event.params || {};
+
+    if (!after) return;
+
+    const beforeEnd = before?.end ?? null;
+    const afterEnd = after?.end ?? null;
+
+    // On ne fait quelque chose QUE quand end passe de null -> non-null
+    if (beforeEnd != null) return;
+    if (afterEnd == null) return;
+
+    const jobId = String(after?.jobId || "");
+    if (!jobId.startsWith("proj:")) return;
+
+    const projId = jobId.slice(5);
+    if (!projId) return;
+
+    const day = params.day;
+    const segId = params.segId;
+    const empId = params.empId;
+
+    // Segment projet correspondant (même segId)
+    const pRef = admin
+      .firestore()
+      .collection("projets")
+      .doc(projId)
+      .collection("timecards")
+      .doc(day)
+      .collection("segments")
+      .doc(segId);
+
+    try {
+      const pSnap = await pRef.get();
+      if (!pSnap.exists) {
+        // Option: on ne crée pas si absent (évite de masquer un autre bug).
+        // Si tu veux le créer automatiquement, dis-le moi.
+        logger.warn("syncProjectSegOnEmpClose: project seg missing", { projId, day, segId, empId });
+        return;
+      }
+
+      const p = pSnap.data() || {};
+      if (p.end != null) return; // déjà fermé, rien à faire
+
+      // ✅ BÉTON: même timestamp que côté employé
+      await pRef.update({
+        end: afterEnd,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        closedBy: "emp_close_sync",
+        closedByEmpId: empId || null,
+      });
+
+      logger.info("syncProjectSegOnEmpClose OK", { projId, day, segId, empId });
+    } catch (e) {
+      logger.error("syncProjectSegOnEmpClose FAILED", { projId, day, segId, empId }, e);
+    }
+  }
+);
 
 /* =========================
    ✅ SHUTDOWN GLOBAL (Admin) — Kick ALL users

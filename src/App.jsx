@@ -1,6 +1,6 @@
 // App.jsx
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebaseConfig";
 
@@ -35,7 +35,7 @@ import {
 
 // ➜ Supporte aussi les sous-chemins (#/historique/<empId>, etc.)
 function getRouteFromHash() {
-  const raw = window.location.hash.replace(/^#\//, ""); // ex: "historique/abc"
+  const raw = window.location.hash.replace(/^#\//, "");
   const first = raw.split("/")[0];
   return first || "accueil";
 }
@@ -48,6 +48,134 @@ function safeToMs(ts) {
   const d = new Date(ts);
   const ms = d.getTime();
   return Number.isFinite(ms) ? ms : 0;
+}
+
+/* ---------------------- popup message global ---------------------- */
+function BroadcastPopup({ open, text, isAuthor, onSeen, onCloseAdminEdit, onClose }) {
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 20000,
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(900px, 95vw)",
+          background: "#ffffff",
+          borderRadius: 22,
+          padding: "22px 28px 24px",
+          boxShadow: "0 24px 80px rgba(0,0,0,0.35)",
+          border: "3px solid #2563eb",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+          <button
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 28,
+              fontWeight: 900,
+              cursor: "pointer",
+              lineHeight: 1,
+              color: "#334155",
+            }}
+            title="Fermer"
+          >
+            ×
+          </button>
+        </div>
+
+        <div
+          style={{
+            fontSize: 34,
+            fontWeight: 1000,
+            marginBottom: 18,
+            color: "#0f172a",
+            textAlign: "center",
+          }}
+        >
+          📣 MESSAGE IMPORTANT
+        </div>
+
+        <div
+          style={{
+            fontSize: 28,
+            fontWeight: 800,
+            lineHeight: 1.35,
+            color: "#111827",
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: 18,
+            padding: "22px 20px",
+            whiteSpace: "pre-wrap",
+            textAlign: "center",
+          }}
+        >
+          {text}
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: 14,
+            marginTop: 22,
+            flexWrap: "wrap",
+          }}
+        >
+          {isAuthor ? (
+            <button
+              onClick={() => {
+                onClose?.();
+                onCloseAdminEdit?.();
+              }}
+              style={{
+                border: "1px solid #1d4ed8",
+                background: "#2563eb",
+                color: "#fff",
+                borderRadius: 14,
+                padding: "14px 26px",
+                fontSize: 22,
+                fontWeight: 1000,
+                cursor: "pointer",
+              }}
+            >
+              Modifier le message
+            </button>
+          ) : (
+            <button
+              onClick={onSeen}
+              style={{
+                border: "1px solid #1d4ed8",
+                background: "#2563eb",
+                color: "#fff",
+                borderRadius: 14,
+                padding: "14px 26px",
+                fontSize: 24,
+                fontWeight: 1000,
+                cursor: "pointer",
+                minWidth: 180,
+              }}
+            >
+              VU
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -64,7 +192,6 @@ export default function App() {
   const [noteNotifOn, setNoteNotifOn] = useState(false);
 
   // ✅ meta cache des notes (Firestore)
-  // blockKey -> { updMs, seenMs, hasText }
   const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
 
   /* ===================== 📣 BROADCAST GLOBAL (message admin + "VU") ===================== */
@@ -73,6 +200,10 @@ export default function App() {
   const [broadcastUpdMs, setBroadcastUpdMs] = useState(0);
   const [broadcastSeenMs, setBroadcastSeenMs] = useState(0);
   const [broadcastNotifOn, setBroadcastNotifOn] = useState(false);
+  const [broadcastUpdatedBy, setBroadcastUpdatedBy] = useState("");
+
+  // ✅ ouverture manuelle du gros popup
+  const [broadcastPopupOpen, setBroadcastPopupOpen] = useState(false);
 
   // UI admin
   const [broadcastEditOpen, setBroadcastEditOpen] = useState(false);
@@ -143,9 +274,16 @@ export default function App() {
 
   const isAdmin = me?.isAdmin === true;
 
+  const hasBroadcastText = !!String(broadcastText || "").trim();
+  const broadcastNonVu = hasBroadcastText && (broadcastUpdMs || 0) > (broadcastSeenMs || 0);
+  const myEmailLower = String(user?.email || "").trim().toLowerCase();
+  const isBroadcastAuthor = !!myEmailLower && myEmailLower === broadcastUpdatedBy;
+
+  const showBroadcastPopup =
+    hasBroadcastText && (broadcastPopupOpen || (!isBroadcastAuthor && broadcastNonVu));
+
   /* ===================== 🔐 SHUTDOWN GLOBAL (security) ===================== */
 
-  // 1) Listener sur config/security.sessionVersion (reçoit l'ordre de shutdown)
   useEffect(() => {
     if (!user) return;
 
@@ -161,15 +299,13 @@ export default function App() {
         const localRaw = window.localStorage?.getItem(key);
         const localV = Number(localRaw || 0) || 0;
 
-        // ✅ Si Firestore est plus haut que le device => shutdown immédiat
         if (v > localV) {
           try {
             window.localStorage?.setItem(key, String(v));
-            window.localStorage?.setItem("sessionKickMsg", "1"); // message login
+            window.localStorage?.setItem("sessionKickMsg", "1");
           } catch {}
 
           signOut(auth).finally(() => {
-            // ✅ hard refresh pour prendre le dernier build
             try {
               window.location.href = "/#/accueil";
               window.location.reload();
@@ -180,7 +316,6 @@ export default function App() {
           return;
         }
 
-        // sync (au cas où)
         if (v !== localV) {
           try {
             window.localStorage?.setItem(key, String(v));
@@ -193,51 +328,93 @@ export default function App() {
     return () => unsub();
   }, [user?.uid]);
 
-  // 2) Vérification token (révocation serveur) pour forcer le logout même si le device a raté le listener
+  // ✅ FIX double-login après "déconnecter tout le monde"
+  // On garde le vrai refresh de token, mais on évite de kicker immédiatement
+  // juste après une reconnexion fraîche.
   useEffect(() => {
     if (!user) return;
 
     let alive = true;
+    const startedAt = Date.now();
+
+    const reallyKickOut = async () => {
+      try {
+        window.localStorage?.setItem("sessionKickMsg", "1");
+      } catch {}
+
+      try {
+        await signOut(auth);
+      } catch (e) {
+        console.error("signOut after token check failed:", e);
+      }
+
+      try {
+        window.location.href = "/#/accueil";
+        window.location.reload();
+      } catch {
+        window.location.hash = "#/accueil";
+      }
+    };
 
     const forceCheck = async () => {
+      if (!alive) return;
+
       try {
-        // ✅ force refresh token -> si révoqué, ça throw
+        // ✅ vrai refresh token
         await user.getIdToken(true);
-      } catch (e) {
+      } catch (e1) {
+        console.error("forceCheck getIdToken(true) failed (1st try):", e1);
+
         if (!alive) return;
 
+        // ✅ retry avant de kicker
         try {
-          window.localStorage?.setItem("sessionKickMsg", "1");
-        } catch {}
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          if (!alive) return;
 
-        await signOut(auth);
-        try {
-          window.location.href = "/#/accueil";
-          window.location.reload();
-        } catch {
-          window.location.hash = "#/accueil";
+          await user.getIdToken(true);
+          return;
+        } catch (e2) {
+          console.error("forceCheck getIdToken(true) failed (2nd try):", e2);
+
+          if (!alive) return;
+          await reallyKickOut();
         }
       }
     };
 
-    // au retour au premier plan
     const onVis = () => {
-      if (document.visibilityState === "visible") forceCheck();
+      if (document.visibilityState !== "visible") return;
+
+      // ✅ évite un check instantané juste après login
+      if (Date.now() - startedAt < 5000) return;
+
+      forceCheck();
     };
+
     document.addEventListener("visibilitychange", onVis);
 
-    // toutes les 30s (tu peux mettre 10s si tu veux ultra agressif)
-    const t = window.setInterval(forceCheck, 30 * 1000);
-    forceCheck();
+    // ✅ premier check après petit délai
+    const firstTimer = window.setTimeout(() => {
+      if (!alive) return;
+      forceCheck();
+    }, 5000);
+
+    // ✅ check régulier
+    const intervalTimer = window.setInterval(() => {
+      if (!alive) return;
+      forceCheck();
+    }, 30 * 1000);
 
     return () => {
       alive = false;
       document.removeEventListener("visibilitychange", onVis);
-      window.clearInterval(t);
+      window.clearTimeout(firstTimer);
+      window.clearInterval(intervalTimer);
     };
   }, [user?.uid]);
 
-  // 🔒 redirects si non-admin tente d'aller sur pages admin (inclut test-ocr)
+  // 🔒 redirects si non-admin tente d'aller sur pages admin
   useEffect(() => {
     if (meLoading) return;
 
@@ -245,12 +422,10 @@ export default function App() {
       window.location.hash = "#/reglages";
     }
 
-    // ✅ protéger la page test OCR (admin-only)
     if (route === "test-ocr" && !isAdmin) {
       window.location.hash = "#/accueil";
     }
 
-    // ✅ protéger la feuille dépenses (admin-only)
     if (route === "feuille-depenses" && !isAdmin) {
       window.location.hash = "#/accueil";
     }
@@ -263,7 +438,6 @@ export default function App() {
 
   /* ===================== 🔔 NOTIF NOTE ADMIN (NON-ADMIN) — TOUS BLOCS (Firestore) ===================== */
 
-  // reset quand on change de user/me
   useEffect(() => {
     setNoteNotifOn(false);
     setNotesMetaByBlock({});
@@ -278,14 +452,11 @@ export default function App() {
       const hasText = !!meta.hasText;
 
       if (!hasText || !updMs) continue;
-
-      // ✅ non vu si updatedAt > noteSeenByEmpAt
       if (updMs > seenMs) return true;
     }
     return false;
   };
 
-  // Snapshot sur TOUTE la collection payBlockNotes de cet employé
   useEffect(() => {
     if (!user) return;
     if (!me?.id) return;
@@ -306,7 +477,7 @@ export default function App() {
           const hasText = !!noteText;
 
           const updMs = safeToMs(data.updatedAt);
-          const seenMs = safeToMs(data.noteSeenByEmpAt); // ✅ Firestore "Vu" employé
+          const seenMs = safeToMs(data.noteSeenByEmpAt);
 
           meta[blockKey] = { updMs, seenMs, hasText };
         });
@@ -326,7 +497,6 @@ export default function App() {
 
   /* ===================== 📣 LISTENERS BROADCAST ===================== */
 
-  // doc message global: config/broadcast
   useEffect(() => {
     if (!user) return;
 
@@ -337,21 +507,23 @@ export default function App() {
         const data = snap.exists() ? snap.data() || {} : {};
         const text = String(data.text || "").trim();
         const updMs = safeToMs(data.updatedAt);
+        const updatedBy = String(data.updatedBy || "").trim().toLowerCase();
 
         setBroadcastText(text);
         setBroadcastUpdMs(updMs);
+        setBroadcastUpdatedBy(updatedBy);
       },
       (err) => {
         console.error("broadcast listener error:", err);
         setBroadcastText("");
         setBroadcastUpdMs(0);
+        setBroadcastUpdatedBy("");
       }
     );
 
     return () => unsub();
   }, [user?.uid]);
 
-  // doc vu employé: employes/{empId}/ui/broadcast
   useEffect(() => {
     if (!user) return;
     if (!me?.id) return;
@@ -373,19 +545,20 @@ export default function App() {
     return () => unsub();
   }, [user?.uid, me?.id]);
 
-  // compute blink bleu si non vu
+  // ✅ flash bleu pour tous sauf l'auteur du message
   useEffect(() => {
     const hasText = !!String(broadcastText || "").trim();
     const nonVu = hasText && (broadcastUpdMs || 0) > (broadcastSeenMs || 0);
-    setBroadcastNotifOn(nonVu);
-  }, [broadcastText, broadcastUpdMs, broadcastSeenMs]);
+    setBroadcastNotifOn(!isBroadcastAuthor && nonVu);
+  }, [broadcastText, broadcastUpdMs, broadcastSeenMs, isBroadcastAuthor]);
 
-  // ✅ action "VU" (tout le monde)
+  // ✅ action "VU"
   const markBroadcastSeen = async () => {
     if (!me?.id) return;
     try {
       const ref = doc(db, "employes", me.id, "ui", "broadcast");
       await setDoc(ref, { seenAt: serverTimestamp() }, { merge: true });
+      setBroadcastPopupOpen(false);
     } catch (e) {
       console.error("markBroadcastSeen error:", e);
     }
@@ -401,16 +574,40 @@ export default function App() {
       await setDoc(
         ref,
         {
-          text: txt, // vide = effacer
+          text: txt,
           updatedAt: serverTimestamp(),
-          updatedBy: String(user?.email || ""),
+          updatedBy: String(user?.email || "").trim().toLowerCase(),
         },
         { merge: true }
       );
 
       setBroadcastEditOpen(false);
+      setBroadcastPopupOpen(false);
     } catch (e) {
       console.error("adminSaveBroadcast error:", e);
+    }
+  };
+
+  const adminClearBroadcast = async () => {
+    if (!isAdmin) return;
+
+    try {
+      const ref = doc(db, "config", "broadcast");
+      await setDoc(
+        ref,
+        {
+          text: "",
+          updatedAt: serverTimestamp(),
+          updatedBy: String(user?.email || "").trim().toLowerCase(),
+        },
+        { merge: true }
+      );
+
+      setBroadcastDraft("");
+      setBroadcastEditOpen(false);
+      setBroadcastPopupOpen(false);
+    } catch (e) {
+      console.error("adminClearBroadcast error:", e);
     }
   };
 
@@ -423,21 +620,14 @@ export default function App() {
     return <Login />;
   }
 
-  // Menu
   const pages = [
     { key: "accueil", label: "Accueil" },
     { key: "projets", label: "Projets" },
     { key: "materiels", label: "Matériels" },
     { key: "reglages", label: "Réglages" },
     ...(isAdmin ? [{ key: "reglages-admin", label: "Réglages Admin" }] : []),
-
-    // ✅ Heures de travail visible pour tout le monde
     { key: "historique", label: isAdmin ? "Heures de travail" : "Mes heures" },
-
-    // ✅ Feuille dépenses (admin-only)
     ...(isAdmin ? [{ key: "feuille-depenses", label: "Feuille dépenses" }] : []),
-
-    // ✅ Test OCR (admin-only)
     ...(isAdmin ? [{ key: "test-ocr", label: "Test OCR" }] : []),
   ];
 
@@ -461,7 +651,6 @@ export default function App() {
     background: "#fff",
   };
 
-  // 🔥 FLASH: priorise ROUGE (notes) sinon BLEU (broadcast)
   const topBarBlink = noteNotifOn
     ? {
         animation: "notifBlinkVIF 0.55s infinite",
@@ -487,7 +676,6 @@ export default function App() {
 
   return (
     <div>
-      {/* ✅ Keyframes flash */}
       <style>{`
         @keyframes notifBlinkVIF {
           0%   { background: #ffffff; }
@@ -501,7 +689,6 @@ export default function App() {
         }
       `}</style>
 
-      {/* petite barre en haut avec bouton logout */}
       <div style={{ ...topBarBase, ...(topBarBlink || {}) }}>
         <div />
 
@@ -522,67 +709,68 @@ export default function App() {
             {isAdmin ? " — Admin" : ""}
           </span>
 
-          {/* ✅ Message global visible à tous */}
-          {String(broadcastText || "").trim() ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span
-                title={broadcastText}
+          {hasBroadcastText ? (
+            <button
+              type="button"
+              onClick={() => setBroadcastPopupOpen(true)}
+              title={broadcastText}
+              style={{
+                border: broadcastNonVu ? "1px solid rgba(255,255,255,0.75)" : "1px solid #cbd5e1",
+                background: broadcastNonVu ? "rgba(255,255,255,0.18)" : "#eff6ff",
+                color: broadcastNonVu ? "inherit" : "#1e3a8a",
+                borderRadius: 999,
+                fontSize: 16,
+                padding: "6px 12px",
+                fontWeight: 900,
+                cursor: "pointer",
+                maxWidth: 560,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              📣 {broadcastText}
+            </button>
+          ) : null}
+
+          {isAdmin ? (
+            <>
+              <button
+                onClick={() => {
+                  setBroadcastDraft(String(broadcastText || ""));
+                  setBroadcastEditOpen(true);
+                }}
                 style={{
-                  maxWidth: 520,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  padding: "4px 8px",
-                  borderRadius: 999,
-                  background: broadcastNotifOn ? "rgba(255,255,255,0.22)" : "rgba(148,163,184,0.18)",
-                  border: broadcastNotifOn
-                    ? "1px solid rgba(255,255,255,0.55)"
-                    : "1px solid rgba(148,163,184,0.35)",
+                  border: "1px solid #cbd5e1",
+                  background: "#fff",
+                  color: "#0f172a",
+                  borderRadius: 10,
+                  padding: "4px 10px",
+                  fontWeight: 900,
+                  cursor: "pointer",
                 }}
               >
-                📣 {broadcastText}
-              </span>
+                + Message
+              </button>
 
-              {broadcastNotifOn ? (
+              {hasBroadcastText ? (
                 <button
-                  onClick={markBroadcastSeen}
+                  onClick={adminClearBroadcast}
                   style={{
-                    border: "1px solid rgba(255,255,255,0.7)",
-                    background: "rgba(255,255,255,0.20)",
-                    color: "inherit",
+                    border: "1px solid #fecaca",
+                    background: "#fff1f2",
+                    color: "#b91c1c",
                     borderRadius: 10,
                     padding: "4px 10px",
                     fontWeight: 900,
                     cursor: "pointer",
                   }}
+                  title="Supprimer le message global"
                 >
-                  VU
+                  Supprimer
                 </button>
-              ) : (
-                <span style={{ opacity: 0.85, fontWeight: 800 }}>Vu</span>
-              )}
-            </div>
-          ) : null}
-
-          {/* ✅ Admin: ajouter/modifier message */}
-          {isAdmin ? (
-            <button
-              onClick={() => {
-                setBroadcastDraft(String(broadcastText || ""));
-                setBroadcastEditOpen(true);
-              }}
-              style={{
-                border: "1px solid #cbd5e1",
-                background: "#fff",
-                color: "#0f172a",
-                borderRadius: 10,
-                padding: "4px 10px",
-                fontWeight: 900,
-                cursor: "pointer",
-              }}
-            >
-              + Message
-            </button>
+              ) : null}
+            </>
           ) : null}
         </div>
 
@@ -607,7 +795,19 @@ export default function App() {
         </div>
       </div>
 
-      {/* ✅ Modale admin message */}
+      <BroadcastPopup
+        open={showBroadcastPopup}
+        text={broadcastText}
+        isAuthor={isBroadcastAuthor}
+        onSeen={markBroadcastSeen}
+        onClose={() => setBroadcastPopupOpen(false)}
+        onCloseAdminEdit={() => {
+          setBroadcastPopupOpen(false);
+          setBroadcastDraft(String(broadcastText || ""));
+          setBroadcastEditOpen(true);
+        }}
+      />
+
       {isAdmin && broadcastEditOpen ? (
         <div
           style={{
@@ -634,7 +834,7 @@ export default function App() {
             }}
           >
             <div style={{ fontWeight: 1000, marginBottom: 8 }}>
-              Message global (tout le monde doit cliquer “VU”)
+              Message global (tous les employés et les autres admins auront le message)
             </div>
 
             <textarea
@@ -686,10 +886,9 @@ export default function App() {
         </div>
       ) : null}
 
-      {/* ✅ Gate "Commencer la journée" — visible pour ADMIN + NON-ADMIN */}
       <StartDayGate
         userKey={(user?.uid || user?.email || "").toLowerCase()}
-        enabled={!meLoading} // ✅ tout le monde, une fois que "me" est chargé
+        enabled={!meLoading}
         title="Commencer la journée"
         subtitle="Clique ici pour actualiser l’application et repartir propre."
       />
@@ -701,12 +900,8 @@ export default function App() {
       {route === "materiels" && <PageMateriels />}
       {route === "reglages" && <PageReglages />}
       {route === "reglages-admin" && <PageReglagesAdmin />}
-
-      {/* ✅ on passe isAdmin + meEmpId */}
       {route === "historique" && <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />}
-
       {route === "feuille-depenses" && <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />}
-
       {route === "test-ocr" && <Test />}
 
       {!validRoutes.includes(route) && <PageAccueil />}

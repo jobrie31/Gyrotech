@@ -7,7 +7,6 @@ import { ref, uploadBytes } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
-  addDoc,
   doc,
   getDocs,
   getDoc,
@@ -83,12 +82,10 @@ function getBTOpenedByName(projet) {
     projet?.openedByName,
     projet?.createdByName,
     projet?.createdByNom,
+    projet?.createdByEmpName,
     projet?.createurNom,
     projet?.creatorName,
     projet?.createur,
-    projet?.createdByEmail,
-    projet?.btOuvertParEmail,
-    projet?.btOpenedByEmail,
   ];
   const found = candidates.find((v) => v != null && String(v).trim() !== "");
   return found ? String(found) : null;
@@ -315,6 +312,69 @@ async function computeProjectTotalMs(projId) {
   return total;
 }
 
+/* ---------------------- Heures par employé ---------------------- */
+function round2(n) {
+  return Math.round(Number(n || 0) * 100) / 100;
+}
+
+function hoursFromMs(ms) {
+  return round2(Number(ms || 0) / (1000 * 60 * 60));
+}
+
+async function computeProjectHoursByEmployee(projId) {
+  const byEmployee = new Map();
+
+  const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
+  const dayIds = [];
+  daysSnap.forEach((d) => dayIds.push(d.id));
+  dayIds.sort();
+
+  for (const key of dayIds) {
+    const segSnap = await getDocs(
+      query(collection(db, "projets", projId, "timecards", key, "segments"), orderBy("start", "asc"))
+    );
+
+    segSnap.forEach((sdoc) => {
+      const s = sdoc.data() || {};
+      const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
+      const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
+      if (!st) return;
+
+      const durMs = Math.max(0, (en ? en.getTime() : Date.now()) - st.getTime());
+      const empName = String(s.empName || s.empNom || "").trim() || "Employé inconnu";
+
+      byEmployee.set(empName, (byEmployee.get(empName) || 0) + durMs);
+    });
+  }
+
+  return Array.from(byEmployee.entries())
+    .map(([name, totalMs]) => ({
+      name,
+      totalMs,
+      hours: hoursFromMs(totalMs),
+    }))
+    .sort((a, b) => b.hours - a.hours);
+}
+
+function mergeHoursWithOpening(rows, projet, openedByName) {
+  const map = new Map();
+
+  (Array.isArray(rows) ? rows : []).forEach((r) => {
+    const name = String(r?.name || "").trim() || "Employé inconnu";
+    map.set(name, round2((map.get(name) || 0) + Number(r?.hours || 0)));
+  });
+
+  const openingHours = round2((Number(projet?.tempsOuvertureMinutes || 0) || 0) / 60);
+  if (openingHours > 0) {
+    const key = openedByName && openedByName !== "—" ? openedByName : "Ouverture BT";
+    map.set(key, round2((map.get(key) || 0) + openingHours));
+  }
+
+  return Array.from(map.entries())
+    .map(([name, hours]) => ({ name, hours: round2(hours) }))
+    .sort((a, b) => b.hours - a.hours);
+}
+
 /* ---------------------- ✅ Ajoute le segment "fermeture BT" (Projet + Employé) ---------------------- */
 async function recordCloseBTTime({ projet, startMs, endDate }) {
   if (!projet?.id) return;
@@ -334,7 +394,6 @@ async function recordCloseBTTime({ projet, startMs, endDate }) {
   if (emp?.empId) await ensureEmpDay(emp.empId, key);
 
   // ✅ 1 seul segId pour les 2 côtés
-  // (on génère un id à partir d’un docRef dans la sous-collection employé, sans l’écrire encore)
   const segId = doc(empSegCol(emp?.empId || "_dummy_", key)).id;
 
   const projSegRef = doc(db, "projets", projet.id, "timecards", key, "segments", segId);
@@ -348,21 +407,17 @@ async function recordCloseBTTime({ projet, startMs, endDate }) {
 
   // ✅ Segment PROJET (fermé)
   batch.set(projSegRef, {
-    // lien “logique”
     empId: emp?.empId || null,
     empName: emp?.empName || null,
 
-    // temps
     start: startDate,
     end: end,
 
-    // meta
     createdAt: now,
     updatedAt: now,
     source: "close_bt_wizard",
     phase: "close_bt",
 
-    // ✅ optionnel mais utile pour debug/filtrage
     jobId: `proj:${projet.id}`,
     jobName: projName,
   });
@@ -510,7 +565,7 @@ function PdfDocHeader({ factureConfig, dossierNo, dateStr, projet }) {
   return (
     <View style={[pdfStyles.spaceBetween, { marginBottom: 12, alignItems: "flex-start" }]}>
       <View style={{ flexShrink: 1 }}>
-        <Text style={pdfStyles.h1}>{factureConfig?.companyName || "Gyrotech"}</Text>
+        <Text style={pdfStyles.h1}>{factureConfig?.companyName || "GyroTech"}</Text>
         <Text style={[pdfStyles.muted, { fontSize: 11.0, marginTop: 2, lineHeight: 1.35 }]}>
           {factureConfig?.companySubtitle || "Service mobile – Diagnostic & réparation"}
         </Text>
@@ -584,6 +639,7 @@ function InvoiceDocument({
   usages,
   totalMateriel,
   totalHeuresArrondies,
+  hoursByEmployee,
   tauxHoraire,
   coutMainOeuvre,
   sousTotal,
@@ -630,28 +686,6 @@ function InvoiceDocument({
     </View>
   );
 
-  const TotalsPdf = () => (
-    <View style={pdfStyles.totalsBox}>
-      <View style={pdfStyles.totalsRow}>
-        <Text style={pdfStyles.totalsLabel}>Sous-total :</Text>
-        <Text style={pdfStyles.totalsValue}>{money(sousTotal)}</Text>
-      </View>
-      <View style={pdfStyles.totalsRow}>
-        <Text style={pdfStyles.totalsLabel}>TPS (5,0 %) :</Text>
-        <Text style={pdfStyles.totalsValue}>{money(tps)}</Text>
-      </View>
-      <View style={pdfStyles.totalsRow}>
-        <Text style={pdfStyles.totalsLabel}>TVQ (9,975 %) :</Text>
-        <Text style={pdfStyles.totalsValue}>{money(tvq)}</Text>
-      </View>
-
-      <View style={pdfStyles.totalsRowStrong}>
-        <Text style={pdfStyles.totalsLabelStrong}>Total :</Text>
-        <Text style={pdfStyles.totalsValueStrong}>{money(totalFacture)}</Text>
-      </View>
-    </View>
-  );
-
   return (
     <Document>
       <Page size="A4" style={pdfStyles.page}>
@@ -693,19 +727,32 @@ function InvoiceDocument({
         <Text style={[pdfStyles.sectionTitle, { marginTop: 12, marginBottom: 6 }]}>Détail du Bon de Travail</Text>
         <View style={[pdfStyles.table, { marginBottom: 10 }]}>
           <View style={pdfStyles.trHead}>
-            <Text style={[pdfStyles.th, pdfStyles.cLeft]}>Description</Text>
-            <Text style={[pdfStyles.th, pdfStyles.cCenter]}>Qté</Text>
-            <Text style={[pdfStyles.th, pdfStyles.cRight]}>Prix unitaire</Text>
-            <Text style={[pdfStyles.th, pdfStyles.cRight]}>Total</Text>
+            <Text style={[pdfStyles.th, pdfStyles.cLeft]}>Employé</Text>
+            <Text style={[pdfStyles.th, pdfStyles.cRight]}>Heures</Text>
           </View>
 
+          {(hoursByEmployee?.length ? hoursByEmployee : []).map((r, idx) => (
+            <View key={`${r.name}-${idx}`} style={pdfStyles.tr} wrap={false}>
+              <Text style={[pdfStyles.td, pdfStyles.cLeft]}>{safeTxt(r.name)}</Text>
+              <Text style={[pdfStyles.td, pdfStyles.cRight]}>
+                {Number(r.hours || 0).toLocaleString("fr-CA", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{" "}
+                h
+              </Text>
+            </View>
+          ))}
+
           <View style={pdfStyles.tr} wrap={false}>
-            <Text style={[pdfStyles.td, pdfStyles.cLeft]}>Main-d'œuvre – {projet?.nom || "Travaux mécaniques"}</Text>
-            <Text style={[pdfStyles.td, pdfStyles.cCenter]}>
-              {Number(totalHeuresArrondies || 0).toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h
+            <Text style={[pdfStyles.td, pdfStyles.cLeft, { fontWeight: "bold" }]}>Total heures</Text>
+            <Text style={[pdfStyles.td, pdfStyles.cRight, { fontWeight: "bold" }]}>
+              {Number(totalHeuresArrondies || 0).toLocaleString("fr-CA", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}{" "}
+              h
             </Text>
-            <Text style={[pdfStyles.td, pdfStyles.cRight]}>{tauxHoraire > 0 ? money(tauxHoraire) : "—"}</Text>
-            <Text style={[pdfStyles.td, pdfStyles.cRight]}>{coutMainOeuvre != null ? money(coutMainOeuvre) : "—"}</Text>
           </View>
         </View>
 
@@ -717,8 +764,6 @@ function InvoiceDocument({
             <View style={{ marginTop: 6, alignItems: "flex-end" }}>
               <Text style={{ fontSize: 11.2, fontWeight: "bold", lineHeight: 1.35 }}>Total matériel : {money(totalMateriel || 0)}</Text>
             </View>
-
-            <TotalsPdf />
             <ConfirmationsPdf />
           </>
         )}
@@ -740,8 +785,6 @@ function InvoiceDocument({
                 <View style={{ marginTop: 6, alignItems: "flex-end" }}>
                   <Text style={{ fontSize: 11.2, fontWeight: "bold", lineHeight: 1.35 }}>Total matériel : {money(totalMateriel || 0)}</Text>
                 </View>
-
-                <TotalsPdf />
                 <ConfirmationsPdf />
               </>
             )}
@@ -760,6 +803,7 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
     usages,
     totalMateriel,
     totalHeuresArrondies,
+    hoursByEmployee,
     tauxHoraire,
     coutMainOeuvre,
     sousTotal,
@@ -782,6 +826,7 @@ async function generateAndUploadInvoicePdf(projet, ctx) {
       usages={usages}
       totalMateriel={totalMateriel}
       totalHeuresArrondies={totalHeuresArrondies}
+      hoursByEmployee={hoursByEmployee}
       tauxHoraire={tauxHoraire}
       coutMainOeuvre={coutMainOeuvre}
       sousTotal={sousTotal}
@@ -811,7 +856,6 @@ function isValidEmailLoose(v) {
   return s.includes("@") && s.includes(".");
 }
 function normalizeEmailList(v) {
-  // accepte array, string (lignes / virgules)
   let items = [];
   if (Array.isArray(v)) items = v;
   else if (typeof v === "string") items = v.split(/[\n,;]+/g);
@@ -823,7 +867,6 @@ function normalizeEmailList(v) {
     .map((x) => x.toLowerCase())
     .filter(isValidEmailLoose);
 
-  // unique
   return Array.from(new Set(cleaned));
 }
 
@@ -834,6 +877,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
   const [error, setError] = useState(null);
 
   const [totalMs, setTotalMs] = useState(0);
+  const [hoursByEmployee, setHoursByEmployee] = useState([]);
   const [usages, setUsages] = useState([]);
   const [checks, setChecks] = useState({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
   const [materielOpen, setMaterielOpen] = useState(false);
@@ -847,14 +891,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
   const lastSavedNoteRef = useRef(null);
 
   const [factureConfig, setFactureConfig] = useState({
-    companyName: "Gyrotech",
+    companyName: "GyroTech",
     companySubtitle: "Service mobile – Diagnostic & réparation",
     companyPhone: "",
     companyEmail: "",
     tauxHoraire: 0,
   });
 
-  // ✅ NEW: emails destinataires facture (configurable admin)
   const [invoiceToEmails, setInvoiceToEmails] = useState(["jlabrie@styro.ca"]);
 
   useEffect(() => {
@@ -865,6 +908,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     setError(null);
     setChecks({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
     setTotalMs(0);
+    setHoursByEmployee([]);
     setUsages([]);
     setMaterielOpen(false);
     setStep(startAtSummary ? "summary" : "ask");
@@ -888,7 +932,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       }
     })();
 
-    // config facture
     (async () => {
       try {
         const refCfg = doc(db, "config", "facture");
@@ -902,7 +945,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       }
     })();
 
-    // ✅ NEW: config emails facture (admin)
     (async () => {
       try {
         const refCfg = doc(db, "config", "email");
@@ -964,9 +1006,15 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       try {
         setLoading(true);
         setError(null);
-        const total = await computeProjectTotalMs(projet.id);
+
+        const [total, byEmp] = await Promise.all([
+          computeProjectTotalMs(projet.id),
+          computeProjectHoursByEmployee(projet.id),
+        ]);
+
         if (!cancelled) {
           setTotalMs(total);
+          setHoursByEmployee(byEmp);
           setStep("summary");
         }
       } catch (e) {
@@ -1004,8 +1052,14 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     try {
       setLoading(true);
       setError(null);
-      const total = await computeProjectTotalMs(projet.id);
+
+      const [total, byEmp] = await Promise.all([
+        computeProjectTotalMs(projet.id),
+        computeProjectHoursByEmployee(projet.id),
+      ]);
+
       setTotalMs(total);
+      setHoursByEmployee(byEmp);
       setStep("summary");
     } catch (e) {
       console.error(e);
@@ -1100,6 +1154,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
   const openedByNameUI = getBTOpenedByName(projet) || "—";
   const closedByNameUI = filledBy?.name || (filledBy?.email ? filledBy.email : "—");
 
+  const hoursByEmployeeUI = mergeHoursWithOpening(hoursByEmployee, projet, openedByNameUI);
+
   const handleFinalClose = async () => {
     if (!projet?.id || !canConfirm) return;
 
@@ -1129,7 +1185,10 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       await depunchWorkersOnProject(projet.id);
       await clearEmployeesLastProject(projet.id);
 
-      const totalNowMs = await computeProjectTotalMs(projet.id);
+      const [totalNowMs, byEmpNow] = await Promise.all([
+        computeProjectTotalMs(projet.id),
+        computeProjectHoursByEmployee(projet.id),
+      ]);
 
       const tOpenMin = Number(projet.tempsOuvertureMinutes || 0) || 0;
       const totalMsInclOuvertureLive = totalNowMs + tOpenMin * 60 * 1000;
@@ -1161,6 +1220,8 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       const openedByName = getBTOpenedByName(projet) || null;
       const closedByName = filledBy?.name || (filledBy?.email ? filledBy.email : null);
 
+      const hoursByEmployeeLive = mergeHoursWithOpening(byEmpNow, projet, openedByName || "—");
+
       const pdfPath = await generateAndUploadInvoicePdf(projet, {
         factureConfig,
         dossierNo,
@@ -1168,6 +1229,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         usages,
         totalMateriel: totalMaterielLive,
         totalHeuresArrondies: totalHeuresArrondiesLive,
+        hoursByEmployee: hoursByEmployeeLive,
         tauxHoraire: tauxHoraireLive,
         coutMainOeuvre: coutMainOeuvreLive,
         sousTotal: sousTotalLive,
@@ -1183,13 +1245,12 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
 
-      // ✅ NEW: toEmail vient de la config admin (config/email.invoiceTo)
       const toEmail = Array.isArray(invoiceToEmails) && invoiceToEmails.length ? invoiceToEmails : ["jlabrie@styro.ca"];
 
       await sendInvoiceEmail({
         projetId: projet.id,
         toEmail,
-        subject: `Facture Gyrotech – Dossier ${dossierNo} – ${projet.nom || projet.clientNom || projet.id}`,
+        subject: `GyroTech – BT ${dossierNo}`,
         text: "Bonjour, veuillez trouver ci-joint le Bon de Travail de votre intervention.",
         pdfPath,
       });
@@ -1199,7 +1260,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         fermeComplet: true,
         fermeCompletAt: serverTimestamp(),
         deleteAt: Timestamp.fromDate(plusDays(new Date(), 60)),
-        factureEnvoyeeA: String(toEmail || "").trim(),
+        factureEnvoyeeA: Array.isArray(toEmail) ? toEmail.join(", ") : String(toEmail || "").trim(),
 
         note: noteClean ? noteClean : null,
         noteUpdatedAt: serverTimestamp(),
@@ -1438,25 +1499,32 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 8 }}>
                     <thead>
                       <tr style={{ background: "#f1f5f9" }}>
-                        <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Description</th>
-                        <th style={{ textAlign: "center", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Qté</th>
-                        <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Prix unitaire</th>
-                        <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Total</th>
+                        <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Employé</th>
+                        <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid #e2e8f0" }}>Heures</th>
                       </tr>
                     </thead>
                     <tbody>
+                      {hoursByEmployeeUI.map((r, idx) => (
+                        <tr key={`${r.name}-${idx}`}>
+                          <td style={{ padding: 6, borderBottom: "1px solid #f1f5f9" }}>{r.name}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
+                            {Number(r.hours || 0).toLocaleString("fr-CA", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{" "}
+                            h
+                          </td>
+                        </tr>
+                      ))}
+
                       <tr>
-                        <td style={{ padding: 6, borderBottom: "1px solid #f1f5f9" }}>Main-d'œuvre – {projet.nom || "Travaux mécaniques"}</td>
-                        <td style={{ padding: 6, textAlign: "center", borderBottom: "1px solid #f1f5f9" }}>
-                          {totalHeuresArrondies.toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h
-                        </td>
-                        <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
-                          {tauxHoraire > 0 ? tauxHoraire.toLocaleString("fr-CA", { style: "currency", currency: "CAD" }) : "—"}
-                        </td>
-                        <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid #f1f5f9" }}>
-                          {coutMainOeuvre != null
-                            ? coutMainOeuvre.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })
-                            : "—"}
+                        <td style={{ padding: 6, fontWeight: 900, color: "#0f172a" }}>Total heures</td>
+                        <td style={{ padding: 6, textAlign: "right", fontWeight: 900, color: "#0f172a" }}>
+                          {totalHeuresArrondies.toLocaleString("fr-CA", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}{" "}
+                          h
                         </td>
                       </tr>
                     </tbody>
@@ -1532,21 +1600,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                   <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
                     <div style={{ fontWeight: 900, color: "#0f172a" }}>
                       Total matériel : {totalMateriel.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
-                    <div style={{ width: 320, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
-                      <RowTotal label="Sous-total :" value={sousTotal} strong />
-                      <RowTotal label="TPS (5,0 %) :" value={tps} />
-                      <RowTotal label="TVQ (9,975 %) :" value={tvq} />
-                      <div style={{ height: 1, background: "#e5e7eb", margin: "8px 0" }} />
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                        <div style={{ fontWeight: 900, color: "#0f172a" }}>Total :</div>
-                        <div style={{ fontWeight: 900, color: "#0f172a" }}>
-                          {totalFacture.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
-                        </div>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -1628,17 +1681,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
 
         {materielOpen && <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />}
       </div>
-    </div>
-  );
-}
-
-/* petite rangée totaux UI */
-function RowTotal({ label, value, strong = false }) {
-  const v = Number(value || 0);
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-      <div style={{ color: strong ? "#0f172a" : "#334155", fontWeight: strong ? 900 : 700 }}>{label}</div>
-      <div style={{ color: "#0f172a", fontWeight: strong ? 900 : 800 }}>{v.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}</div>
     </div>
   );
 }

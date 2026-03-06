@@ -32,6 +32,11 @@
 // - Attend 20s, puis vérifie: si le segment EMPLOYÉ (segId) est fermé (ou absent) MAIS le segment PROJET (même segId) est encore open
 //   => on ferme le segment PROJET avec autoClosedReason: "orphan_project_segment_2_0"
 // - Ne ferme QUE le bon travailleur (même segId). Si 2 employés sont punchés, ça n’affecte pas l’autre.
+//
+// ✅ AJOUT (2026-03-05) ALIGNEMENT "AUTRES TÂCHES":
+// - Segment AUTRE TÂCHE = même docId que segment EMPLOYÉ
+// - Dépunch ferme aussi AUTRE TÂCHE par segId identique
+// - L’historique autres tâches fitte maintenant exactement avec l’employé
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -41,7 +46,6 @@ import {
   getDoc,
   setDoc,
   updateDoc,
-  addDoc,
   onSnapshot,
   query,
   where,
@@ -58,7 +62,7 @@ import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
 
 // ✅ BUILD TAG (debug cache / versions)
-const APP_BUILD = "2026-03-04 V.2.0";
+const APP_BUILD = "2026-03-05 V.2.3";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -105,7 +109,7 @@ function getProjetLabel(p) {
   const bt = getProjetBT(p);
 
   const parts = [];
-  if (bt) parts.push(`BT${bt}`);
+  if (bt) parts.push(bt);
   parts.push(nom);
   if (unite) parts.push(unite);
 
@@ -194,6 +198,7 @@ function otherDayRef(otherId, key) {
 function otherSegCol(otherId, key) {
   return collection(db, "autresProjets", otherId, "timecards", key, "segments");
 }
+// ⚠️ gardé pour compat, mais on aligne maintenant sur le seg employé
 function newOtherSegRef(otherId, key) {
   return doc(otherSegCol(otherId, key)); // auto id
 }
@@ -280,7 +285,7 @@ function useAutresProjets(setError) {
             projId: it.projId || null,
             nom: it.nom || "",
             ordre: it.ordre ?? null,
-            code: String(it.code || ""), // ✅ code par tâche
+            code: String(it.code || ""),
             note: it.note ?? null,
             createdAt: it.createdAt ?? null,
           });
@@ -347,8 +352,8 @@ function usePresenceToday(empId, setError, nowTick = 0) {
 }
 
 /* ---------------------- ✅ Orphan Project 2.0 (20s après dépunch) ---------------------- */
-const ORPHAN2_DELAY_MS = 20000; // ✅ demandé: 20 secondes
-const orphan2Timers = new Map(); // key -> timeoutId (évite double schedule)
+const ORPHAN2_DELAY_MS = 20000;
+const orphan2Timers = new Map();
 
 function orphan2Key(projId, day, segId, empId) {
   return `${projId}__${day}__${segId}__${empId}`;
@@ -363,22 +368,16 @@ async function runOrphanProject2_0Check({ projId, day, segId, empId }) {
   const projSegRef = doc(db, "projets", projId, "timecards", day, "segments", segId);
 
   try {
-    // 1) segment PROJET doit exister + être open pour qu’on fasse quelque chose
     const pSnap = await getDoc(projSegRef);
     if (!pSnap.exists()) return;
     const p = pSnap.data() || {};
-    if (p.end != null) return; // déjà fermé => ok
+    if (p.end != null) return;
 
-    // 2) segment EMPLOYÉ correspondant: s'il est fermé (ou absent) => on ferme PROJET
     const eSnap = await getDoc(empSegRef);
     if (eSnap.exists()) {
       const e = eSnap.data() || {};
-      if (e.end == null) {
-        // employé encore open -> on touche pas
-        return;
-      }
-      // employé fermé -> fermer projet
-    } // else: absent -> fermer projet
+      if (e.end == null) return;
+    }
 
     await updateDoc(projSegRef, {
       end: now,
@@ -411,12 +410,7 @@ function scheduleOrphanProject2_0({ projId, day, segId, empId }) {
 
 /* ---------------------- Punch / Dépunch ---------------------- */
 /**
- * ✅ Punch PROJET atomique:
- * - crée segment employé (jobId=proj:xxx) + segment projet (empId) dans le même batch
- * - start day employé/projet si vide
- * - ✅ FIX: quand on punch, on remet day.end = null (doc day redevient "ouvert")
- * - ✅ FIX 2026-02-28: segment projet = même docId que segment employé
- * - ✅ AJOUT: appBuild écrit dans les deux segments (debug version)
+ * ✅ Punch PROJET atomique
  */
 async function doPunchWithProject(emp, proj) {
   const key = todayKey();
@@ -428,10 +422,9 @@ async function doPunchWithProject(emp, proj) {
 
   await ensureDay(emp.id, key);
 
-  // Si déjà punché (devrait pas arriver), on force juste la cohérence
   const openEmp = await getOpenEmpSegments(emp.id, key);
   if (openEmp.length > 0) {
-    const empSegDoc = openEmp[0]; // QueryDocumentSnapshot
+    const empSegDoc = openEmp[0];
     const empSegRef = empSegDoc.ref;
 
     if (chosenProjId) {
@@ -441,31 +434,27 @@ async function doPunchWithProject(emp, proj) {
         jobId: `proj:${chosenProjId}`,
         jobName: projName,
         updatedAt: now,
-        appBuild: APP_BUILD, // ✅ AJOUT
+        appBuild: APP_BUILD,
       });
 
       const projSegSameIdRef = doc(projSegCol(chosenProjId, key), empSegRef.id);
 
-      // ✅ Assure que le segment PROJET existe VRAIMENT avec le même ID
       const pSnap = await getDoc(projSegSameIdRef);
       if (!pSnap.exists()) {
         await setDoc(projSegSameIdRef, {
-          appBuild: APP_BUILD, // ✅ AJOUT
+          appBuild: APP_BUILD,
           empId: emp.id,
           empName: emp.nom || null,
           start: now,
           end: null,
           createdAt: now,
           updatedAt: now,
-
-          // ✅ utile debug + cohérence
           jobId: `proj:${chosenProjId}`,
           jobName: projName || null,
         });
       } else {
-        // s'il existe déjà, on s'assure qu'il est open et cohérent
         await updateDoc(projSegSameIdRef, {
-          appBuild: APP_BUILD, // ✅ AJOUT
+          appBuild: APP_BUILD,
           end: null,
           updatedAt: now,
           empId: emp.id,
@@ -481,10 +470,9 @@ async function doPunchWithProject(emp, proj) {
         lastProjectUpdatedAt: now,
       });
     } else {
-      await updateDoc(empSegRef, { jobId: null, jobName: null, updatedAt: now, appBuild: APP_BUILD }); // ✅ AJOUT
+      await updateDoc(empSegRef, { jobId: null, jobName: null, updatedAt: now, appBuild: APP_BUILD });
     }
 
-    // ✅ doc day employé: start si vide + end=null (repunch après dépunch auto)
     const edRef = dayRef(emp.id, key);
     const edSnap = await getDoc(edRef);
     const ed = edSnap.data() || {};
@@ -492,7 +480,6 @@ async function doPunchWithProject(emp, proj) {
     if (!ed.start) patch.start = now;
     await updateDoc(edRef, patch);
 
-    // ✅ doc day projet: end=null (si punch projet)
     if (chosenProjId) {
       const pdRef = projDayRef(chosenProjId, key);
       const pdSnap = await getDoc(pdRef);
@@ -505,12 +492,11 @@ async function doPunchWithProject(emp, proj) {
     return;
   }
 
-  // Nouveau punch normal
   const batch = writeBatch(db);
 
   const empSegRef = newEmpSegRef(emp.id, key);
   batch.set(empSegRef, {
-    appBuild: APP_BUILD, // ✅ AJOUT
+    appBuild: APP_BUILD,
     jobId: chosenProjId ? `proj:${chosenProjId}` : null,
     jobName: chosenProjId ? projName : null,
     start: now,
@@ -519,7 +505,6 @@ async function doPunchWithProject(emp, proj) {
     updatedAt: now,
   });
 
-  // ✅ doc day employé: start si vide + end=null
   const edRef = dayRef(emp.id, key);
   const edSnap = await getDoc(edRef);
   const ed = edSnap.data() || {};
@@ -529,23 +514,19 @@ async function doPunchWithProject(emp, proj) {
   if (chosenProjId) {
     await ensureProjDay(chosenProjId, key);
 
-    // ✅ segment projet = même id que empSegRef.id
     const projSegRef = doc(projSegCol(chosenProjId, key), empSegRef.id);
     batch.set(projSegRef, {
-      appBuild: APP_BUILD, // ✅ AJOUT
+      appBuild: APP_BUILD,
       empId: emp.id,
       empName: emp.nom || null,
       start: now,
       end: null,
       createdAt: now,
       updatedAt: now,
-
-      // ✅ debug (facultatif mais pratique)
       jobId: `proj:${chosenProjId}`,
       jobName: projName || null,
     });
 
-    // ✅ doc day projet: start si vide + end=null
     const pdRef = projDayRef(chosenProjId, key);
     const pdSnap = await getDoc(pdRef);
     const pd = pdSnap.data() || {};
@@ -565,10 +546,9 @@ async function doPunchWithProject(emp, proj) {
 }
 
 /**
- * ✅ Punch AUTRE TÂCHE atomique:
- * - crée segment employé (jobId=other:xxx) + segment autresProjets (empId) dans le même batch
- * - start day employé/autre si vide
- * - ✅ FIX: quand on punch, on remet day.end = null (doc day redevient "ouvert")
+ * ✅ Punch AUTRE TÂCHE atomique
+ * ✅ FIX 2026-03-05:
+ * - segment autresProjets = même docId que segment employé
  */
 async function doPunchWithOther(emp, other) {
   const key = todayKey();
@@ -579,24 +559,47 @@ async function doPunchWithOther(emp, other) {
   await ensureDay(emp.id, key);
   await ensureOtherDay(otherId, key);
 
+  const otherName = other?.nom || null;
   const openEmp = await getOpenEmpSegments(emp.id, key);
-  if (openEmp.length > 0) {
-    const ref = openEmp[0].ref;
-    await updateDoc(ref, { jobId: `other:${otherId}`, jobName: other.nom || null, updatedAt: now });
 
-    const openO = await getOpenOtherSegsForEmp(otherId, emp.id, key);
-    if (openO.length === 0) {
-      await addDoc(otherSegCol(otherId, key), {
+  if (openEmp.length > 0) {
+    const empSegDoc = openEmp[0];
+    const empSegRef = empSegDoc.ref;
+
+    await updateDoc(empSegRef, {
+      jobId: `other:${otherId}`,
+      jobName: otherName,
+      updatedAt: now,
+      appBuild: APP_BUILD,
+    });
+
+    const otherSegSameIdRef = doc(otherSegCol(otherId, key), empSegRef.id);
+    const oSnap = await getDoc(otherSegSameIdRef);
+
+    if (!oSnap.exists()) {
+      await setDoc(otherSegSameIdRef, {
+        appBuild: APP_BUILD,
         empId: emp.id,
         empName: emp.nom || null,
         start: now,
         end: null,
         createdAt: now,
         updatedAt: now,
+        jobId: `other:${otherId}`,
+        jobName: otherName,
+      });
+    } else {
+      await updateDoc(otherSegSameIdRef, {
+        appBuild: APP_BUILD,
+        end: null,
+        updatedAt: now,
+        empId: emp.id,
+        empName: emp.nom || null,
+        jobId: `other:${otherId}`,
+        jobName: otherName,
       });
     }
 
-    // ✅ doc day employé: start si vide + end=null
     const edRef = dayRef(emp.id, key);
     const edSnap = await getDoc(edRef);
     const ed = edSnap.data() || {};
@@ -604,7 +607,6 @@ async function doPunchWithOther(emp, other) {
     if (!ed.start) patch.start = now;
     await updateDoc(edRef, patch);
 
-    // ✅ doc day autre tâche: start si vide + end=null
     const odRef = otherDayRef(otherId, key);
     const odSnap = await getDoc(odRef);
     const od = odSnap.data() || {};
@@ -614,7 +616,7 @@ async function doPunchWithOther(emp, other) {
 
     await updateDoc(doc(db, "employes", emp.id), {
       lastOtherId: otherId,
-      lastOtherName: other.nom || null,
+      lastOtherName: otherName,
       lastOtherUpdatedAt: now,
     });
     return;
@@ -624,32 +626,34 @@ async function doPunchWithOther(emp, other) {
 
   const empSegRef = newEmpSegRef(emp.id, key);
   batch.set(empSegRef, {
+    appBuild: APP_BUILD,
     jobId: `other:${otherId}`,
-    jobName: other.nom || null,
+    jobName: otherName,
     start: now,
     end: null,
     createdAt: now,
     updatedAt: now,
   });
 
-  const otherSegRef = newOtherSegRef(otherId, key);
+  const otherSegRef = doc(otherSegCol(otherId, key), empSegRef.id);
   batch.set(otherSegRef, {
+    appBuild: APP_BUILD,
     empId: emp.id,
     empName: emp.nom || null,
     start: now,
     end: null,
     createdAt: now,
     updatedAt: now,
+    jobId: `other:${otherId}`,
+    jobName: otherName,
   });
 
-  // ✅ doc day employé: start si vide + end=null
   const edRef = dayRef(emp.id, key);
   const edSnap = await getDoc(edRef);
   const ed = edSnap.data() || {};
   if (!ed.start) batch.update(edRef, { start: now, end: null, updatedAt: now });
   else batch.update(edRef, { end: null, updatedAt: now });
 
-  // ✅ doc day autre tâche: start si vide + end=null
   const odRef = otherDayRef(otherId, key);
   const odSnap = await getDoc(odRef);
   const od = odSnap.data() || {};
@@ -660,66 +664,57 @@ async function doPunchWithOther(emp, other) {
 
   await updateDoc(doc(db, "employes", emp.id), {
     lastOtherId: otherId,
-    lastOtherName: other.nom || null,
+    lastOtherName: otherName,
     lastOtherUpdatedAt: now,
   });
 }
 
 /**
- * ✅ Dépunch béton:
- * - ferme les segments ouverts projet/other via jobTokens
- * - fallback: si jobId manquant, ferme quand même lastProjectId / lastOtherId
- * - ✅ doc day: end = now
- * - ✅ AJOUT: Orphan Project 2.0 (20s) pour chaque segment projet qu’on vient de fermer (segId identique)
+ * ✅ Dépunch béton
+ * ✅ FIX 2026-03-05:
+ * - ferme aussi AUTRE TÂCHE par segId identique
  */
 async function doDepunchWithProject(emp) {
   const key = todayKey();
   const now = new Date();
 
-  // 1) Lire les segments EMPLOYÉ ouverts
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
 
-  // 2) Identifier les jobs (proj/other) à fermer (fallback si jobId manquant)
   const jobTokens = Array.from(
     new Set(openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0))
   );
 
-  // 3) Fermer "AUTRES TÂCHES" comme avant (query empId) — on ne change rien ici
-  await Promise.all(
-    jobTokens
-      .filter((t) => t.startsWith("other:"))
-      .map((t) => closeOtherSessionsForEmp(t.slice(6), emp.id, key))
-  );
-
-  // 4) Fermer PROJETS par segId (docId identique) + fermer EMPLOYÉ dans le MÊME batch
   const batch = writeBatch(db);
 
-  // Préparer les refs projet à fermer (et aussi: préparer les checks Orphan 2.0)
-  const projRefsToClose = []; // { ref, segId, projId }
-  const orphan2ToSchedule = []; // { projId, day:key, segId, empId }
+  const projRefsToClose = [];
+  const otherRefsToClose = [];
+  const orphan2ToSchedule = [];
 
   for (const segDoc of openEmpSegs) {
     const segId = segDoc.id;
     const s = segDoc.data() || {};
     const jid = String(s.jobId || "");
 
-    // Ferme toujours le segment employé correspondant
     batch.update(segDoc.ref, { end: now, updatedAt: now });
 
-    // Si c'est un projet, on ferme le segment projet par ID identique
     if (jid.startsWith("proj:")) {
       const projId = jid.slice(5);
       if (projId) {
         const projSegRef = doc(projSegCol(projId, key), segId);
         projRefsToClose.push({ ref: projSegRef, segId, projId });
-
-        // ✅ Orphan 2.0: on schedule une vérif 20s après pour CE segId/projId/empId
         orphan2ToSchedule.push({ projId, day: key, segId, empId: emp.id });
+      }
+    }
+
+    if (jid.startsWith("other:")) {
+      const otherId = jid.slice(6);
+      if (otherId) {
+        const otherSegRef = doc(otherSegCol(otherId, key), segId);
+        otherRefsToClose.push({ ref: otherSegRef, segId, otherId });
       }
     }
   }
 
-  // Fallback si aucun jobId sur les segments ouverts (ex: vieux segment sans jobId)
   if (jobTokens.length === 0) {
     const lastProj = emp?.lastProjectId ? String(emp.lastProjectId) : "";
     const lastOther = emp?.lastOtherId ? String(emp.lastOtherId) : "";
@@ -730,8 +725,6 @@ async function doDepunchWithProject(emp) {
       } catch {}
     }
 
-    // Pour lastProj, on ne peut pas deviner les segIds, donc on fait l'ancien "best-effort"
-    // (utile uniquement si vraiment jobId manquant).
     if (lastProj) {
       try {
         await closeProjSessionsForEmp(lastProj, emp.id, key);
@@ -739,8 +732,6 @@ async function doDepunchWithProject(emp) {
     }
   }
 
-  // Vérifier existence des segments projet avant update (updateDoc exige que ça existe)
-  // (normalement ça existe si le punch a été fait avec IDs alignés)
   if (projRefsToClose.length) {
     const checks = await Promise.all(
       projRefsToClose.map(async ({ ref }) => {
@@ -758,15 +749,27 @@ async function doDepunchWithProject(emp) {
     });
   }
 
-  // Ferme la day card employé (comme avant)
+  if (otherRefsToClose.length) {
+    const checks = await Promise.all(
+      otherRefsToClose.map(async ({ ref }) => {
+        try {
+          const snap = await getDoc(ref);
+          return snap.exists() ? ref : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    checks.filter(Boolean).forEach((ref) => {
+      batch.update(ref, { end: now, updatedAt: now });
+    });
+  }
+
   batch.update(dayRef(emp.id, key), { end: now, updatedAt: now });
 
-  // Commit atomique
   await batch.commit();
 
-  // ✅ Orphan Project 2.0: schedule après commit (important: le seg employé est déjà fermé)
-  //    -> même si l’utilisateur ferme sa page ensuite, le check a déjà été programmé (si la page reste ouverte).
-  //    -> si la page est fermée AVANT 20s, le timer ne run pas (limite du client). Le Orphan "classique" reste là comme backup.
   orphan2ToSchedule.forEach((x) => scheduleOrphanProject2_0(x));
 }
 
@@ -810,7 +813,7 @@ function ErrorBanner({ error, onClose }) {
   );
 }
 
-/* ------- Modales (inchangées) ------- */
+/* ------- Modales ------- */
 function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
   void projets;
   const hasInitialProj = !!initialProj;
@@ -1043,9 +1046,9 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ✅ NOUVEAU: modal détails punch aujourd'hui */
+/* ✅ modal détails punch aujourd'hui */
 function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autresProjets, onClose }) {
-  const [extraProjLabels, setExtraProjLabels] = useState({}); // { [projId]: label }
+  const [extraProjLabels, setExtraProjLabels] = useState({});
   const key = todayKey();
 
   useEffect(() => {
@@ -1209,7 +1212,7 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ✅ UI flottante (logo dans la marge + horloge à droite) */
+/* ✅ UI flottante */
 const APP_TOP = 38;
 const LEFT_RAIL_W = 270;
 
@@ -1309,7 +1312,6 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
   const [codeOpen, setCodeOpen] = useState(false);
   const [pendingOther, setPendingOther] = useState(null);
 
-  // ✅ NOUVEAU: modal "sur quoi il s'est punch"
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const currentOpen = useMemo(() => sessions.find((s) => !s.end) || null, [sessions]);
@@ -1335,7 +1337,6 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
     if (present && currentIsProj && currentProjId) setProjSel(currentProjId);
   }, [present, currentIsProj, currentProjId]);
 
-  // ✅ AUTO-DÉPUNCH si le projet actif se ferme
   const autoDepunchRef = useRef(false);
   useEffect(() => {
     if (!present || !currentIsProj || !currentProjId) {
@@ -1441,12 +1442,12 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
           ...styles.row,
           background: rowBg,
           transition: "background 0.25s ease-out",
-          cursor: "pointer", // ✅ clickable (ouvre le modal)
+          cursor: "pointer",
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        onClick={() => setDetailsOpen(true)} // ✅ NOUVEAU
-        title="Clique pour voir les détails du punch aujourd’hui"
+        onClick={() => setDetailsOpen(true)}
+        title="Clique pour voir les détails des heures"
       >
         <td style={{ ...styles.td, whiteSpace: "nowrap", fontWeight: 900 }}>{emp.nom || "—"}</td>
         <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
@@ -1486,7 +1487,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
                     ...styles.input,
                     height: 44,
                     fontSize: present && currentIsProj ? 15 : 14,
-                    fontWeight: present && currentIsProj ? 750 : 600,
+                    fontWeight: present && currentIsProj ? 800 : 750,
                     cursor: present ? "not-allowed" : "pointer",
                     opacity: present ? 0.85 : 1,
                     width: "100%",
@@ -1557,7 +1558,6 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
         </td>
       </tr>
 
-      {/* ✅ NOUVEAU: détails punch */}
       <EmployePunchDetailsModal
         open={detailsOpen}
         emp={emp}
@@ -1678,7 +1678,6 @@ export default function PageAccueil() {
     return () => clearInterval(t);
   }, []);
 
-  // ✅ OPTI: 1 seul tick global (15s) pour rafraîchir les totaux (UI only)
   const [nowTick15s, setNowTick15s] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setNowTick15s((x) => x + 1), 15000);
@@ -1687,14 +1686,13 @@ export default function PageAccueil() {
 
   const [materialProjId, setMaterialProjId] = useState(null);
 
-  // ✅ IMPORTANT: état "pressed" (c’est ça qui manquait, donc ça ne marchait pas)
   const [pressed, setPressed] = useState(false);
   void pressed;
   void setPressed;
 
   return (
     <>
-      {/* <LogoRail /> */} {/* ✅ logo désactivé pour l'instant */}
+      {/* <LogoRail /> */}
       <ClockFloat now={now} />
 
       <PageContainer
@@ -1742,10 +1740,6 @@ export default function PageAccueil() {
                 </tbody>
               </table>
             </div>
-
-            <div style={{ marginTop: 10, color: "#64748b", fontSize: 13 }}>
-              Astuce: clique sur une ligne (nom) pour voir le détail des segments d’aujourd’hui.
-            </div>
           </Card>
 
           <Card title="📁 Projets">
@@ -1760,7 +1754,6 @@ export default function PageAccueil() {
 
       {materialProjId && <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />}
 
-      {/* ✅ build visible (pour savoir si les autres ont la maj) */}
       <div style={{ position: "fixed", bottom: 8, right: 12, fontSize: 12, opacity: 0.5, zIndex: 99999 }}>
         build: {APP_BUILD}
       </div>

@@ -1,4 +1,9 @@
 // src/AutresProjetsSection.jsx
+//
+// ✅ FIX (2026-03-05):
+// - segments autres tâches = même docId que segment employé
+// - auto-close orphelin essaie d'abord le match béton par segId identique
+// - historique autres tâches fitte maintenant exactement avec l’employé
 
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { db } from "./firebaseConfig";
@@ -11,6 +16,7 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
+  getDoc,
   query,
   orderBy,
   where,
@@ -22,7 +28,7 @@ const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "
 function toDateSafe(ts) {
   if (!ts) return null;
   try {
-    if (ts.toDate) return ts.toDate(); // Firestore Timestamp
+    if (ts.toDate) return ts.toDate();
     if (typeof ts === "string") {
       const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (m) {
@@ -73,6 +79,9 @@ function segColAutre(projId, key) {
 function empSegCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
+function empSegRef(empId, key, segId) {
+  return doc(db, "employes", empId, "timecards", key, "segments", segId);
+}
 
 function computeTotalMs(sessions) {
   const now = Date.now();
@@ -84,7 +93,7 @@ function computeTotalMs(sessions) {
   }, 0);
 }
 
-/* ✅ check si un employé est encore punché sur other:<otherId> */
+/* ✅ fallback */
 async function empHasOpenJob(empId, key, jobId) {
   if (!empId || !key || !jobId) return false;
   const qOpen = query(empSegCol(empId, key), where("end", "==", null), where("jobId", "==", jobId));
@@ -92,11 +101,26 @@ async function empHasOpenJob(empId, key, jobId) {
   return !snap.empty;
 }
 
+/* ✅ match béton par segId */
+async function empHasOpenBySegId(empId, key, segId, expectedJobId) {
+  if (!empId || !key || !segId) return { ok: false, result: false };
+  try {
+    const s = await getDoc(empSegRef(empId, key, segId));
+    if (!s.exists()) return { ok: false, result: false };
+    const d = s.data() || {};
+    if (expectedJobId && String(d.jobId || "") !== String(expectedJobId || "")) {
+      return { ok: true, result: false };
+    }
+    return { ok: true, result: d.end == null };
+  } catch {
+    return { ok: false, result: false };
+  }
+}
+
 function useSessionsAutre(projId, key, setError) {
   const [list, setList] = useState([]);
   const [tick, setTick] = useState(0);
 
-  // rafraîchir les durées (UI) aux 15s
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 15000);
     return () => clearInterval(t);
@@ -109,7 +133,7 @@ function useSessionsAutre(projId, key, setError) {
       qSeg,
       (snap) => {
         const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() })); // ✅ _ref conservé
+        snap.forEach((d) => rows.push({ id: d.id, _ref: d.ref, ...d.data() }));
         setList(rows);
       },
       (err) => setError?.(err?.message || String(err))
@@ -162,12 +186,20 @@ function usePresenceTodayAutre(projId, setError) {
           if (age < GRACE_MS) continue;
         }
 
-        let still = false;
+        let still = null;
+
         try {
-          still = await empHasOpenJob(empId, key, jobId);
-        } catch (e) {
-          console.error(e);
-          continue; // ✅ si lecture échoue: NE PAS fermer
+          const byId = await empHasOpenBySegId(empId, key, seg.id, jobId);
+          if (byId.ok) still = byId.result;
+        } catch {}
+
+        if (still == null) {
+          try {
+            still = await empHasOpenJob(empId, key, jobId);
+          } catch (e) {
+            console.error(e);
+            continue;
+          }
         }
 
         if (!still) {
@@ -325,7 +357,7 @@ const btnDanger = {
   fontWeight: 800,
 };
 
-/* ---------- Popup: créer / renommer (nom seulement) ---------- */
+/* ---------- Popup: créer / renommer ---------- */
 function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = null, currentName = "" }) {
   const [nom, setNom] = useState("");
 
@@ -426,19 +458,14 @@ function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = 
   );
 }
 
-/* ---------- Popup DÉTAILS / HISTORIQUE pour "autre projet" ---------- */
+/* ---------- Popup DÉTAILS / HISTORIQUE ---------- */
 function PopupDetailsAutreProjet({ open, onClose, projet }) {
   const [error, setError] = useState(null);
   const [histRows, setHistRows] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
-
-  // NOTE: "Total d'heures compilées" sera le total de ce qu'on charge.
-  // Ici, par défaut on charge juste ce qu'il faut pour 10 lignes => total "partiel".
   const [totalMsAll, setTotalMsAll] = useState(0);
-
   const [showAll, setShowAll] = useState(false);
 
-  // reset quand on ouvre un autre projet
   useEffect(() => {
     if (open) setShowAll(false);
   }, [open, projet?.id]);
@@ -451,13 +478,11 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
       try {
         const PAGE_SIZE = 10;
 
-        // 1) On récupère juste la liste des jours (IDs) — léger
         const daysSnap = await getDocs(collection(db, "autresProjets", projet.id, "timecards"));
         const days = [];
         daysSnap.forEach((d) => days.push(d.id));
-        days.sort((a, b) => b.localeCompare(a)); // YYYY-MM-DD => tri OK
+        days.sort((a, b) => b.localeCompare(a));
 
-        // 2) On lit les segments jour par jour, et on arrête dès qu'on a 10 lignes (sauf si showAll)
         const map = new Map();
         let sumMs = 0;
 
@@ -482,7 +507,6 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
             map.set(k, prev);
           });
 
-          // ✅ stop tôt: on ne charge pas le reste
           if (!showAll && map.size >= PAGE_SIZE) break;
         }
 
