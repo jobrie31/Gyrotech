@@ -1,19 +1,15 @@
 // src/PageProjets.jsx — Tableau Projets (Accueil) + popup Détails etc.
 //
-// ✅ FIX "temps mismatch":
-// - useSessionsP garde _ref
-// - usePresenceTodayP auto-close segments projet orphelins (grace 60s)
-//   => garantit que l'historique projet ne dépasse jamais l'employé
+// ✅ MODIF (2026-03-06):
+// - Suppression complète du orphan project côté client dans PageProjets
+// - PageProjets devient lecture/UI seulement pour les segments projet en cours
+// - La fermeture sync projet/employé doit maintenant être gérée par:
+//   1) le dépunch normal côté PageAccueil
+//   2) la Cloud Function syncProjectSegOnEmpClose
 //
-// ✅ FIX (2026-02-25) "béton":
-// - Orphan check: on tente d'abord de matcher le segment EMPLOYÉ par **docId identique**
-//   employes/{empId}/timecards/{day}/segments/{segId}
-//   -> si le seg employé n'existe pas / est fermé => on ferme le seg projet
-//   -> fallback sur l'ancien query (end==null & jobId==proj:...) si besoin
-//
-// ✅ FIX (2026-02-28) total "roule" + auto-close qui ferme à tort:
-// - empHasOpenJob devient ROBUSTE (lit segments du jour + filtre JS end==null)
-// - Total affiché = (passé sans aujourd’hui) + (aujourd’hui live via usePresenceTodayP.totalMs) + tempsOuvertureMinutes
+// ✅ FIX (2026-03-06):
+// - useSessionsP ne se réabonne PLUS aux 15s
+// - le tick 15s de PageProjets reste seulement pour rafraîchir l’affichage UI si besoin
 //
 // ✅ FIX (2026-03-04) CLOSE BT "béton":
 // - depunchWorkersOnProject ferme PROJET + EMPLOYÉ par segId identique (pas de where end==null)
@@ -43,7 +39,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage } from "./firebaseConfig";
 import {
   collection,
-  collectionGroup,
   doc,
   getDoc,
   setDoc,
@@ -52,11 +47,7 @@ import {
   query,
   getDocs,
   orderBy,
-  where,
   updateDoc,
-  addDoc,
-  deleteDoc,
-  limit,
   writeBatch,
 } from "firebase/firestore";
 import { ref as storageRef, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
@@ -118,70 +109,13 @@ function dayRefP(projId, key) {
 function segColP(projId, key) {
   return collection(db, "projets", projId, "timecards", key, "segments");
 }
-async function ensureDayP(projId, key = todayKey()) {
-  const ref = dayRefP(projId, key);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, { start: null, end: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-  }
-  return ref;
-}
 
-/* ---------------------- Timecards helpers (Employés) — pour dépunch & orphan check ---------------------- */
+/* ---------------------- Timecards helpers (Employés) — pour CLOSE BT ---------------------- */
 function empDayRef(empId, key) {
   return doc(db, "employes", empId, "timecards", key);
 }
-function empSegCol(empId, key) {
-  return collection(db, "employes", empId, "timecards", key, "segments");
-}
 function empSegRef(empId, key, segId) {
   return doc(db, "employes", empId, "timecards", key, "segments", segId);
-}
-async function ensureEmpDay(empId, key) {
-  const ref = empDayRef(empId, key);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    const now = new Date();
-    await setDoc(ref, {
-      start: null,
-      end: null,
-      onBreak: false,
-      breakStartMs: null,
-      breakTotalMs: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
-  return ref;
-}
-function parseEmpAndDayFromSegPath(path) {
-  const m = String(path || "").match(/^employes\/([^/]+)\/timecards\/([^/]+)\/segments\/[^/]+$/);
-  if (!m) return null;
-  return { empId: m[1], key: m[2] };
-}
-
-async function empHasOpenJob(empId, key, jobId) {
-  if (!empId || !key || !jobId) return false;
-  const snap = await getDocs(empSegCol(empId, key));
-  return snap.docs.some((d) => {
-    const s = d.data() || {};
-    return s.end == null && String(s.jobId || "") === String(jobId || "");
-  });
-}
-
-async function empHasOpenBySegId(empId, key, segId, expectedJobId) {
-  if (!empId || !key || !segId) return { ok: false, result: false };
-  try {
-    const s = await getDoc(empSegRef(empId, key, segId));
-    if (!s.exists()) return { ok: false, result: false };
-    const d = s.data() || {};
-    if (expectedJobId && String(d.jobId || "") !== String(expectedJobId || "")) {
-      return { ok: true, result: false };
-    }
-    return { ok: true, result: d.end == null };
-  } catch (e) {
-    return { ok: false, result: false };
-  }
 }
 
 /**
@@ -195,7 +129,6 @@ async function depunchWorkersOnProject(projId) {
   let batch = writeBatch(db);
   let ops = 0;
 
-  const touchedEmpDay = new Set();
   const touchedEmpIds = new Set();
 
   const commitIfNeeded = async (force = false) => {
@@ -250,7 +183,6 @@ async function depunchWorkersOnProject(projId) {
           }
 
           touchedEmpIds.add(empId);
-          touchedEmpDay.add(`${empId}__${day}`);
 
           const eDayRef = empDayRef(empId, day);
           batch.set(
@@ -352,12 +284,6 @@ function useDayP(projId, key, setError) {
 
 function useSessionsP(projId, key, setError) {
   const [list, setList] = useState([]);
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    const t = setInterval(() => setTick((x) => x + 1), 15000);
-    return () => clearInterval(t);
-  }, []);
 
   useEffect(() => {
     if (!projId || !key) return;
@@ -372,7 +298,7 @@ function useSessionsP(projId, key, setError) {
       (err) => setError(err?.message || String(err))
     );
     return () => unsub();
-  }, [projId, key, setError, tick]);
+  }, [projId, key, setError]);
 
   return list;
 }
@@ -393,74 +319,6 @@ function usePresenceTodayP(projId, setError) {
   const sessions = useSessionsP(projId, key, setError);
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
   const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
-
-  const guardRef = useRef(0);
-  const runningRef = useRef(false);
-  const GRACE_MS = 60000;
-
-  useEffect(() => {
-    if (!projId) return;
-
-    const openSegs = (sessions || []).filter((s) => !s.end);
-    if (openSegs.length === 0) return;
-
-    const nowMs = Date.now();
-    if (nowMs - guardRef.current < 20000) return;
-    guardRef.current = nowMs;
-
-    if (runningRef.current) return;
-    runningRef.current = true;
-
-    (async () => {
-      const jobId = `proj:${projId}`;
-      const now = new Date();
-
-      for (const seg of openSegs) {
-        const empId = seg.empId || null;
-        const segRef = seg._ref || null;
-        if (!empId || !segRef) continue;
-
-        const st = toDateSafe(seg.start);
-        if (st && !isNaN(st.getTime())) {
-          const age = Date.now() - st.getTime();
-          if (age < GRACE_MS) continue;
-        }
-
-        let still = null;
-        try {
-          const byId = await empHasOpenBySegId(empId, key, seg.id, jobId);
-          if (byId.ok) still = byId.result;
-        } catch {}
-
-        if (still == null) {
-          try {
-            still = await empHasOpenJob(empId, key, jobId);
-          } catch (e) {
-            console.error(e);
-            continue;
-          }
-        }
-
-        if (!still) {
-          try {
-            await updateDoc(segRef, {
-              end: now,
-              updatedAt: now,
-              autoClosed: true,
-              autoClosedAt: now,
-              autoClosedReason: "orphan_project_segment",
-            });
-          } catch (e) {
-            console.error(e);
-          }
-        }
-      }
-    })()
-      .catch((e) => setError?.(e?.message || String(e)))
-      .finally(() => {
-        runningRef.current = false;
-      });
-  }, [projId, key, sessions, setError]);
 
   return { key, card, sessions, totalMs, hasOpen };
 }

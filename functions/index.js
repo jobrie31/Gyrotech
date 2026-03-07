@@ -4,6 +4,7 @@
  * - Envoi de facture par courriel avec Brevo (SMTP)
  * - ✅ Auto-dépunch de TOUS les employés à 17h (America/Toronto)
  * - ✅ SHUTDOWN GLOBAL: kickAllUsers (revokeRefreshTokens) + sessionVersion++
+ * - ✅ DEBUG (2026-03-06): logs détaillés pour syncProjectSegOnEmpClose
  */
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -23,44 +24,95 @@ setGlobalOptions({
 admin.initializeApp();
 
 /* =========================
-   ✅ BÉTON: si segment EMPLOYÉ (segId) ferme => segment PROJET (même segId) ferme aussi
+   ✅ BÉTON + DEBUG:
+   si segment EMPLOYÉ (segId) ferme => segment PROJET (même segId) ferme aussi
+
    Trigger:
    employes/{empId}/timecards/{day}/segments/{segId}
 
-   ✅ FIX v2/Eventarc:
-   - La région du trigger Firestore doit matcher la région Firestore
-   - Ton erreur montre un trigger créé en northamerica-northeast1
+   ✅ IMPORTANT:
+   - région du trigger = région Firestore
+   - logs détaillés pour voir exactement où ça entre/sort
    ========================= */
 exports.syncProjectSegOnEmpClose = onDocumentUpdated(
   {
     document: "employes/{empId}/timecards/{day}/segments/{segId}",
-    region: "northamerica-northeast1", // ✅ IMPORTANT: match Firestore (Canada)
+    region: "northamerica-northeast1",
   },
   async (event) => {
     const before = event.data?.before?.data?.() || null;
     const after = event.data?.after?.data?.() || null;
     const params = event.params || {};
 
-    if (!after) return;
+    const empId = params.empId || null;
+    const day = params.day || null;
+    const segId = params.segId || null;
 
     const beforeEnd = before?.end ?? null;
     const afterEnd = after?.end ?? null;
-
-    // On ne fait quelque chose QUE quand end passe de null -> non-null
-    if (beforeEnd != null) return;
-    if (afterEnd == null) return;
-
     const jobId = String(after?.jobId || "");
-    if (!jobId.startsWith("proj:")) return;
+
+    logger.info("syncProjectSegOnEmpClose TRIGGER", {
+      empId,
+      day,
+      segId,
+      beforeEnd: beforeEnd ? String(beforeEnd) : null,
+      afterEnd: afterEnd ? String(afterEnd) : null,
+      jobId: jobId || null,
+      beforeExists: !!before,
+      afterExists: !!after,
+    });
+
+    if (!after) {
+      logger.info("syncProjectSegOnEmpClose EXIT no-after", { empId, day, segId });
+      return;
+    }
+
+    // On ne fait quelque chose QUE si end existe après update
+    if (afterEnd == null) {
+      logger.info("syncProjectSegOnEmpClose EXIT afterEnd-null", {
+        empId,
+        day,
+        segId,
+        beforeEnd: beforeEnd ? String(beforeEnd) : null,
+        afterEnd: afterEnd ? String(afterEnd) : null,
+      });
+      return;
+    }
+
+    // Si avant et après avaient déjà un end, on skip
+    if (beforeEnd != null && afterEnd != null) {
+      logger.info("syncProjectSegOnEmpClose EXIT already-closed-before", {
+        empId,
+        day,
+        segId,
+        beforeEnd: String(beforeEnd),
+        afterEnd: String(afterEnd),
+      });
+      return;
+    }
+
+    if (!jobId.startsWith("proj:")) {
+      logger.info("syncProjectSegOnEmpClose EXIT not-project-job", {
+        empId,
+        day,
+        segId,
+        jobId: jobId || null,
+      });
+      return;
+    }
 
     const projId = jobId.slice(5);
-    if (!projId) return;
+    if (!projId) {
+      logger.warn("syncProjectSegOnEmpClose EXIT empty-projId", {
+        empId,
+        day,
+        segId,
+        jobId,
+      });
+      return;
+    }
 
-    const day = params.day;
-    const segId = params.segId;
-    const empId = params.empId;
-
-    // Segment projet correspondant (même segId)
     const pRef = admin
       .firestore()
       .collection("projets")
@@ -72,17 +124,40 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
 
     try {
       const pSnap = await pRef.get();
+
       if (!pSnap.exists) {
-        // Option: on ne crée pas si absent (évite de masquer un autre bug).
-        // Si tu veux le créer automatiquement, dis-le moi.
-        logger.warn("syncProjectSegOnEmpClose: project seg missing", { projId, day, segId, empId });
+        logger.warn("syncProjectSegOnEmpClose project-seg-missing", {
+          projId,
+          day,
+          segId,
+          empId,
+          jobId,
+        });
         return;
       }
 
       const p = pSnap.data() || {};
-      if (p.end != null) return; // déjà fermé, rien à faire
 
-      // ✅ BÉTON: même timestamp que côté employé
+      logger.info("syncProjectSegOnEmpClose project-seg-read", {
+        projId,
+        day,
+        segId,
+        empId,
+        projectSegEnd: p.end ? String(p.end) : null,
+      });
+
+      if (p.end != null) {
+        logger.info("syncProjectSegOnEmpClose EXIT project-already-closed", {
+          projId,
+          day,
+          segId,
+          empId,
+          projectSegEnd: String(p.end),
+          empSegEnd: afterEnd ? String(afterEnd) : null,
+        });
+        return;
+      }
+
       await pRef.update({
         end: afterEnd,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -90,9 +165,22 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
         closedByEmpId: empId || null,
       });
 
-      logger.info("syncProjectSegOnEmpClose OK", { projId, day, segId, empId });
+      logger.info("syncProjectSegOnEmpClose OK project-closed", {
+        projId,
+        day,
+        segId,
+        empId,
+        syncedEnd: afterEnd ? String(afterEnd) : null,
+      });
     } catch (e) {
-      logger.error("syncProjectSegOnEmpClose FAILED", { projId, day, segId, empId }, e);
+      logger.error("syncProjectSegOnEmpClose FAILED", {
+        projId,
+        day,
+        segId,
+        empId,
+        message: e?.message || String(e),
+        stack: e?.stack || null,
+      });
     }
   }
 );
@@ -115,7 +203,6 @@ exports.kickAllUsers = onCall(async (request) => {
     const uid = request.auth.uid;
     const db = admin.firestore();
 
-    // ✅ Vérifier admin via collection "employes"
     const q = await db.collection("employes").where("uid", "==", uid).limit(1).get();
     if (q.empty) {
       throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
@@ -125,7 +212,6 @@ exports.kickAllUsers = onCall(async (request) => {
       throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
     }
 
-    // ✅ Révoquer tokens pour tous les users Auth
     let pageToken = undefined;
     let total = 0;
 
@@ -133,7 +219,6 @@ exports.kickAllUsers = onCall(async (request) => {
       const res = await admin.auth().listUsers(1000, pageToken);
       pageToken = res.pageToken;
 
-      // On révoque en chunks pour éviter trop de promesses d'un coup
       const uids = res.users.map((u) => u.uid);
       for (let i = 0; i < uids.length; i += 50) {
         const slice = uids.slice(i, i + 50);
@@ -142,7 +227,6 @@ exports.kickAllUsers = onCall(async (request) => {
       }
     } while (pageToken);
 
-    // ✅ sessionVersion++ pour que les clients se déconnectent + hard reload
     await db.doc("config/security").set(
       {
         sessionVersion: admin.firestore.FieldValue.increment(1),
@@ -197,7 +281,6 @@ exports.activateAccount = onCall(async (request) => {
 
     const db = admin.firestore();
 
-    // 1) Trouver l’employé par emailLower
     const q = await db.collection("employes").where("emailLower", "==", email).limit(1).get();
     if (q.empty) {
       throw new HttpsError("not-found", "Email non autorisé (introuvable dans la liste des travailleurs).");
@@ -207,12 +290,10 @@ exports.activateAccount = onCall(async (request) => {
     const empRef = empDoc.ref;
     const empData = empDoc.data() || {};
 
-    // 2) Déjà activé ?
     if (empData.uid || empData.activatedAt) {
       throw new HttpsError("already-exists", "Compte déjà activé.");
     }
 
-    // 3) Vérifier le code du travailleur (✅ fallback si ancien champ)
     const expectedCode = String(empData.activationCode ?? empData.code ?? empData.activation ?? "").trim();
 
     if (!expectedCode) {
@@ -225,7 +306,6 @@ exports.activateAccount = onCall(async (request) => {
       throw new HttpsError("permission-denied", "Code d’activation invalide.");
     }
 
-    // 4) Créer OU mettre à jour l’utilisateur Auth
     let userRecord;
     try {
       userRecord = await admin.auth().getUserByEmail(email);
@@ -246,13 +326,12 @@ exports.activateAccount = onCall(async (request) => {
       }
     }
 
-    // 5) Marquer l’employé activé + lier uid + retirer le code
     const now = admin.firestore.Timestamp.now();
     await empRef.set(
       {
         uid: userRecord.uid,
         activatedAt: now,
-        activationCode: null, // empêche une 2e activation avec le même code
+        activationCode: null,
         updatedAt: now,
       },
       { merge: true }
@@ -269,9 +348,9 @@ exports.activateAccount = onCall(async (request) => {
 /* =========================
    ✅ Send Invoice Email (Brevo SMTP)
    =========================
-   Attendu (ton front peut envoyer l’un ou l’autre):
+   Attendu:
    - projetId (requis si pdfPath absent)
-   - toEmail (requis) : string "a@x.com" OU "a@x.com, b@y.com" OU array ["a@x.com","b@y.com"]
+   - toEmail (requis): string OU array
    - subject (optionnel)
    - text (optionnel)
    - pdfPath (optionnel) ex: "factures/ABC.pdf"
@@ -286,8 +365,6 @@ exports.sendInvoiceEmail = onCall(
     }
 
     const projetId = data.projetId || null;
-
-    // ✅ Support: array OU string (avec virgules)
     const toEmailRaw = data.toEmail;
     let toEmails = [];
 
@@ -304,15 +381,12 @@ exports.sendInvoiceEmail = onCall(
 
     const subject = String(data.subject || `Facture Gyrotech – ${projetId || "Projet"}`).trim();
     const text = String(data.text || "Bonjour, veuillez trouver ci-joint la facture de votre intervention.");
-
-    // ✅ pdfPath: si fourni on l’utilise, sinon on construit avec projetId
     const pdfPath = String(data.pdfPath || "").trim() || (projetId ? `factures/${projetId}.pdf` : "");
 
     if (!pdfPath) {
       throw new HttpsError("invalid-argument", "Arguments invalides : pdfPath est requis si projetId est absent.");
     }
 
-    // 1) Charger le PDF depuis Storage
     const bucket = admin.storage().bucket();
     const file = bucket.file(pdfPath);
 
@@ -323,7 +397,6 @@ exports.sendInvoiceEmail = onCall(
 
     const [fileBuffer] = await file.download();
 
-    // 2) Transport SMTP Brevo
     const transporter = nodemailer.createTransport({
       host: "smtp-relay.brevo.com",
       port: 587,
@@ -338,8 +411,8 @@ exports.sendInvoiceEmail = onCall(
 
     try {
       await transporter.sendMail({
-        from: MAIL_FROM.value(), // ex: "Gyrotech <groupegyrotech@gmail.com>"
-        to: toEmails, // ✅ multiple destinataires
+        from: MAIL_FROM.value(),
+        to: toEmails,
         subject,
         text,
         attachments: [
@@ -353,7 +426,6 @@ exports.sendInvoiceEmail = onCall(
 
       logger.info(`Facture envoyée à ${toEmails.join(", ")} pour projet ${projetId || "(sans projetId)"} (path=${pdfPath}).`);
 
-      // ✅ Supprimer le PDF après envoi (comme avant)
       try {
         await file.delete({ ignoreNotFound: true });
         logger.info(`Facture supprimée du Storage: ${pdfPath}`);
@@ -383,9 +455,7 @@ exports.sendInvoiceEmail = onCall(
    - Fermer les segments correspondants côté projets et autres tâches
    - Mettre employes/{empId}/timecards/{day}.end = now
 */
-
 function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
-  // YYYY-MM-DD (en-CA -> 2026-02-25)
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
@@ -395,7 +465,6 @@ function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
 }
 
 async function commitInChunks(db, ops, chunkSize = 450) {
-  // ops: array of { ref, data }
   for (let i = 0; i < ops.length; i += chunkSize) {
     const batch = db.batch();
     const slice = ops.slice(i, i + chunkSize);
@@ -456,16 +525,12 @@ exports.autoDepunchAllAt17 = onSchedule(
       const empData = empDoc.data() || {};
 
       try {
-        // Segments employés ouverts aujourd'hui
         const empSegsRef = db.collection("employes").doc(empId).collection("timecards").doc(dayKey).collection("segments");
-
         const openEmpSnap = await empSegsRef.where("end", "==", null).get();
         const openEmpDocs = openEmpSnap.docs;
 
-        // Rien à fermer → skip
         if (openEmpDocs.length === 0) continue;
 
-        // Job tokens présents dans les segments ouverts
         let jobTokens = Array.from(
           new Set(
             openEmpDocs
@@ -474,7 +539,6 @@ exports.autoDepunchAllAt17 = onSchedule(
           )
         );
 
-        // Fallback si jobId manquant (lastProjectId / lastOtherId)
         if (jobTokens.length === 0) {
           const lastProj = empData?.lastProjectId ? `proj:${String(empData.lastProjectId)}` : "";
           const lastOther = empData?.lastOtherId ? `other:${String(empData.lastOtherId)}` : "";
@@ -482,7 +546,6 @@ exports.autoDepunchAllAt17 = onSchedule(
           if (lastOther) jobTokens.push(lastOther);
         }
 
-        // Fermer côté projets/other
         for (const t of jobTokens) {
           if (t.startsWith("proj:")) {
             const projId = t.slice(5);
@@ -493,7 +556,6 @@ exports.autoDepunchAllAt17 = onSchedule(
           }
         }
 
-        // Fermer segments employé + marquer day.end
         const ops = openEmpDocs.map((d) => ({
           ref: d.ref,
           data: { end: nowTs, updatedAt: nowTs },
@@ -501,7 +563,6 @@ exports.autoDepunchAllAt17 = onSchedule(
         await commitInChunks(db, ops);
         closedEmpSegsTotal += ops.length;
 
-        // timecards/{day}.end = now (merge, au cas où le doc n'existe pas)
         await db.collection("employes").doc(empId).collection("timecards").doc(dayKey).set({ end: nowTs, updatedAt: nowTs }, { merge: true });
 
         empsTouched += 1;
