@@ -37,6 +37,20 @@
 // - Segment AUTRE TÂCHE = même docId que segment EMPLOYÉ
 // - Dépunch ferme aussi AUTRE TÂCHE par segId identique
 // - L’historique autres tâches fitte maintenant exactement avec l’employé
+//
+// ✅ MODIF (2026-03-14):
+// - Les comptes Ressource humaine (isRH === true) sont exclus du tableau punch
+// - Admin ET RH voient la même chose pour les menus / vue globale de la page
+//
+// ✅ MODIF (2026-03-15):
+// - Les autres tâches limitées à des employés précis sont filtrées dans la page punch
+// - Un employé ne peut plus puncher une autre tâche s’il n’est pas autorisé
+//
+// ✅ MODIF (2026-03-15):
+// - Les tâches spéciales apparaissent en haut dans la modale "Autre tâche"
+// - Les tâches spéciales sont surlignées en jaune
+// - Le badge "TÂCHE SPÉCIALE" est à droite du titre
+// - Les tâches normales gardent leur bouton "Choisir" bleu
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -62,7 +76,7 @@ import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
 
 // ✅ BUILD TAG (debug cache / versions)
-const APP_BUILD = "2026-03-05 V.2.3";
+const APP_BUILD = "2.4";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -272,6 +286,7 @@ function useOpenProjets(setError) {
 
 function useAutresProjets(setError) {
   const [rows, setRows] = useState([]);
+
   useEffect(() => {
     const c = collection(db, "autresProjets");
     const unsub = onSnapshot(
@@ -279,7 +294,7 @@ function useAutresProjets(setError) {
       (snap) => {
         const items = [];
         snap.forEach((d) => {
-          const it = d.data();
+          const it = d.data() || {};
           items.push({
             id: d.id,
             projId: it.projId || null,
@@ -288,20 +303,28 @@ function useAutresProjets(setError) {
             code: String(it.code || ""),
             note: it.note ?? null,
             createdAt: it.createdAt ?? null,
+            scope: it.scope || "all",
+            visibleToEmpIds: Array.isArray(it.visibleToEmpIds) ? it.visibleToEmpIds : [],
+            ouvert: it.ouvert !== false,
+            projectLike: it.projectLike === true,
           });
         });
+
         items.sort((a, b) => {
           if (a.ordre == null && b.ordre == null) return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
           if (a.ordre == null) return 1;
           if (b.ordre == null) return -1;
           return a.ordre - b.ordre;
         });
+
         setRows(items);
       },
       (err) => setError?.(err?.message || String(err))
     );
+
     return () => unsub();
   }, [setError]);
+
   return rows;
 }
 
@@ -896,6 +919,24 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
 
 function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
   if (!open) return null;
+
+  const sortedAutresProjets = [...(autresProjets || [])].sort((a, b) => {
+    const aSpecial = a?.projectLike === true ? 1 : 0;
+    const bSpecial = b?.projectLike === true ? 1 : 0;
+
+    if (aSpecial !== bSpecial) return bSpecial - aSpecial;
+
+    const ao = a?.ordre ?? null;
+    const bo = b?.ordre ?? null;
+
+    if (ao == null && bo == null) return String(a?.nom || "").localeCompare(String(b?.nom || ""), "fr-CA");
+    if (ao == null) return 1;
+    if (bo == null) return -1;
+    if (ao !== bo) return ao - bo;
+
+    return String(a?.nom || "").localeCompare(String(b?.nom || ""), "fr-CA");
+  });
+
   const modal = (
     <div
       role="dialog"
@@ -945,18 +986,76 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
           <div style={{ fontWeight: 700, color: "#64748b" }}>Nom</div>
           <div style={{ fontWeight: 700, color: "#64748b" }}>Action</div>
 
-          {autresProjets.map((ap) => (
-            <React.Fragment key={ap.id}>
-              <div style={{ padding: "6px 0" }}>{ap.nom}</div>
-              <div>
-                <Button variant="primary" onClick={() => onChoose(ap)} style={{ width: "100%" }}>
-                  Choisir
-                </Button>
-              </div>
-            </React.Fragment>
-          ))}
+          {sortedAutresProjets.map((ap) => {
+            const isSpecial = ap?.projectLike === true;
 
-          {autresProjets.length === 0 && <div style={{ gridColumn: "1 / -1", color: "#64748b" }}>Aucun autre projet.</div>}
+            return (
+              <React.Fragment key={ap.id}>
+                <div
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    background: isSpecial ? "#fef3c7" : "transparent",
+                    border: isSpecial ? "1px solid #f59e0b" : "1px solid transparent",
+                    fontWeight: isSpecial ? 900 : 700,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 10,
+                    }}
+                  >
+                    <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {ap.nom}
+                    </span>
+
+                    {isSpecial && (
+                      <span
+                        style={{
+                          flex: "0 0 auto",
+                          fontSize: 11,
+                          color: "#92400e",
+                          fontWeight: 900,
+                          background: "#fde68a",
+                          border: "1px solid #f59e0b",
+                          borderRadius: 999,
+                          padding: "2px 8px",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        TÂCHE SPÉCIALE
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <Button
+                    variant="primary"
+                    onClick={() => onChoose(ap)}
+                    style={{
+                      width: "100%",
+                      background: isSpecial ? "#facc15" : "#1d4ed8",
+                      color: isSpecial ? "#111827" : "#ffffff",
+                      border: isSpecial ? "1px solid #eab308" : "1px solid #1e3a8a",
+                      fontWeight: 900,
+                    }}
+                  >
+                    Choisir
+                  </Button>
+                </div>
+              </React.Fragment>
+            );
+          })}
+
+          {sortedAutresProjets.length === 0 && (
+            <div style={{ gridColumn: "1 / -1", color: "#64748b" }}>
+              Aucune autre tâche.
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1314,6 +1413,18 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
 
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  const autresProjetsPourEmp = useMemo(() => {
+    return (autresProjets || []).filter((ap) => {
+      if (ap?.ouvert === false) return false;
+
+      const scope = ap?.scope || "all";
+      if (scope === "all") return true;
+
+      const allowedIds = Array.isArray(ap?.visibleToEmpIds) ? ap.visibleToEmpIds : [];
+      return allowedIds.includes(emp.id);
+    });
+  }, [autresProjets, emp.id]);
+
   const currentOpen = useMemo(() => sessions.find((s) => !s.end) || null, [sessions]);
   const currentJobName = currentOpen?.jobName || null;
 
@@ -1429,6 +1540,13 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
   const rowBg = isHovered ? hoverBg : baseBg;
 
   const proceedPunchOther = async (ap) => {
+    const scope = ap?.scope || "all";
+    const allowedIds = Array.isArray(ap?.visibleToEmpIds) ? ap.visibleToEmpIds : [];
+
+    if (scope === "selected" && !allowedIds.includes(emp.id)) {
+      throw new Error("Cet employé n’a pas accès à cette autre tâche.");
+    }
+
     await doPunchWithOther(emp, { id: ap.id, nom: ap.nom || "(sans nom)" });
   };
 
@@ -1599,7 +1717,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
 
       <AutresProjetsModal
         open={autresOpen}
-        autresProjets={autresProjets}
+        autresProjets={autresProjetsPourEmp}
         onChoose={async (ap) => {
           try {
             const taskCode = String(ap?.code || "").trim();
@@ -1655,7 +1773,7 @@ export default function PageAccueil() {
 
   const employes = useEmployes(setError);
   const projetsOuverts = useOpenProjets(setError);
-  const autresProjets = useAutresProjets(setError);
+  const autresProjetsRaw = useAutresProjets(setError);
 
   const myEmploye = useMemo(() => {
     if (!user) return null;
@@ -1665,12 +1783,36 @@ export default function PageAccueil() {
   }, [user, employes]);
 
   const isAdmin = !!myEmploye?.isAdmin;
+  const isRH = !!myEmploye?.isRH;
+  const canSeeAdminMenus = isAdmin || isRH;
 
   const visibleEmployes = useMemo(() => {
-    if (isAdmin) return employes;
+    // ✅ On retire seulement les Ressources humaines du tableau punch
+    const employesSansRH = employes.filter((e) => e?.isRH !== true);
+
+    // ✅ Admin et RH voient la même chose pour les menus / la vue globale
+    if (canSeeAdminMenus) return employesSansRH;
+
+    if (!myEmploye || myEmploye?.isRH === true) return [];
+
+    return employesSansRH.filter((e) => e.id === myEmploye.id);
+  }, [employes, canSeeAdminMenus, myEmploye]);
+
+  const autresProjets = useMemo(() => {
+    if (canSeeAdminMenus) {
+      return autresProjetsRaw.filter((t) => t.ouvert !== false);
+    }
+
     if (!myEmploye) return [];
-    return employes.filter((e) => e.id === myEmploye.id);
-  }, [employes, isAdmin, myEmploye]);
+
+    return autresProjetsRaw.filter((t) => {
+      if (t.ouvert === false) return false;
+      if ((t.scope || "all") === "all") return true;
+
+      const ids = Array.isArray(t.visibleToEmpIds) ? t.visibleToEmpIds : [];
+      return ids.includes(myEmploye.id);
+    });
+  }, [autresProjetsRaw, canSeeAdminMenus, myEmploye]);
 
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -1733,7 +1875,9 @@ export default function PageAccueil() {
                   {visibleEmployes.length === 0 && (
                     <tr>
                       <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                        {isAdmin ? "Aucun employé(e) pour l’instant." : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
+                        {canSeeAdminMenus
+                          ? "Aucun employé(e) pour l’instant."
+                          : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
                       </td>
                     </tr>
                   )}
@@ -1755,7 +1899,7 @@ export default function PageAccueil() {
       {materialProjId && <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />}
 
       <div style={{ position: "fixed", bottom: 8, right: 12, fontSize: 12, opacity: 0.5, zIndex: 99999 }}>
-        build: {APP_BUILD}
+        Version: {APP_BUILD}
       </div>
     </>
   );

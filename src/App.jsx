@@ -184,7 +184,7 @@ export default function App() {
   // 🔐 état d’auth
   const [user, setUser] = useState(undefined);
 
-  // ✅ Profil employé (pour savoir admin)
+  // ✅ Profil employé (pour savoir admin / RH)
   const [me, setMe] = useState(null);
   const [meLoading, setMeLoading] = useState(true);
 
@@ -205,7 +205,7 @@ export default function App() {
   // ✅ ouverture manuelle du gros popup
   const [broadcastPopupOpen, setBroadcastPopupOpen] = useState(false);
 
-  // UI admin
+  // UI admin/RH
   const [broadcastEditOpen, setBroadcastEditOpen] = useState(false);
   const [broadcastDraft, setBroadcastDraft] = useState("");
 
@@ -273,6 +273,7 @@ export default function App() {
   }, [user?.uid, user?.email]);
 
   const isAdmin = me?.isAdmin === true;
+  const isRH = me?.isRH === true;
 
   const hasBroadcastText = !!String(broadcastText || "").trim();
   const broadcastNonVu = hasBroadcastText && (broadcastUpdMs || 0) > (broadcastSeenMs || 0);
@@ -329,8 +330,6 @@ export default function App() {
   }, [user?.uid]);
 
   // ✅ FIX double-login après "déconnecter tout le monde"
-  // On garde le vrai refresh de token, mais on évite de kicker immédiatement
-  // juste après une reconnexion fraîche.
   useEffect(() => {
     if (!user) return;
 
@@ -360,14 +359,12 @@ export default function App() {
       if (!alive) return;
 
       try {
-        // ✅ vrai refresh token
         await user.getIdToken(true);
       } catch (e1) {
         console.error("forceCheck getIdToken(true) failed (1st try):", e1);
 
         if (!alive) return;
 
-        // ✅ retry avant de kicker
         try {
           await new Promise((resolve) => setTimeout(resolve, 1200));
           if (!alive) return;
@@ -385,22 +382,17 @@ export default function App() {
 
     const onVis = () => {
       if (document.visibilityState !== "visible") return;
-
-      // ✅ évite un check instantané juste après login
       if (Date.now() - startedAt < 5000) return;
-
       forceCheck();
     };
 
     document.addEventListener("visibilitychange", onVis);
 
-    // ✅ premier check après petit délai
     const firstTimer = window.setTimeout(() => {
       if (!alive) return;
       forceCheck();
     }, 5000);
 
-    // ✅ check régulier
     const intervalTimer = window.setInterval(() => {
       if (!alive) return;
       forceCheck();
@@ -414,10 +406,20 @@ export default function App() {
     };
   }, [user?.uid]);
 
-  // 🔒 redirects si non-admin tente d'aller sur pages admin
+  // 🔒 redirects selon rôle
   useEffect(() => {
     if (meLoading) return;
 
+    // RH: seulement historique + feuille de dépenses
+    if (isRH) {
+      const allowedRHRoutes = ["historique", "feuille-depenses"];
+      if (!allowedRHRoutes.includes(route)) {
+        window.location.hash = "#/historique";
+        return;
+      }
+    }
+
+    // Non admin et non RH
     if (route === "reglages-admin" && !isAdmin) {
       window.location.hash = "#/reglages";
     }
@@ -426,10 +428,10 @@ export default function App() {
       window.location.hash = "#/accueil";
     }
 
-    if (route === "feuille-depenses" && !isAdmin) {
+    if (route === "feuille-depenses" && !(isAdmin || isRH)) {
       window.location.hash = "#/accueil";
     }
-  }, [route, meLoading, isAdmin]);
+  }, [route, meLoading, isAdmin, isRH]);
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -545,14 +547,12 @@ export default function App() {
     return () => unsub();
   }, [user?.uid, me?.id]);
 
-  // ✅ flash bleu pour tous sauf l'auteur du message
   useEffect(() => {
     const hasText = !!String(broadcastText || "").trim();
     const nonVu = hasText && (broadcastUpdMs || 0) > (broadcastSeenMs || 0);
     setBroadcastNotifOn(!isBroadcastAuthor && nonVu);
   }, [broadcastText, broadcastUpdMs, broadcastSeenMs, isBroadcastAuthor]);
 
-  // ✅ action "VU"
   const markBroadcastSeen = async () => {
     if (!me?.id) return;
     try {
@@ -564,7 +564,7 @@ export default function App() {
     }
   };
 
-  // ✅ action admin: enregistrer message
+  // ✅ action admin seulement
   const adminSaveBroadcast = async () => {
     if (!isAdmin) return;
     const txt = String(broadcastDraft || "").trim();
@@ -620,16 +620,33 @@ export default function App() {
     return <Login />;
   }
 
-  const pages = [
-    { key: "accueil", label: "Accueil" },
-    { key: "projets", label: "Projets" },
-    { key: "materiels", label: "Matériels" },
-    { key: "reglages", label: "Réglages" },
-    ...(isAdmin ? [{ key: "reglages-admin", label: "Réglages Admin" }] : []),
-    { key: "historique", label: isAdmin ? "Heures de travail" : "Mes heures" },
-    ...(isAdmin ? [{ key: "feuille-depenses", label: "Feuille dépenses" }] : []),
-    ...(isAdmin ? [{ key: "test-ocr", label: "Test OCR" }] : []),
-  ];
+  let pages = [];
+
+  if (isAdmin) {
+    pages = [
+      { key: "accueil", label: "Accueil" },
+      { key: "projets", label: "Projets" },
+      { key: "materiels", label: "Matériels" },
+      { key: "reglages", label: "Réglages" },
+      { key: "reglages-admin", label: "Réglages Admin" },
+      { key: "historique", label: "Heures de travail" },
+      { key: "feuille-depenses", label: "Feuille dépenses" },
+      { key: "test-ocr", label: "Test OCR" },
+    ];
+  } else if (isRH) {
+    pages = [
+      { key: "historique", label: "Heures de travail" },
+      { key: "feuille-depenses", label: "Feuille dépenses" },
+    ];
+  } else {
+    pages = [
+      { key: "accueil", label: "Accueil" },
+      { key: "projets", label: "Projets" },
+      { key: "materiels", label: "Matériels" },
+      { key: "reglages", label: "Réglages" },
+      { key: "historique", label: "Mes heures" },
+    ];
+  }
 
   const validRoutes = [
     "accueil",
@@ -706,7 +723,7 @@ export default function App() {
         >
           <span>
             Connecté: {user.email}
-            {isAdmin ? " — Admin" : ""}
+            {isAdmin ? " — Admin" : isRH ? " — RH" : ""}
           </span>
 
           {hasBroadcastText ? (
@@ -820,7 +837,6 @@ export default function App() {
             zIndex: 9999,
             padding: 16,
           }}
-          onClick={() => setBroadcastEditOpen(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -893,16 +909,28 @@ export default function App() {
         subtitle="Clique ici pour actualiser l’application et repartir propre."
       />
 
-      <BurgerMenu pages={pages} />
+      <BurgerMenu
+        pages={pages}
+        isAdmin={isAdmin}
+        isRH={isRH}
+      />
 
-      {route === "accueil" && <PageAccueil />}
-      {route === "projets" && <PageListeProjet isAdmin={isAdmin} />}
-      {route === "materiels" && <PageMateriels />}
-      {route === "reglages" && <PageReglages />}
-      {route === "reglages-admin" && <PageReglagesAdmin />}
-      {route === "historique" && <HistoriqueEmploye isAdmin={isAdmin} meEmpId={me?.id || ""} />}
-      {route === "feuille-depenses" && <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />}
-      {route === "test-ocr" && <Test />}
+      {route === "accueil" && !isRH && <PageAccueil />}
+      {route === "projets" && !isRH && <PageListeProjet isAdmin={isAdmin} />}
+      {route === "materiels" && !isRH && <PageMateriels />}
+      {route === "reglages" && !isRH && <PageReglages />}
+      {route === "reglages-admin" && isAdmin && <PageReglagesAdmin />}
+      {route === "historique" && (
+        <HistoriqueEmploye
+          isAdmin={isAdmin}
+          isRH={isRH}
+          meEmpId={me?.id || ""}
+        />
+      )}
+      {route === "feuille-depenses" && (isAdmin || isRH) && (
+        <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />
+      )}
+      {route === "test-ocr" && isAdmin && <Test />}
 
       {!validRoutes.includes(route) && <PageAccueil />}
     </div>

@@ -4,9 +4,24 @@
 // - segments autres tâches = même docId que segment employé
 // - auto-close orphelin essaie d'abord le match béton par segId identique
 // - historique autres tâches fitte maintenant exactement avec l’employé
-
+//
+// ✅ AJOUT:
+// - visibilité par tâche: all | selected
+// - visibleToEmpIds: tableau d'employés autorisés
+// - admin voit tout, employé voit seulement ce qu'il a le droit
+//
+// ✅ AJOUT:
+// - projectLike: autres tâches spéciales
+// - boutons type projet pour les tâches spéciales:
+//   Détails / DOCS / Historique / Fermer / Matériel
+//
+// ✅ AJOUT:
+// - Matériel branché directement avec ProjectMaterielPanel
+// - autresProjets/{id}/usagesMateriels via entityType="autre"
+import CloseAutreProjetWizard from "./CloseAutreProjetWizard";
 import React, { useEffect, useState, useMemo, useRef } from "react";
-import { db } from "./firebaseConfig";
+import { db, auth, storage } from "./firebaseConfig";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   addDoc,
@@ -20,7 +35,12 @@ import {
   query,
   orderBy,
   where,
+  limit,
+  setDoc,
+  writeBatch,
 } from "firebase/firestore";
+import { ref as storageRef, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
+import ProjectMaterielPanel from "./ProjectMaterielPanel";
 
 /* ---------- Utils dates / temps ---------- */
 const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
@@ -61,6 +81,18 @@ function fmtHM(ms) {
   return `${h}:${m.toString().padStart(2, "0")}`;
 }
 
+function toMillis(v) {
+  try {
+    if (!v) return 0;
+    if (v.toDate) return v.toDate().getTime();
+    if (v instanceof Date) return v.getTime();
+    if (typeof v === "string") return new Date(v).getTime() || 0;
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 /* ---------- Helpers pour présence du jour ---------- */
 function pad2(n) {
   return n.toString().padStart(2, "0");
@@ -76,11 +108,17 @@ function todayKey() {
 function segColAutre(projId, key) {
   return collection(db, "autresProjets", projId, "timecards", key, "segments");
 }
+function dayRefAutre(projId, key) {
+  return doc(db, "autresProjets", projId, "timecards", key);
+}
 function empSegCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
 function empSegRef(empId, key, segId) {
   return doc(db, "employes", empId, "timecards", key, "segments", segId);
+}
+function empDayRef(empId, key) {
+  return doc(db, "employes", empId, "timecards", key);
 }
 
 function computeTotalMs(sessions) {
@@ -226,6 +264,110 @@ function usePresenceTodayAutre(projId, setError) {
   return { key, sessions, totalMs, hasOpen };
 }
 
+async function depunchWorkersOnAutreProjet(otherId) {
+  if (!otherId) return;
+
+  const now = new Date();
+  const MAX_OPS = 430;
+  let batch = writeBatch(db);
+  let ops = 0;
+
+  const commitIfNeeded = async (force = false) => {
+    if (!force && ops < MAX_OPS) return;
+    if (ops === 0) return;
+    await batch.commit();
+    batch = writeBatch(db);
+    ops = 0;
+  };
+
+  try {
+    const daysSnap = await getDocs(collection(db, "autresProjets", otherId, "timecards"));
+    const dayIds = [];
+    daysSnap.forEach((d) => dayIds.push(d.id));
+
+    for (const day of dayIds) {
+      const segsSnap = await getDocs(query(collection(db, "autresProjets", otherId, "timecards", day, "segments"), orderBy("start", "asc")));
+      const openSegs = [];
+      segsSnap.forEach((sd) => {
+        const s = sd.data() || {};
+        if (s.end == null) openSegs.push({ id: sd.id, ref: sd.ref, data: s });
+      });
+
+      if (openSegs.length === 0) continue;
+
+      for (const seg of openSegs) {
+        batch.update(seg.ref, {
+          end: now,
+          updatedAt: now,
+          autoClosed: true,
+          autoClosedAt: now,
+          autoClosedReason: "close_other_depunch",
+        });
+        ops++;
+        await commitIfNeeded(false);
+
+        const empId = seg?.data?.empId ? String(seg.data.empId) : "";
+        if (empId) {
+          const eSegRef = empSegRef(empId, day, seg.id);
+          try {
+            const eSnap = await getDoc(eSegRef);
+            if (eSnap.exists()) {
+              const e = eSnap.data() || {};
+              if (e.end == null) {
+                batch.update(eSegRef, { end: now, updatedAt: now });
+                ops++;
+                await commitIfNeeded(false);
+              }
+            }
+          } catch (e) {
+            console.error("close_other_depunch employee seg error", { empId, day, segId: seg.id }, e);
+          }
+
+          const eDay = empDayRef(empId, day);
+          batch.set(
+            eDay,
+            {
+              end: now,
+              updatedAt: now,
+              createdAt: now,
+            },
+            { merge: true }
+          );
+          ops++;
+          await commitIfNeeded(false);
+        }
+      }
+
+      const dref = dayRefAutre(otherId, day);
+      batch.set(
+        dref,
+        {
+          updatedAt: now,
+          end: now,
+        },
+        { merge: true }
+      );
+      ops++;
+      await commitIfNeeded(false);
+    }
+
+    batch.set(
+      doc(db, "autresProjets", otherId),
+      {
+        ouvert: false,
+        closedAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+    ops++;
+    await commitIfNeeded(true);
+  } catch (e) {
+    console.error("depunchWorkersOnAutreProjet HARD error", e);
+    throw e;
+  }
+}
+
 /* ---------- UI helpers ---------- */
 function ErrorBanner({ error, onClose }) {
   if (!error) return null;
@@ -357,6 +499,59 @@ const btnDanger = {
   fontWeight: 800,
 };
 
+const btnBlue = {
+  border: "none",
+  background: "#0ea5e9",
+  color: "#fff",
+  borderRadius: 10,
+  padding: "6px 10px",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+
+const btnDocs = { ...btnBlue, background: "#f59e0b" };
+const btnClose = {
+  border: "1px solid #16a34a",
+  background: "#dcfce7",
+  color: "#166534",
+  borderRadius: 10,
+  padding: "6px 10px",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+
+const docsBadgeStyle = {
+  position: "absolute",
+  top: -7,
+  right: -7,
+  minWidth: 18,
+  height: 18,
+  padding: "0 5px",
+  borderRadius: 999,
+  background: "#dc2626",
+  color: "#fff",
+  fontSize: 11,
+  fontWeight: 900,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  lineHeight: 1,
+  border: "2px solid #fff",
+  boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
+};
+
+function DocsButtonWithBadge({ count = 0, onClick, title = "Documents" }) {
+  const n = Number(count || 0);
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <button onClick={onClick} style={btnDocs} title={title}>
+        DOCS
+      </button>
+      {n > 0 && <span style={docsBadgeStyle}>{n}</span>}
+    </div>
+  );
+}
+
 /* ---------- Popup: créer / renommer ---------- */
 function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = null, currentName = "" }) {
   const [nom, setNom] = useState("");
@@ -373,13 +568,19 @@ function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = 
       if (!clean) return onError?.("Indique un nom.");
 
       if (mode === "edit" && docId) {
-        await updateDoc(doc(db, "autresProjets", docId), { nom: clean });
+        await updateDoc(doc(db, "autresProjets", docId), { nom: clean, updatedAt: serverTimestamp() });
       } else {
         await addDoc(collection(db, "autresProjets"), {
           nom: clean,
           ordre: null,
-          note: null,
+          note: "",
+          scope: "all",
+          visibleToEmpIds: [],
+          projectLike: false,
+          ouvert: true,
+          pdfCount: 0,
           createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         });
       }
 
@@ -458,8 +659,8 @@ function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = 
   );
 }
 
-/* ---------- Popup DÉTAILS / HISTORIQUE ---------- */
-function PopupDetailsAutreProjet({ open, onClose, projet }) {
+/* ---------- Popup HISTORIQUE ---------- */
+function PopupHistoriqueAutreProjet({ open, onClose, projet }) {
   const [error, setError] = useState(null);
   const [histRows, setHistRows] = useState([]);
   const [histLoading, setHistLoading] = useState(false);
@@ -561,7 +762,7 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontWeight: 900, fontSize: 17 }}>Détails de l’autre projet</div>
+          <div style={{ fontWeight: 900, fontSize: 17 }}>Historique de l’autre tâche</div>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -656,18 +857,575 @@ function PopupDetailsAutreProjet({ open, onClose, projet }) {
             )}
           </tbody>
         </table>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+          <button onClick={onClose} style={btnGhost}>
+            Fermer
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
+/* ---------- Popup DOCS ---------- */
+function PopupDocsManagerAutre({ open, onClose, projet }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [files, setFiles] = useState([]);
+  const inputRef = useRef(null);
+
+  const syncPdfCountExact = async (count) => {
+    if (!projet?.id) return;
+    try {
+      await setDoc(doc(db, "autresProjets", projet.id), { pdfCount: Number(count || 0) }, { merge: true });
+    } catch (e) {
+      console.error("syncPdfCountExact other error", e);
+    }
+  };
+
+  useEffect(() => {
+    if (!open || !projet?.id) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const base = storageRef(storage, `autresProjets/${projet.id}/pdfs`);
+        const res = await listAll(base).catch(() => ({ items: [] }));
+        const entries = await Promise.all(
+          (res.items || []).map(async (itemRef) => {
+            const url = await getDownloadURL(itemRef);
+            const name = itemRef.name;
+            return { name, url };
+          })
+        );
+
+        const sorted = entries.sort((a, b) => a.name.localeCompare(b.name));
+        if (!cancelled) setFiles(sorted);
+
+        const current = Number(projet?.pdfCount ?? 0);
+        if (!cancelled && sorted.length !== current) {
+          await syncPdfCountExact(sorted.length);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.error(e);
+          setError(e?.message || String(e));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projet?.id]);
+
+  const pickFile = () => inputRef.current?.click();
+
+  const onPicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const allowedTypes = ["application/pdf", "image/jpeg"];
+    if (!allowedTypes.includes(file.type)) {
+      return setError("Sélectionne un fichier PDF ou JPEG (.pdf, .jpg, .jpeg).");
+    }
+
+    if (!projet?.id) return setError("Tâche invalide.");
+
+    setBusy(true);
+    setError(null);
+    try {
+      const safeName = file.name.replace(/[^\w.\-()]/g, "_");
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const name = `${stamp}_${safeName}`;
+      const path = `autresProjets/${projet.id}/pdfs/${name}`;
+      const dest = storageRef(storage, path);
+
+      await uploadBytes(dest, file, { contentType: file.type || "application/octet-stream" });
+      const url = await getDownloadURL(dest);
+
+      setFiles((prev) => {
+        const next = [...prev, { name, url }].sort((a, b) => a.name.localeCompare(b.name));
+        syncPdfCountExact(next.length);
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDelete = async (name) => {
+    if (!projet?.id) return;
+    if (!window.confirm(`Supprimer « ${name} » ?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const fileRef = storageRef(storage, `autresProjets/${projet.id}/pdfs/${name}`);
+      await deleteObject(fileRef);
+
+      setFiles((prev) => {
+        const next = prev.filter((f) => f.name !== name);
+        syncPdfCountExact(next.length);
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open || !projet) return null;
+
+  const title = projet.nom || "(autre tâche)";
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(760px, 96vw)",
+          maxHeight: "92vh",
+          overflow: "auto",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>DOCS – {title}</div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose?.();
+            }}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+          <button onClick={pickFile} style={btnPrimary} disabled={busy}>
+            {busy ? "Téléversement..." : "Ajouter un document"}
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg"
+            onChange={onPicked}
+            style={{ display: "none" }}
+          />
+        </div>
+
+        <div style={{ fontWeight: 900, margin: "6px 0 10px", fontSize: 18 }}>Documents de la tâche</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 16 }}>
+          <thead>
+            <tr style={{ background: "#e5e7eb" }}>
+              <th style={thCenter}>Nom</th>
+              <th style={thCenter}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {files.map((f, i) => (
+              <tr key={i}>
+                <td style={{ ...tdCenter, wordBreak: "break-word" }}>{f.name}</td>
+                <td style={tdCenter}>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
+                      Ouvrir
+                    </a>
+                    <button onClick={() => navigator.clipboard?.writeText(f.url)} style={btnSecondary} title="Copier l’URL">
+                      Copier l’URL
+                    </button>
+                    <button onClick={() => onDelete(f.name)} style={btnDanger} disabled={busy}>
+                      Supprimer
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {files.length === 0 && (
+              <tr>
+                <td colSpan={2} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16 }}>
+                  Aucun document.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={btnGhost}>
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Popup DÉTAILS spéciale ---------- */
+function PopupDetailsAutreProjetSpecial({ open, onClose, projet, onOpenDocs, onOpenHistory, onOpenClose, onOpenMaterial }) {
+  const projId = projet?.id || null;
+
+  const [live, setLive] = useState(null);
+  const [saveMsg, setSaveMsg] = useState("");
+  const debounceRef = useRef(null);
+  const saveMsgTimerRef = useRef(null);
+
+  const NOTE_MIN_ROWS = 6;
+  const NOTE_MAX_ROWS = 15;
+  const NOTE_LINE_HEIGHT_PX = 24;
+  const noteRef = useRef(null);
+
+  useEffect(() => {
+    if (!open || !projId) {
+      setLive(null);
+      return;
+    }
+    const unsub = onSnapshot(doc(db, "autresProjets", projId), (snap) => {
+      if (!snap.exists()) return;
+      setLive({ id: snap.id, ...snap.data() });
+      setTimeout(() => autoSizeNote(noteRef, NOTE_MIN_ROWS, NOTE_MAX_ROWS, NOTE_LINE_HEIGHT_PX), 0);
+    });
+    return () => unsub();
+  }, [open, projId]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (saveMsgTimerRef.current) clearTimeout(saveMsgTimerRef.current);
+    };
+  }, []);
+
+  const commitPatchDebounced = (patch) => {
+    if (!projId) return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (saveMsgTimerRef.current) clearTimeout(saveMsgTimerRef.current);
+
+    debounceRef.current = setTimeout(async () => {
+      try {
+        await updateDoc(doc(db, "autresProjets", projId), {
+          ...(patch || {}),
+          updatedAt: serverTimestamp(),
+        });
+        setSaveMsg("✅ Sauvegardé");
+        saveMsgTimerRef.current = setTimeout(() => setSaveMsg(""), 900);
+      } catch (e) {
+        console.error("save other special details error", e);
+        setSaveMsg("❌ Erreur sauvegarde");
+      }
+    }, 450);
+  };
+
+  if (!open || !projet) return null;
+
+  const p = live || projet;
+  const title = p.nom || "—";
+  const inputInline = { ...input, fontSize: 16, fontWeight: 900, padding: "9px 10px", borderRadius: 12 };
+  const labelMini = { fontSize: 13, fontWeight: 1000, color: "#334155", marginBottom: 4 };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.60)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(980px, 96vw)",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>Détails – {title}</div>
+          <button
+            onClick={onClose}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 30, cursor: "pointer", lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 12, fontSize: 18 }}>
+          <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
+            <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Informations</div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={labelMini}>Nom</div>
+              <input
+                value={p.nom ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setLive((prev) => (prev ? { ...prev, nom: v } : prev));
+                  commitPatchDebounced({ nom: v });
+                }}
+                style={inputInline}
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <CardKV k="Type" v={p.projectLike ? "Tâche spéciale" : "Tâche simple"} />
+              <CardKV k="Statut" v={p.ouvert === false ? "Fermé" : "Ouvert"} />
+              <CardKV k="Date de création" v={fmtDate(p.createdAt)} />
+              <CardKV k="Documents" v={String(Number(p.pdfCount || 0))} />
+            </div>
+          </div>
+
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
+            <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Actions</div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={onOpenMaterial} style={btnBlue}>
+                Matériel
+              </button>
+
+              <button onClick={onOpenHistory} style={btnSecondary}>
+                Historique
+              </button>
+
+              <DocsButtonWithBadge
+                count={p.pdfCount}
+                onClick={onOpenDocs}
+                title="Documents"
+              />
+
+              {p.ouvert !== false && (
+                <button onClick={onOpenClose} style={btnClose}>
+                  Fermer
+                </button>
+              )}
+            </div>
+
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #e5e7eb" }}>
+              <div style={{ fontWeight: 1000, marginBottom: 6, fontSize: 18 }}>Notes</div>
+
+              <textarea
+                ref={noteRef}
+                value={(p.note ?? "").toString()}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setLive((prev) => (prev ? { ...prev, note: v } : prev));
+                  commitPatchDebounced({ note: v });
+                  setTimeout(() => autoSizeNote(noteRef, NOTE_MIN_ROWS, NOTE_MAX_ROWS, NOTE_LINE_HEIGHT_PX), 0);
+                }}
+                placeholder="Écris les notes ici…"
+                rows={NOTE_MIN_ROWS}
+                style={{
+                  ...inputInline,
+                  resize: "none",
+                  overflowY: "hidden",
+                  whiteSpace: "pre-wrap",
+                  fontWeight: 900,
+                  fontSize: 18,
+                  lineHeight: `${NOTE_LINE_HEIGHT_PX}px`,
+                }}
+              />
+
+              <div
+                style={{
+                  marginTop: 8,
+                  minHeight: 34,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                <div
+                  aria-live="polite"
+                  style={{
+                    opacity: saveMsg ? 1 : 0,
+                    transition: "opacity 140ms ease",
+                    pointerEvents: "none",
+                    fontSize: 14,
+                    fontWeight: 1000,
+                    color: saveMsg.startsWith("❌") ? "#b91c1c" : "#166534",
+                    background: saveMsg.startsWith("❌") ? "#fee2e2" : "#dcfce7",
+                    border: `1px solid ${saveMsg.startsWith("❌") ? "#fecaca" : "#bbf7d0"}`,
+                    borderRadius: 10,
+                    padding: "7px 10px",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {saveMsg || " "}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={btnGhost}>
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Popup fermeture spéciale ---------- */
+function PopupFermerAutreProjet({ open, projet, onClose, onConfirm }) {
+  if (!open || !projet) return null;
+
+  const title = projet.nom || "—";
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.60)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          width: "min(600px, 96vw)",
+          borderRadius: 18,
+          padding: 18,
+          boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>Fermer la tâche spéciale</div>
+          <button
+            onClick={onClose}
+            title="Fermer"
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ fontSize: 18, color: "#111827", marginBottom: 12 }}>
+          <div style={{ fontWeight: 1000 }}>{title}</div>
+        </div>
+
+        <div
+          style={{
+            background: "#f8fafc",
+            border: "1px solid #e5e7eb",
+            borderRadius: 14,
+            padding: 12,
+            fontSize: 16,
+            color: "#334155",
+            marginBottom: 14,
+          }}
+        >
+          <strong>Note:</strong> tous les travailleurs encore punchés sur cette tâche seront automatiquement dépunchés.
+        </div>
+
+        <button
+          type="button"
+          onClick={onConfirm}
+          style={{ ...btnClose, width: "100%", padding: "14px 16px", fontSize: 18, fontWeight: 1000, borderRadius: 16 }}
+        >
+          Fermer la tâche
+        </button>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+          <button type="button" onClick={onClose} style={btnGhost}>
+            Annuler
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function autoSizeNote(noteRef, minRows, maxRows, lineHeightPx) {
+  const el = noteRef.current;
+  if (!el) return;
+
+  el.style.height = "auto";
+
+  const minH = minRows * lineHeightPx;
+  const maxH = maxRows * lineHeightPx;
+
+  const nextH = Math.max(minH, Math.min(el.scrollHeight, maxH));
+  el.style.height = `${nextH}px`;
+
+  el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
+}
+
 /* ---------- Ligne du tableau ---------- */
-function RowAutreProjet({ p, idx = 0, onRename, onDelete, onShowDetails, allowEdit, setError }) {
+function RowAutreProjet({
+  p,
+  idx = 0,
+  onRename,
+  onDelete,
+  onShowHistory,
+  onShowSpecialDetails,
+  onShowDocs,
+  onShowClose,
+  onOpenMaterial,
+  allowEdit,
+  setError,
+}) {
   const { hasOpen } = usePresenceTodayAutre(p.id, setError);
 
-  const statutLabel = hasOpen ? "En cours" : "—";
-  const statutStyle = { fontWeight: 800, color: hasOpen ? "#166534" : "#6b7280" };
+  let statutLabel = "—";
+  let statutColor = "#6b7280";
 
+  if (p.ouvert === false) {
+    statutLabel = "Fermé";
+    statutColor = "#991b1b";
+  } else if (hasOpen) {
+    statutLabel = "En cours";
+    statutColor = "#166534";
+  }
+
+  const statutStyle = { fontWeight: 800, color: statutColor };
   const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff";
 
   return (
@@ -682,11 +1440,39 @@ function RowAutreProjet({ p, idx = 0, onRename, onDelete, onShowDetails, allowEd
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
-      <td style={{ ...tdCenter, textAlign: "right", paddingRight: 80 }}>
+      <td style={{ ...tdCenter, textAlign: "right", paddingRight: 40 }}>
         <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button onClick={() => onShowDetails?.(p)} style={btnSecondary} title="Voir l'historique">
-            Historique
-          </button>
+          {p.projectLike ? (
+            <>
+              <button onClick={() => onShowSpecialDetails?.(p)} style={btnSecondary} title="Voir les détails">
+                Détails
+              </button>
+
+              <button onClick={() => onOpenMaterial?.(p)} style={btnBlue} title="Matériel">
+                Matériel
+              </button>
+
+              <DocsButtonWithBadge
+                count={p.pdfCount}
+                onClick={() => onShowDocs?.(p)}
+                title="Documents"
+              />
+
+              <button onClick={() => onShowHistory?.(p)} style={btnSecondary} title="Voir l'historique">
+                Historique
+              </button>
+
+              {p.ouvert !== false && (
+                <button onClick={() => onShowClose?.(p)} style={btnClose} title="Fermer la tâche">
+                  Fermer
+                </button>
+              )}
+            </>
+          ) : (
+            <button onClick={() => onShowHistory?.(p)} style={btnSecondary} title="Voir l'historique">
+              Historique
+            </button>
+          )}
 
           {allowEdit && (
             <>
@@ -705,16 +1491,91 @@ function RowAutreProjet({ p, idx = 0, onRename, onDelete, onShowDetails, allowEd
 }
 
 /* ---------- Section principale ---------- */
-export default function AutresProjetsSection({ allowEdit = true, showHeader = true }) {
+export default function AutresProjetsSection({
+  allowEdit = true,
+  showHeader = true,
+}) {
   const [error, setError] = useState(null);
   const [rows, setRows] = useState([]);
+
+  const [authUser, setAuthUser] = useState(null);
+  const [me, setMe] = useState(null);
+  const [meLoading, setMeLoading] = useState(true);
 
   const [popupOpen, setPopupOpen] = useState(false);
   const [popupMode, setPopupMode] = useState("create");
   const [editDoc, setEditDoc] = useState(null);
 
+  const [histOpen, setHistOpen] = useState(false);
+  const [histProjet, setHistProjet] = useState(null);
+
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsProjet, setDetailsProjet] = useState(null);
+
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [docsProjet, setDocsProjet] = useState(null);
+
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closeProjet, setCloseProjet] = useState(null);
+
+  const [materialOpen, setMaterialOpen] = useState(false);
+  const [materialProjetId, setMaterialProjetId] = useState(null);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUser(u || null));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    let unsub = null;
+
+    (async () => {
+      setMeLoading(true);
+      try {
+        if (!authUser) {
+          setMe(null);
+          return;
+        }
+
+        const uid = authUser.uid;
+        const emailLower = String(authUser.email || "").trim().toLowerCase();
+
+        let q1 = query(collection(db, "employes"), where("uid", "==", uid), limit(1));
+        let snap = await getDocs(q1);
+
+        if (snap.empty && emailLower) {
+          q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
+          snap = await getDocs(q1);
+        }
+
+        if (snap.empty) {
+          setMe(null);
+          return;
+        }
+
+        const empDoc = snap.docs[0];
+        unsub = onSnapshot(
+          doc(db, "employes", empDoc.id),
+          (s) => {
+            setMe(s.exists() ? { id: s.id, ...s.data() } : null);
+          },
+          (err) => {
+            console.error(err);
+            setMe(null);
+          }
+        );
+      } catch (e) {
+        console.error(e);
+        setMe(null);
+      } finally {
+        setMeLoading(false);
+      }
+    })();
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [authUser?.uid, authUser?.email]);
 
   useEffect(() => {
     const c = collection(db, "autresProjets");
@@ -722,14 +1583,53 @@ export default function AutresProjetsSection({ allowEdit = true, showHeader = tr
       c,
       (snap) => {
         const list = [];
-        snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
+        snap.forEach((d) => {
+          const data = d.data() || {};
+          list.push({
+            id: d.id,
+            ...data,
+            scope: data.scope || "all",
+            visibleToEmpIds: Array.isArray(data.visibleToEmpIds) ? data.visibleToEmpIds : [],
+            projectLike: data.projectLike === true,
+            ouvert: data.ouvert !== false,
+            pdfCount: Number(data.pdfCount || 0),
+            note: data.note || "",
+          });
+        });
+        list.sort((a, b) => {
+          const ao = a.ordre ?? null;
+          const bo = b.ordre ?? null;
+          if (ao == null && bo == null) return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+          if (ao == null) return 1;
+          if (bo == null) return -1;
+          if (ao !== bo) return ao - bo;
+          return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+        });
         setRows(list);
       },
       (err) => setError(err?.message || String(err))
     );
     return () => unsub();
   }, []);
+
+  const visibleRows = useMemo(() => {
+    if (meLoading) return [];
+
+    const isAdmin = me?.isAdmin === true;
+    const myEmpId = me?.id || null;
+
+    return rows.filter((r) => {
+      if (isAdmin) return true;
+
+      const scope = r.scope || "all";
+      const visibleToEmpIds = Array.isArray(r.visibleToEmpIds) ? r.visibleToEmpIds : [];
+
+      if (scope === "all") return true;
+      if (!myEmpId) return false;
+
+      return visibleToEmpIds.includes(myEmpId);
+    });
+  }, [rows, meLoading, me]);
 
   const openCreate = () => {
     setPopupMode("create");
@@ -754,9 +1654,40 @@ export default function AutresProjetsSection({ allowEdit = true, showHeader = tr
     }
   };
 
-  const handleShowDetails = (p) => {
+  const handleShowHistory = (p) => {
+    setHistProjet(p);
+    setHistOpen(true);
+  };
+
+  const handleShowSpecialDetails = (p) => {
     setDetailsProjet(p);
     setDetailsOpen(true);
+  };
+
+  const handleShowDocs = (p) => {
+    setDocsProjet(p);
+    setDocsOpen(true);
+  };
+
+  const handleShowClose = (p) => {
+    setCloseProjet(p);
+    setCloseOpen(true);
+  };
+
+  const handleCloseWizardDone = () => {
+    setCloseOpen(false);
+    setCloseProjet(null);
+  };
+
+  const handleOpenMaterial = (p) => {
+    if (!p?.id) return;
+    setMaterialProjetId(p.id);
+    setMaterialOpen(true);
+  };
+
+  const handleCloseMaterial = () => {
+    setMaterialOpen(false);
+    setMaterialProjetId(null);
   };
 
   return (
@@ -785,22 +1716,27 @@ export default function AutresProjetsSection({ allowEdit = true, showHeader = tr
               </tr>
             </thead>
             <tbody>
-              {rows.map((p, idx) => (
+              {visibleRows.map((p, idx) => (
                 <RowAutreProjet
                   key={p.id}
                   p={p}
                   idx={idx}
                   onRename={openRename}
                   onDelete={handleDelete}
-                  onShowDetails={handleShowDetails}
+                  onShowHistory={handleShowHistory}
+                  onShowSpecialDetails={handleShowSpecialDetails}
+                  onShowDocs={handleShowDocs}
+                  onShowClose={handleShowClose}
+                  onOpenMaterial={handleOpenMaterial}
                   allowEdit={allowEdit}
                   setError={setError}
                 />
               ))}
-              {rows.length === 0 && (
+
+              {!meLoading && visibleRows.length === 0 && (
                 <tr>
                   <td colSpan={3} style={{ padding: 12, color: "#666" }}>
-                    Aucun autre projet pour l’instant.
+                    Aucune autre tâche visible pour l’instant.
                   </td>
                 </tr>
               )}
@@ -818,7 +1754,50 @@ export default function AutresProjetsSection({ allowEdit = true, showHeader = tr
         currentName={editDoc?.nom || ""}
       />
 
-      <PopupDetailsAutreProjet open={detailsOpen} onClose={() => setDetailsOpen(false)} projet={detailsProjet} />
+      <PopupHistoriqueAutreProjet open={histOpen} onClose={() => setHistOpen(false)} projet={histProjet} />
+
+      <PopupDetailsAutreProjetSpecial
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        projet={detailsProjet}
+        onOpenDocs={() => {
+          if (!detailsProjet) return;
+          handleShowDocs(detailsProjet);
+        }}
+        onOpenHistory={() => {
+          if (!detailsProjet) return;
+          handleShowHistory(detailsProjet);
+        }}
+        onOpenClose={() => {
+          if (!detailsProjet) return;
+          handleShowClose(detailsProjet);
+        }}
+        onOpenMaterial={() => {
+          if (!detailsProjet) return;
+          handleOpenMaterial(detailsProjet);
+        }}
+      />
+
+      <PopupDocsManagerAutre open={docsOpen} onClose={() => setDocsOpen(false)} projet={docsProjet} />
+
+      <CloseAutreProjetWizard
+        open={closeOpen}
+        projet={closeProjet}
+        onCancel={() => {
+          setCloseOpen(false);
+          setCloseProjet(null);
+        }}
+        onClosed={handleCloseWizardDone}
+      />
+
+      {materialOpen && materialProjetId && (
+        <ProjectMaterielPanel
+          entityType="autre"
+          entityId={materialProjetId}
+          onClose={handleCloseMaterial}
+          setParentError={setError}
+        />
+      )}
     </div>
   );
 }

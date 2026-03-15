@@ -515,6 +515,7 @@ function TopBar({ title, rightSlot = null, flashTitle = false }) {
 /* ====================== Component ====================== */
 export default function HistoriqueEmploye({
   isAdmin: isAdminProp = false,
+  isRH: isRHProp = false,
   meEmpId = "",
 }) {
   const [error, setError] = useState(null);
@@ -526,8 +527,12 @@ export default function HistoriqueEmploye({
   }, []);
 
   const isAdmin = !!isAdminProp;
+  const isRH = !!isRHProp;
+  const isPrivileged = isAdmin || isRH;
+  const canWriteNotes = isRH;
+  const hasPersonalInbox = !isRH; // employé normal + admin reçoivent des notes RH personnelles
 
-  /* ===================== 🔒 PORTE: MOT DE PASSE (NON-ADMIN) ===================== */
+  /* ===================== 🔒 PORTE: MOT DE PASSE (NON-ADMIN/RH) ===================== */
   const [pwUnlocked, setPwUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState("");
   const [pwErr, setPwErr] = useState("");
@@ -575,7 +580,7 @@ export default function HistoriqueEmploye({
     return () => window.removeEventListener("hashchange", lockIfLeft);
   }, []);
 
-  /* ===================== 🔒 Code requis (ADMIN) ===================== */
+  /* ===================== 🔒 Code requis (ADMIN/RH) ===================== */
   const [expectedCode, setExpectedCode] = useState("");
   const [codeLoading, setCodeLoading] = useState(true);
   const [codeInput, setCodeInput] = useState("");
@@ -591,7 +596,7 @@ export default function HistoriqueEmploye({
         setUnlocked(false);
         setCodeInput("");
 
-        if (!isAdmin) {
+        if (!isPrivileged) {
           setExpectedCode("");
           return;
         }
@@ -610,7 +615,7 @@ export default function HistoriqueEmploye({
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [isPrivileged]);
 
   const tryUnlock = () => {
     const entered = String(codeInput || "").trim();
@@ -761,7 +766,7 @@ export default function HistoriqueEmploye({
   };
 
   const saveNoteForEmp = async (empId) => {
-    if (!empId) return;
+    if (!empId || !canWriteNotes) return;
     const note = String(getDraft(empId) || "");
 
     setNoteStatus((p) => ({
@@ -853,9 +858,6 @@ export default function HistoriqueEmploye({
   }, [payBlockKey]);
 
   /* ===================== ✅ "VU" STOCKÉ DANS FIRESTORE ===================== */
-  // - employé coche Vu sur la note admin => noteSeenByEmpAt / noteSeenByEmpBy
-  // - admin coche Vu sur la réponse employé => replySeenByAdminAt / replySeenByAdminBy
-
   const setNoteSeenFS = async (empId, blockKey, checked) => {
     if (!empId || !blockKey) return;
     try {
@@ -878,7 +880,7 @@ export default function HistoriqueEmploye({
   };
 
   const setReplySeenFS = async (empId, blockKey, checked) => {
-    if (!empId || !blockKey) return;
+    if (!empId || !blockKey || !isRH) return;
     try {
       await setDoc(
         noteDocRef(empId, blockKey),
@@ -909,17 +911,20 @@ export default function HistoriqueEmploye({
     return replyAtMs <= seen;
   };
 
-  /* ===================== ✅ NON-ADMIN: ALERTES NOTES (TOUS BLOCS) via Firestore ===================== */
+  /* ===================== ✅ INBOX PERSO NOTES RH (employé normal + admin) ===================== */
   const [myNotesMetaByBlock, setMyNotesMetaByBlock] = useState({});
+
+  const selfNotesEnabled =
+    !!derivedMeEmpId &&
+    hasPersonalInbox &&
+    ((isPrivileged && unlocked) || (!isPrivileged && pwUnlocked));
 
   useEffect(() => {
     setMyNotesMetaByBlock({});
-  }, [derivedMeEmpId]);
+  }, [derivedMeEmpId, hasPersonalInbox]);
 
   useEffect(() => {
-    if (isAdmin) return;
-    if (!pwUnlocked) return;
-    if (!derivedMeEmpId) return;
+    if (!selfNotesEnabled) return;
 
     const colRef = collection(db, "employes", derivedMeEmpId, "payBlockNotes");
     const unsub = onSnapshot(
@@ -944,10 +949,10 @@ export default function HistoriqueEmploye({
     );
 
     return () => unsub();
-  }, [isAdmin, pwUnlocked, derivedMeEmpId]);
+  }, [selfNotesEnabled, derivedMeEmpId]);
 
   const myUnseenNoteDocs = useMemo(() => {
-    if (isAdmin) return [];
+    if (!hasPersonalInbox) return [];
     const blocks = Object.keys(myNotesMetaByBlock || {});
     const out = [];
     for (const blockKey of blocks) {
@@ -961,7 +966,7 @@ export default function HistoriqueEmploye({
     }
     out.sort((a, b) => (b.updMs || 0) - (a.updMs || 0));
     return out;
-  }, [isAdmin, myNotesMetaByBlock]);
+  }, [hasPersonalInbox, myNotesMetaByBlock]);
 
   const myUnseenNoteCount = myUnseenNoteDocs.length;
 
@@ -977,11 +982,9 @@ export default function HistoriqueEmploye({
     return out;
   }, [myUnseenNoteDocs]);
 
-  // NON-ADMIN: écoute seulement mon doc (bloc courant)
+  /* ===================== ✅ SELF DOC LISTENER (pour réponse + note perso admin/employé) ===================== */
   useEffect(() => {
-    if (isAdmin) return;
-    if (!pwUnlocked) return;
-    if (!derivedMeEmpId) return;
+    if (!selfNotesEnabled) return;
 
     const unsub = onSnapshot(
       noteDocRef(derivedMeEmpId, payBlockKey),
@@ -1016,7 +1019,6 @@ export default function HistoriqueEmploye({
             by: String(data.replyBy || ""),
             at: toJSDateMaybe(data.replyAt),
             atMs,
-            // ✅ NEW (admin read receipt visible to employee)
             seenAt: toJSDateMaybe(data.replySeenByAdminAt),
             seenAtMs: replySeenAtMs,
             seenBy: String(data.replySeenByAdminBy || ""),
@@ -1031,7 +1033,6 @@ export default function HistoriqueEmploye({
           [derivedMeEmpId]: {
             updatedAtMs: updMs,
             updatedBy: String(data.updatedBy || ""),
-            // ✅ NEW (employee read receipt visible to admin)
             seenAt: toJSDateMaybe(data.noteSeenByEmpAt),
             seenAtMs: noteSeenAtMs,
             seenBy: String(data.noteSeenByEmpBy || ""),
@@ -1042,11 +1043,11 @@ export default function HistoriqueEmploye({
     );
 
     return () => unsub();
-  }, [isAdmin, pwUnlocked, derivedMeEmpId, payBlockKey]);
+  }, [selfNotesEnabled, derivedMeEmpId, payBlockKey]);
 
-  // ADMIN: listeners (note + reply) pour tous (bloc courant)
+  // PRIVILEGED: listeners (note + reply) pour tous
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isPrivileged) return;
     if (!unlocked) return;
 
     const list = (employes || []).filter((e) => e?.id);
@@ -1079,7 +1080,6 @@ export default function HistoriqueEmploye({
               by: String(data.replyBy || ""),
               at: toJSDateMaybe(data.replyAt),
               atMs,
-              // ✅ NEW
               seenAt: toJSDateMaybe(data.replySeenByAdminAt),
               seenAtMs: replySeenAtMs,
               seenBy: String(data.replySeenByAdminBy || ""),
@@ -1094,7 +1094,6 @@ export default function HistoriqueEmploye({
             [empId]: {
               updatedAtMs: updMs,
               updatedBy: String(data.updatedBy || ""),
-              // ✅ NEW
               seenAt: toJSDateMaybe(data.noteSeenByEmpAt),
               seenAtMs: noteSeenAtMs,
               seenBy: String(data.noteSeenByEmpBy || ""),
@@ -1104,6 +1103,11 @@ export default function HistoriqueEmploye({
           setNoteDrafts((p) => {
             if (p?.[empId] !== undefined) return p;
             return { ...(p || {}), [empId]: note };
+          });
+
+          setReplyDrafts((p) => {
+            if (p?.[empId] !== undefined) return p;
+            return { ...(p || {}), [empId]: reply };
           });
         },
         (err) => setError(err?.message || String(err))
@@ -1118,12 +1122,12 @@ export default function HistoriqueEmploye({
         } catch {}
       });
     };
-  }, [isAdmin, unlocked, payBlockKey, employes]);
+  }, [isPrivileged, unlocked, payBlockKey, employes]);
 
-  /* ===================== ✅ ADMIN: ALERTES (TOUS BLOCS) via Firestore ===================== */
+  /* ===================== ✅ PRIVILEGED: ALERTES RH SUR RÉPONSES (TOUS BLOCS) ===================== */
   const [allRepliesByDoc, setAllRepliesByDoc] = useState({});
   useEffect(() => {
-    if (!isAdmin || !unlocked) return;
+    if (!isPrivileged || !unlocked) return;
 
     const qAll = query(collectionGroup(db, "payBlockNotes"));
     const unsub = onSnapshot(
@@ -1158,15 +1162,15 @@ export default function HistoriqueEmploye({
     );
 
     return () => unsub();
-  }, [isAdmin, unlocked]);
+  }, [isPrivileged, unlocked]);
 
   const adminAlertList = useMemo(() => {
-    if (!isAdmin || !unlocked) return [];
+    if (!isPrivileged || !unlocked) return [];
     const arr = Object.values(allRepliesByDoc || {});
     return arr
       .filter((x) => !isReplySeenFS(x.atMs, x.seenAtMs))
       .sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
-  }, [isAdmin, unlocked, allRepliesByDoc]);
+  }, [isPrivileged, unlocked, allRepliesByDoc]);
 
   const adminUnseenReplyCount = adminAlertList.length;
 
@@ -1183,7 +1187,7 @@ export default function HistoriqueEmploye({
     return out;
   }, [adminAlertList]);
 
-  const flashAdminTitle = isAdmin && unlocked && adminUnseenReplyCount > 0;
+  const flashRHTitle = isRH && unlocked && adminUnseenReplyCount > 0;
 
   /* ===================== TAUX HORAIRE + VACANCES (ADMIN seul) ===================== */
   const [rateDrafts, setRateDrafts] = useState({});
@@ -1255,7 +1259,7 @@ export default function HistoriqueEmploye({
     }
   };
 
-  /* ===================== NON-ADMIN : seulement moi ===================== */
+  /* ===================== NON-PRIVILEGED : seulement moi ===================== */
   const myEmpObj = useMemo(
     () => employes.find((e) => e.id === derivedMeEmpId) || null,
     [employes, derivedMeEmpId]
@@ -1270,7 +1274,7 @@ export default function HistoriqueEmploye({
 
     async function loadMine() {
       try {
-        if (isAdmin) return;
+        if (isPrivileged) return;
         if (!pwUnlocked) return;
         if (!derivedMeEmpId) return;
 
@@ -1300,7 +1304,7 @@ export default function HistoriqueEmploye({
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, pwUnlocked, derivedMeEmpId, days14]);
+  }, [isPrivileged, pwUnlocked, derivedMeEmpId, days14]);
 
   const myWeek1 = myRows.slice(0, 7);
   const myWeek2 = myRows.slice(7, 14);
@@ -1314,8 +1318,8 @@ export default function HistoriqueEmploye({
   );
   const myTotal2Weeks = useMemo(() => round2(myTotalWeek1 + myTotalWeek2), [myTotalWeek1, myTotalWeek2]);
 
-  /* ===================== ADMIN : Sommaire + détail ===================== */
-  const visibleEmployes = useMemo(() => (isAdmin ? employes : []), [employes, isAdmin]);
+  /* ===================== PRIVILEGED : Sommaire + détail ===================== */
+  const visibleEmployes = useMemo(() => (isPrivileged ? employes : []), [employes, isPrivileged]);
 
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryErr, setSummaryErr] = useState("");
@@ -1355,7 +1359,7 @@ export default function HistoriqueEmploye({
 
     async function loadSummary() {
       try {
-        if (!isAdmin) return;
+        if (!isPrivileged) return;
         if (!unlocked) return;
 
         setSummaryErr("");
@@ -1380,7 +1384,7 @@ export default function HistoriqueEmploye({
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, unlocked, days14, visibleEmployes]);
+  }, [isPrivileged, unlocked, days14, visibleEmployes]);
 
   const allWeek1Total = useMemo(
     () => round2((summaryRows || []).reduce((acc, r) => acc + (Number(r.week1) || 0), 0)),
@@ -1401,9 +1405,9 @@ export default function HistoriqueEmploye({
 
   const [detailEmpId, setDetailEmpId] = useState("");
   useEffect(() => {
-    if (!isAdmin || !unlocked) return;
+    if (!isPrivileged || !unlocked) return;
     if (routeEmpId) setDetailEmpId(routeEmpId);
-  }, [routeEmpId, isAdmin, unlocked]);
+  }, [routeEmpId, isPrivileged, unlocked]);
 
   const detailEmp = useMemo(
     () => visibleEmployes.find((e) => e.id === detailEmpId) || null,
@@ -1419,7 +1423,7 @@ export default function HistoriqueEmploye({
 
     async function loadDetail(empId) {
       try {
-        if (!isAdmin || !unlocked) return;
+        if (!isPrivileged || !unlocked) return;
         if (!empId) return;
 
         setDetailErr("");
@@ -1449,7 +1453,7 @@ export default function HistoriqueEmploye({
     return () => {
       cancelled = true;
     };
-  }, [detailEmpId, isAdmin, unlocked, days14]);
+  }, [detailEmpId, isPrivileged, unlocked, days14]);
 
   const detailWeek1 = detailRows.slice(0, 7);
   const detailWeek2 = detailRows.slice(7, 14);
@@ -1463,8 +1467,25 @@ export default function HistoriqueEmploye({
   );
   const detailTotal2Weeks = useMemo(() => round2(detailTotalWeek1 + detailTotalWeek2), [detailTotalWeek1, detailTotalWeek2]);
 
+  /* ===================== Données perso RH -> admin/employé ===================== */
+  const myNote = getDraft(derivedMeEmpId);
+  const myReply = getReplyDraft(derivedMeEmpId);
+  const myReplyStatusText = replyStatusLabel(derivedMeEmpId);
+  const myReplyStatusObj = replyStatus?.[derivedMeEmpId] || {};
+
+  const myNoteUpdatedAtMs = Number(noteMeta?.[derivedMeEmpId]?.updatedAtMs || 0) || 0;
+  const myNoteSeenAtMs = Number(noteMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
+  const hasMyNoteText = !!String(myNote || "").trim();
+  const myNoteSeen = hasMyNoteText ? isNoteSeenFS(myNoteUpdatedAtMs, myNoteSeenAtMs) : true;
+  const myNoteSeenAt = noteMeta?.[derivedMeEmpId]?.seenAt || null;
+
+  const myReplyAtMs = Number(replyMeta?.[derivedMeEmpId]?.atMs || 0) || 0;
+  const myReplySeenAtMs = Number(replyMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
+  const myReplySeenByRH = myReplyAtMs ? isReplySeenFS(myReplyAtMs, myReplySeenAtMs) : true;
+  const myReplySeenAt = replyMeta?.[derivedMeEmpId]?.seenAt || null;
+
   /* ===================== Guards screens ===================== */
-  if (!isAdmin && !pwUnlocked) {
+  if (!isPrivileged && !pwUnlocked) {
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
         <TopBar
@@ -1525,14 +1546,14 @@ export default function HistoriqueEmploye({
     );
   }
 
-  if (isAdmin && !unlocked) {
+  if (isPrivileged && !unlocked) {
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
         <TopBar
-          title="🔒 Historique — Code requis"
+          title={`🔒 Historique — Code requis`}
           rightSlot={
             <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-              Connecté: <strong>{user?.email || "—"}</strong> — Admin
+              Connecté: <strong>{user?.email || "—"}</strong> — {isRH ? "RH" : "Admin"}
             </div>
           }
         />
@@ -1613,7 +1634,7 @@ export default function HistoriqueEmploye({
 
   const rightSlot = (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      {isAdmin ? (
+      {isPrivileged ? (
         <button
           type="button"
           style={btnFeuilleDepenses}
@@ -1627,7 +1648,8 @@ export default function HistoriqueEmploye({
       ) : null}
 
       <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-        Connecté: <strong>{user?.email || "—"}</strong> {isAdmin ? "— Admin" : ""}
+        Connecté: <strong>{user?.email || "—"}</strong>{" "}
+        {isRH ? "— RH" : isAdmin ? "— Admin" : ""}
       </div>
     </div>
   );
@@ -1681,7 +1703,7 @@ export default function HistoriqueEmploye({
           <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>Sem2: {week2Label}</span>
         </div>
 
-        {isAdmin && unlocked && adminUnseenReplyCount > 0 ? (
+        {isRH && unlocked && adminUnseenReplyCount > 0 ? (
           <div style={{ fontSize: 12, fontWeight: 1000, color: "#b91c1c" }}>
             Réponses non vues (tous blocs): {adminUnseenReplyCount}
           </div>
@@ -1694,24 +1716,10 @@ export default function HistoriqueEmploye({
     </div>
   );
 
-  /* ===================== NON-ADMIN VIEW ===================== */
-  if (!isAdmin) {
-    const myNote = getDraft(derivedMeEmpId);
-    const myReply = getReplyDraft(derivedMeEmpId);
-    const rs = replyStatusLabel(derivedMeEmpId);
-    const rst = replyStatus?.[derivedMeEmpId] || {};
-
-    const myNoteUpdatedAtMs = Number(noteMeta?.[derivedMeEmpId]?.updatedAtMs || 0) || 0;
-    const myNoteSeenAtMs = Number(noteMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
-
-    const hasNoteText = !!String(myNote || "").trim();
-    const noteSeen = hasNoteText ? isNoteSeenFS(myNoteUpdatedAtMs, myNoteSeenAtMs) : true;
-    const noteSeenAt = noteMeta?.[derivedMeEmpId]?.seenAt || null;
-
-    const myReplyAtMs = Number(replyMeta?.[derivedMeEmpId]?.atMs || 0) || 0;
-    const myReplySeenAtMs = Number(replyMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
-    const replySeenByAdmin = myReplyAtMs ? isReplySeenFS(myReplyAtMs, myReplySeenAtMs) : true;
-    const replySeenAt = replyMeta?.[derivedMeEmpId]?.seenAt || null;
+  /* ===================== NON-PRIVILEGED VIEW ===================== */
+  if (!isPrivileged) {
+    const rs = myReplyStatusText;
+    const rst = myReplyStatusObj;
 
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
@@ -1833,7 +1841,7 @@ export default function HistoriqueEmploye({
 
                 <div style={{ marginTop: 6, display: "grid", gap: 10 }}>
                   <div>
-                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (Admin)</div>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (RH)</div>
                     <div
                       style={{
                         border: "1px solid #e2e8f0",
@@ -1847,7 +1855,7 @@ export default function HistoriqueEmploye({
                       {myNote || "—"}
                     </div>
 
-                    {hasNoteText ? (
+                    {hasMyNoteText ? (
                       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <label
                           style={{
@@ -1856,23 +1864,23 @@ export default function HistoriqueEmploye({
                             gap: 8,
                             fontWeight: 1000,
                             fontSize: 12,
-                            color: noteSeen ? "#166534" : "#b91c1c",
+                            color: myNoteSeen ? "#166534" : "#b91c1c",
                             userSelect: "none",
                           }}
                           title="Coche Vu pour arrêter le flash rouge"
                         >
                           <input
                             type="checkbox"
-                            checked={noteSeen}
+                            checked={myNoteSeen}
                             onChange={(e) => setNoteSeenFS(derivedMeEmpId, payBlockKey, e.target.checked)}
                           />
                           Vu
-                          {!noteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
+                          {!myNoteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
                         </label>
 
-                        {noteSeen && noteSeenAt ? (
+                        {myNoteSeen && myNoteSeenAt ? (
                           <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
-                            Je l'ai vu le {fmtDateTimeFR(noteSeenAt)}
+                            Je l'ai vu le {fmtDateTimeFR(myNoteSeenAt)}
                           </span>
                         ) : null}
                       </div>
@@ -1903,8 +1911,8 @@ export default function HistoriqueEmploye({
 
                     <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                       {myReplyAtMs ? (
-                        <span style={{ fontSize: 12, fontWeight: 900, color: replySeenByAdmin ? "#166534" : "#b91c1c" }}>
-                          {replySeenByAdmin && replySeenAt ? `Admin a vu le ${fmtDateTimeFR(replySeenAt)}` : "Admin n’a pas encore vu"}
+                        <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
+                          {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
                         </span>
                       ) : (
                         <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
@@ -1935,7 +1943,7 @@ export default function HistoriqueEmploye({
     );
   }
 
-  /* ===================== ADMIN VIEW ===================== */
+  /* ===================== PRIVILEGED VIEW (ADMIN / RH) ===================== */
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       <style>{`
@@ -1946,7 +1954,11 @@ export default function HistoriqueEmploye({
         }
       `}</style>
 
-      <TopBar title="📒 Historique (Admin)" rightSlot={rightSlot} flashTitle={flashAdminTitle} />
+      <TopBar
+        title={isRH ? "📒 Historique (RH)" : "📒 Historique (Admin)"}
+        rightSlot={rightSlot}
+        flashTitle={flashRHTitle}
+      />
 
       <PageContainer>
         {error && (
@@ -1968,7 +1980,162 @@ export default function HistoriqueEmploye({
 
         {navBar}
 
-        {adminUnseenReplyCount > 0 ? (
+        {/* ✅ NOUVEAU : inbox perso pour ADMIN */}
+        {hasPersonalInbox && (
+          <>
+            {myUnseenNoteCount > 0 ? (
+              <Card>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
+                      🚨 Mes notes RH non vues
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                      Clique un bloc pour naviguer directement dessus.
+                    </div>
+                  </div>
+                  <div style={{ fontWeight: 1000, color: "#b91c1c" }}>Total: {myUnseenNoteCount}</div>
+                </div>
+
+                <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {myAlertBlocksNotes.map((b) => (
+                    <button
+                      key={b.blockKey}
+                      type="button"
+                      style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7" }}
+                      title={payBlockLabelFromKey(b.blockKey)}
+                      onClick={() => {
+                        const dt = parseISOInput(b.blockKey);
+                        if (dt) setAnchorDate(dt);
+                      }}
+                    >
+                      {payBlockLabelFromKey(b.blockKey)} — {b.count}
+                    </button>
+                  ))}
+                </div>
+              </Card>
+            ) : null}
+
+            <Card>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 1000, fontSize: 18 }}>Mon échange RH</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                      {myEmpObj?.nom || "Moi"} — {user?.email || ""}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    {hasMyNoteText ? (
+                      <span style={pill(myNoteSeen ? "#ecfdf3" : "#fff7f7", myNoteSeen ? "#bbf7d0" : "#ef4444", myNoteSeen ? "#166534" : "#b91c1c")}>
+                        {myNoteSeen ? "Note vue" : "Nouvelle note RH"}
+                      </span>
+                    ) : (
+                      <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>Aucune note RH</span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (RH)</div>
+                  <div
+                    style={{
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 12,
+                      background: "#f8fafc",
+                      padding: "10px 12px",
+                      whiteSpace: "pre-wrap",
+                      fontSize: 13,
+                    }}
+                  >
+                    {myNote || "—"}
+                  </div>
+
+                  {hasMyNoteText ? (
+                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontWeight: 1000,
+                          fontSize: 12,
+                          color: myNoteSeen ? "#166534" : "#b91c1c",
+                          userSelect: "none",
+                        }}
+                        title="Coche Vu pour arrêter l’alerte"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={myNoteSeen}
+                          onChange={(e) => setNoteSeenFS(derivedMeEmpId, payBlockKey, e.target.checked)}
+                        />
+                        Vu
+                        {!myNoteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
+                      </label>
+
+                      {myNoteSeen && myNoteSeenAt ? (
+                        <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                          Je l'ai vue le {fmtDateTimeFR(myNoteSeenAt)}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Ma réponse au RH</div>
+                  <textarea
+                    rows={3}
+                    value={myReply}
+                    onChange={(e) => {
+                      setReplyDraft(derivedMeEmpId, e.target.value);
+                      scheduleAutoSaveReply(derivedMeEmpId);
+                    }}
+                    onBlur={() => saveReplyForEmp(derivedMeEmpId)}
+                    placeholder="Écrire ma réponse…"
+                    style={{
+                      width: "100%",
+                      border: "1px solid #eab308",
+                      background: "#fef08a",
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                      fontSize: 13,
+                      resize: "vertical",
+                    }}
+                  />
+
+                  <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    {myReplyAtMs ? (
+                      <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
+                        {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                        (Aucune réponse envoyée pour ce bloc)
+                      </span>
+                    )}
+
+                    {myReplyStatusText ? (
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 900,
+                          color: myReplyStatusObj.err ? "#b91c1c" : myReplyStatusObj.saving ? "#7c2d12" : "#166534",
+                        }}
+                      >
+                        {myReplyStatusText}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </>
+        )}
+
+        {isRH && adminUnseenReplyCount > 0 ? (
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
@@ -2034,7 +2201,7 @@ export default function HistoriqueEmploye({
                     <th style={th}>Sem1 (h)</th>
                     <th style={th}>Sem2 (h)</th>
                     <th style={th}>Total (h)</th>
-                    <th style={th}>Note (admin)</th>
+                    <th style={th}>Note (RH)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2092,7 +2259,7 @@ export default function HistoriqueEmploye({
                             </a>
                             <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{r.email || ""}</div>
 
-                            {globalUnseenForEmp ? (
+                            {isRH && globalUnseenForEmp ? (
                               <div style={{ marginTop: 6 }}>
                                 <span style={pill("#fff7f7", "#ef4444", "#b91c1c")}>
                                   Alerte: {payBlockLabelFromKey(globalUnseenForEmp.blockKey)}
@@ -2118,38 +2285,55 @@ export default function HistoriqueEmploye({
                           <td style={{ ...td, whiteSpace: "normal", textAlign: "left" }}>
                             <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "nowrap" }}>
                               <div style={{ flex: 1, minWidth: 260 }}>
-                                <textarea
-                                  rows={2}
-                                  value={getDraft(r.id)}
-                                  onChange={(e) => {
-                                    setDraft(r.id, e.target.value);
-                                    scheduleAutoSave(r.id);
-                                  }}
-                                  onBlur={() => saveNoteForEmp(r.id)}
-                                  placeholder="Écrire une note…"
-                                  style={{
-                                    width: "100%",
-                                    border: "1px solid #cbd5e1",
-                                    borderRadius: 10,
-                                    padding: "8px 10px",
-                                    fontSize: 13,
-                                    resize: "vertical",
-                                  }}
-                                />
-                                {status ? (
+                                {canWriteNotes ? (
+                                  <>
+                                    <textarea
+                                      rows={2}
+                                      value={getDraft(r.id)}
+                                      onChange={(e) => {
+                                        setDraft(r.id, e.target.value);
+                                        scheduleAutoSave(r.id);
+                                      }}
+                                      onBlur={() => saveNoteForEmp(r.id)}
+                                      placeholder="Écrire une note…"
+                                      style={{
+                                        width: "100%",
+                                        border: "1px solid #cbd5e1",
+                                        borderRadius: 10,
+                                        padding: "8px 10px",
+                                        fontSize: 13,
+                                        resize: "vertical",
+                                      }}
+                                    />
+                                    {status ? (
+                                      <div
+                                        style={{
+                                          marginTop: 6,
+                                          fontSize: 12,
+                                          fontWeight: 900,
+                                          color: st.err ? "#b91c1c" : st.saving ? "#7c2d12" : "#166534",
+                                        }}
+                                      >
+                                        {status}
+                                      </div>
+                                    ) : null}
+                                  </>
+                                ) : (
                                   <div
                                     style={{
-                                      marginTop: 6,
-                                      fontSize: 12,
-                                      fontWeight: 900,
-                                      color: st.err ? "#b91c1c" : st.saving ? "#7c2d12" : "#166534",
+                                      border: "1px solid #e2e8f0",
+                                      borderRadius: 10,
+                                      padding: "8px 10px",
+                                      fontSize: 13,
+                                      background: "#f8fafc",
+                                      minHeight: 54,
+                                      whiteSpace: "pre-wrap",
                                     }}
                                   >
-                                    {status}
+                                    {getDraft(r.id) || "—"}
                                   </div>
-                                ) : null}
+                                )}
 
-                                {/* ✅ vu de l'employé sur la note (visible admin) */}
                                 {noteHasText ? (
                                   <div style={{ marginTop: 6, fontSize: 12, fontWeight: 900, color: noteSeenByEmp ? "#166534" : "#b91c1c" }}>
                                     {noteSeenByEmp && noteSeenByEmpAt
@@ -2172,13 +2356,18 @@ export default function HistoriqueEmploye({
                                       fontSize: 12,
                                       color: seen ? "#166534" : "#b91c1c",
                                       userSelect: "none",
+                                      opacity: isRH ? 1 : 0.7,
                                     }}
-                                    title="Coche Vu pour arrêter le flash rouge"
+                                    title={isRH ? "Coche Vu pour arrêter le flash rouge" : "Lecture seule pour Admin"}
                                   >
                                     <input
                                       type="checkbox"
                                       checked={seen}
-                                      onChange={(e) => setReplySeenFS(r.id, payBlockKey, e.target.checked)}
+                                      disabled={!isRH}
+                                      onChange={(e) => {
+                                        if (!isRH) return;
+                                        setReplySeenFS(r.id, payBlockKey, e.target.checked);
+                                      }}
                                     />
                                     Vu
                                     {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
@@ -2272,6 +2461,7 @@ export default function HistoriqueEmploye({
                           textAlign: "right",
                           width: 160,
                         }}
+                        disabled={!isAdmin}
                       />
                     </div>
 
@@ -2289,12 +2479,15 @@ export default function HistoriqueEmploye({
                           textAlign: "right",
                           width: 140,
                         }}
+                        disabled={!isAdmin}
                       />
                     </div>
 
-                    <Button variant="primary" onClick={() => saveRateAndVac(detailEmpId)}>
-                      Sauver
-                    </Button>
+                    {isAdmin ? (
+                      <Button variant="primary" onClick={() => saveRateAndVac(detailEmpId)}>
+                        Sauver
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               </Card>
@@ -2320,26 +2513,43 @@ export default function HistoriqueEmploye({
                   </div>
 
                   <div style={{ marginTop: 8 }}>
-                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (admin)</div>
-                    <textarea
-                      rows={5}
-                      value={getDraft(detailEmpId)}
-                      onChange={(e) => {
-                        setDraft(detailEmpId, e.target.value);
-                        scheduleAutoSave(detailEmpId);
-                      }}
-                      placeholder="Écrire une note…"
-                      style={{
-                        width: "100%",
-                        border: "1px solid #cbd5e1",
-                        borderRadius: 12,
-                        padding: "10px 12px",
-                        fontSize: 13,
-                        resize: "vertical",
-                      }}
-                    />
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Note (RH)</div>
 
-                    {/* ✅ vu de l'employé sur la note (visible admin) */}
+                    {canWriteNotes ? (
+                      <textarea
+                        rows={5}
+                        value={getDraft(detailEmpId)}
+                        onChange={(e) => {
+                          setDraft(detailEmpId, e.target.value);
+                          scheduleAutoSave(detailEmpId);
+                        }}
+                        placeholder="Écrire une note…"
+                        style={{
+                          width: "100%",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 12,
+                          padding: "10px 12px",
+                          fontSize: 13,
+                          resize: "vertical",
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: "100%",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 12,
+                          padding: "10px 12px",
+                          fontSize: 13,
+                          background: "#f8fafc",
+                          minHeight: 120,
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        {getDraft(detailEmpId) || "—"}
+                      </div>
+                    )}
+
                     {(() => {
                       const noteText = String(getDraft(detailEmpId) || "").trim();
                       if (!noteText) return null;
@@ -2360,19 +2570,21 @@ export default function HistoriqueEmploye({
                       </div>
 
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        {statusLabel(detailEmpId) ? (
+                        {canWriteNotes && statusLabel(detailEmpId) ? (
                           <span style={{ fontSize: 12, fontWeight: 900, color: noteStatus?.[detailEmpId]?.err ? "#b91c1c" : "#166534" }}>
                             {statusLabel(detailEmpId)}
                           </span>
                         ) : null}
 
-                        <Button
-                          variant="primary"
-                          onClick={() => saveNoteForEmp(detailEmpId)}
-                          disabled={!!noteStatus?.[detailEmpId]?.saving}
-                        >
-                          {noteStatus?.[detailEmpId]?.saving ? "Sauvegarde…" : "Sauvegarder"}
-                        </Button>
+                        {canWriteNotes ? (
+                          <Button
+                            variant="primary"
+                            onClick={() => saveNoteForEmp(detailEmpId)}
+                            disabled={!!noteStatus?.[detailEmpId]?.saving}
+                          >
+                            {noteStatus?.[detailEmpId]?.saving ? "Sauvegarde…" : "Sauvegarder"}
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
 
@@ -2397,12 +2609,18 @@ export default function HistoriqueEmploye({
                                   fontSize: 12,
                                   color: seen ? "#166534" : "#b91c1c",
                                   userSelect: "none",
+                                  opacity: isRH ? 1 : 0.7,
                                 }}
+                                title={isRH ? "Coche Vu pour arrêter le flash rouge" : "Lecture seule pour Admin"}
                               >
                                 <input
                                   type="checkbox"
                                   checked={seen}
-                                  onChange={(e) => setReplySeenFS(detailEmpId, payBlockKey, e.target.checked)}
+                                  disabled={!isRH}
+                                  onChange={(e) => {
+                                    if (!isRH) return;
+                                    setReplySeenFS(detailEmpId, payBlockKey, e.target.checked);
+                                  }}
                                 />
                                 Vu
                                 {!seen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}

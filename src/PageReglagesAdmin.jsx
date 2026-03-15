@@ -22,6 +22,129 @@ import {
   limit,
 } from "firebase/firestore";
 
+function MultiSelectEmployesDropdown({
+  employes = [],
+  selectedIds = [],
+  onToggle,
+  placeholder = "Choisir des employés",
+  disabled = false,
+}) {
+  const [open, setOpen] = useState(false);
+  const boxRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onDocClick = (e) => {
+      if (!boxRef.current) return;
+      if (!boxRef.current.contains(e.target)) setOpen(false);
+    };
+
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const selectedNames = employes
+    .filter((e) => selectedIds.includes(e.id))
+    .map((e) => e.nom || "—");
+
+  const summary =
+    selectedNames.length === 0
+      ? placeholder
+      : selectedNames.length <= 2
+      ? selectedNames.join(", ")
+      : `${selectedNames.slice(0, 2).join(", ")} +${selectedNames.length - 2}`;
+
+  return (
+    <div ref={boxRef} style={{ position: "relative", minWidth: 280 }}>
+      <button
+        type="button"
+        onClick={() => !disabled && setOpen((v) => !v)}
+        disabled={disabled}
+        style={{
+          ...input,
+          width: "100%",
+          textAlign: "left",
+          cursor: disabled ? "not-allowed" : "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          fontWeight: 800,
+        }}
+      >
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            paddingRight: 10,
+          }}
+          title={selectedNames.join(", ")}
+        >
+          {summary}
+        </span>
+        <span style={{ fontSize: 12 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            width: "100%",
+            maxHeight: 260,
+            overflowY: "auto",
+            background: "#fff",
+            border: "1px solid #111",
+            borderRadius: 10,
+            boxShadow: "0 10px 24px rgba(0,0,0,0.12)",
+            zIndex: 1000,
+            padding: 8,
+          }}
+        >
+          {employes.length === 0 && (
+            <div style={{ padding: 8, color: "#6b7280", fontSize: 12 }}>
+              Aucun employé.
+            </div>
+          )}
+
+          {employes.map((emp) => {
+            const checked = selectedIds.includes(emp.id);
+            return (
+              <label
+                key={emp.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontWeight: 700,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#f3f4f6";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggle(emp.id)}
+                />
+                <span>{emp.nom}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PageReglagesAdmin() {
   /* ============================================================
      ✅ Détection utilisateur courant + admin
@@ -85,6 +208,7 @@ export default function PageReglagesAdmin() {
   }, [authUser?.uid, authUser?.email]);
 
   const isAdmin = me?.isAdmin === true;
+  const isRH = me?.isRH === true;
   const canShowAdmin = isAdmin === true;
 
   const [hasDraftProjet, setHasDraftProjet] = useState(false);
@@ -185,7 +309,6 @@ export default function PageReglagesAdmin() {
       setKickAllLoading(true);
       setKickAllMsg("");
 
-      // ✅ Cloud Function = revokeRefreshTokens pour TOUS les users
       const fn = httpsCallable(functions, "kickAllUsers");
       const res = await fn({});
 
@@ -211,7 +334,6 @@ export default function PageReglagesAdmin() {
   const [factureError, setFactureError] = useState(null);
   const [factureSaved, setFactureSaved] = useState(false);
 
-  // ✅ emails destinataires facture (admin)
   const [invoiceToRaw, setInvoiceToRaw] = useState("jlabrie@styro.ca");
   const [invoiceEmailLoading, setInvoiceEmailLoading] = useState(true);
   const [invoiceEmailError, setInvoiceEmailError] = useState("");
@@ -259,7 +381,6 @@ export default function PageReglagesAdmin() {
     })();
   }, [canUseAdminPage]);
 
-  // ✅ Load invoice email recipients
   useEffect(() => {
     (async () => {
       try {
@@ -316,7 +437,6 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  // ✅ save invoice recipients
   const saveInvoiceEmails = async () => {
     if (!canUseAdminPage) return;
     try {
@@ -352,6 +472,7 @@ export default function PageReglagesAdmin() {
   const [employeEmailInput, setEmployeEmailInput] = useState("");
   const [employeCodeInput, setEmployeCodeInput] = useState("");
   const [employeIsAdminInput, setEmployeIsAdminInput] = useState(false);
+  const [employeIsRHInput, setEmployeIsRHInput] = useState(false);
 
   useEffect(() => {
     if (!canUseAdminPage) {
@@ -385,6 +506,12 @@ export default function PageReglagesAdmin() {
     return String(Math.floor(1000 + Math.random() * 9000));
   }
 
+  function getRoleLabel(emp) {
+    if (emp?.isAdmin) return "ADMIN";
+    if (emp?.isRH) return "RH";
+    return "USER";
+  }
+
   const onAddEmploye = async () => {
     if (!canUseAdminPage) return;
 
@@ -410,6 +537,7 @@ export default function PageReglagesAdmin() {
         email,
         emailLower,
         isAdmin: !!employeIsAdminInput,
+        isRH: !!employeIsRHInput,
         activationCode: code,
         activatedAt: null,
         uid: null,
@@ -420,6 +548,7 @@ export default function PageReglagesAdmin() {
       setEmployeEmailInput("");
       setEmployeCodeInput("");
       setEmployeIsAdminInput(false);
+      setEmployeIsRHInput(false);
     } catch (e) {
       console.error(e);
       alert(e?.message || String(e));
@@ -622,18 +751,15 @@ export default function PageReglagesAdmin() {
     return [s, `other:${s}`, `autre:${s}`, `autres:${s}`];
   }
 
-  // ✅ NEW (2026-02-25): match béton par docId quand possible
   async function findEmployeeSegmentForJob(seg, dateKey, jobType, jobId) {
     if (!seg?.empId || !jobId || !dateKey) return null;
 
-    // 1) ✅ Tentative direct: même docId (recommandé)
     try {
       const directRef = doc(db, "employes", seg.empId, "timecards", dateKey, "segments", seg.id);
       const s = await getDoc(directRef);
       if (s.exists()) return directRef;
     } catch {}
 
-    // 2) Fallback ancien: heuristique jobId + start proche
     try {
       const empSegCol = collection(db, "employes", seg.empId, "timecards", dateKey, "segments");
       const snap = await getDocs(empSegCol);
@@ -802,11 +928,9 @@ export default function PageReglagesAdmin() {
               const jobIdRaw = segData.jobId;
               const parsed = parseJobKind(jobIdRaw);
 
-              // ✅ fermer côté employé
               await updateDoc(segDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
               countSegs++;
 
-              // ✅ fermer côté job — NOUVEAU: match direct par docId (bÉTON), sinon fallback start==startTs
               if (jobIdRaw) {
                 if (parsed.kind === "projet" && parsed.id) {
                   const directRef = doc(db, "projets", parsed.id, "timecards", dKey, "segments", segDoc.id);
@@ -818,7 +942,6 @@ export default function PageReglagesAdmin() {
                     }
                   } catch {}
 
-                  // fallback ancien
                   try {
                     const startTs = segData.start;
                     if (startTs) {
@@ -840,7 +963,6 @@ export default function PageReglagesAdmin() {
                     }
                   } catch {}
 
-                  // fallback ancien
                   try {
                     const startTs = segData.start;
                     if (startTs) {
@@ -881,7 +1003,7 @@ export default function PageReglagesAdmin() {
     };
   }, [canUseAdminPage]);
 
-  /* ================== AUTRES TÂCHES (ADMIN) — gestion + code par item ================== */
+  /* ================== AUTRES TÂCHES (ADMIN) ================== */
   const [autresAdminRows, setAutresAdminRows] = useState([]);
   const [autresAdminLoading, setAutresAdminLoading] = useState(false);
   const [autresAdminError, setAutresAdminError] = useState("");
@@ -890,6 +1012,34 @@ export default function PageReglagesAdmin() {
   const [newAutreNom, setNewAutreNom] = useState("");
   const [newAutreOrdre, setNewAutreOrdre] = useState("");
   const [newAutreCode, setNewAutreCode] = useState("");
+  const [newAutreScope, setNewAutreScope] = useState("all");
+  const [newAutreVisibleToEmpIds, setNewAutreVisibleToEmpIds] = useState([]);
+  const [newAutreProjectLike, setNewAutreProjectLike] = useState(false);
+
+  function toggleIdInArray(arr, id) {
+    const set = new Set(arr || []);
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    return Array.from(set);
+  }
+
+  const toggleNewAutreEmp = (empId) => {
+    setNewAutreVisibleToEmpIds((prev) => toggleIdInArray(prev, empId));
+  };
+
+  const toggleAutreRowEmp = (rowId, empId) => {
+    setAutresRowEdits((prev) => {
+      const row = prev[rowId] || {};
+      const current = Array.isArray(row.visibleToEmpIds) ? row.visibleToEmpIds : [];
+      return {
+        ...prev,
+        [rowId]: {
+          ...row,
+          visibleToEmpIds: toggleIdInArray(current, empId),
+        },
+      };
+    });
+  };
 
   useEffect(() => {
     if (!canUseAdminPage) {
@@ -916,6 +1066,10 @@ export default function PageReglagesAdmin() {
             code: data.code ?? "",
             note: data.note ?? null,
             createdAt: data.createdAt ?? null,
+            scope: data.scope || "all",
+            visibleToEmpIds: Array.isArray(data.visibleToEmpIds) ? data.visibleToEmpIds : [],
+            projectLike: data.projectLike === true,
+            ouvert: data.ouvert !== false,
           });
         });
 
@@ -932,7 +1086,27 @@ export default function PageReglagesAdmin() {
         setAutresRowEdits((prev) => {
           const next = { ...prev };
           for (const r of list) {
-            if (!next[r.id]) next[r.id] = { nom: r.nom || "", ordre: r.ordre == null ? "" : String(r.ordre), code: String(r.code || "") };
+            if (!next[r.id]) {
+              next[r.id] = {
+                nom: r.nom || "",
+                ordre: r.ordre == null ? "" : String(r.ordre),
+                code: String(r.code || ""),
+                scope: r.scope || "all",
+                visibleToEmpIds: Array.isArray(r.visibleToEmpIds) ? r.visibleToEmpIds : [],
+                projectLike: r.projectLike === true,
+              };
+            } else {
+              next[r.id] = {
+                ...next[r.id],
+                scope: next[r.id].scope ?? r.scope ?? "all",
+                visibleToEmpIds: Array.isArray(next[r.id].visibleToEmpIds)
+                  ? next[r.id].visibleToEmpIds
+                  : Array.isArray(r.visibleToEmpIds)
+                  ? r.visibleToEmpIds
+                  : [],
+                projectLike: next[r.id].projectLike ?? r.projectLike ?? false,
+              };
+            }
           }
           return next;
         });
@@ -963,8 +1137,15 @@ export default function PageReglagesAdmin() {
       const nom = String(edit.nom || "").trim();
       const code = String(edit.code || "").trim();
       const ordreRaw = String(edit.ordre ?? "").trim();
+      const scope = edit.scope === "selected" ? "selected" : "all";
+      const visibleToEmpIds = Array.isArray(edit.visibleToEmpIds) ? edit.visibleToEmpIds : [];
+      const projectLike = edit.projectLike === true;
 
       if (!nom) throw new Error("Nom requis (Autres tâches).");
+
+      if (scope === "selected" && visibleToEmpIds.length === 0) {
+        throw new Error("Choisis au moins un employé si la tâche est limitée.");
+      }
 
       let ordre = null;
       if (ordreRaw !== "") {
@@ -973,7 +1154,18 @@ export default function PageReglagesAdmin() {
         ordre = n;
       }
 
-      await updateDoc(doc(db, "autresProjets", row.id), { nom, code, ordre, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, "autresProjets", row.id), {
+        nom,
+        code,
+        ordre,
+        scope,
+        visibleToEmpIds: scope === "selected" ? visibleToEmpIds : [],
+        projectLike,
+        ouvert: projectLike ? row.ouvert !== false : true,
+        note: row.note ?? "",
+        pdfCount: row.pdfCount ?? 0,
+        updatedAt: serverTimestamp(),
+      });
     } catch (e) {
       console.error(e);
       setAutresAdminError(e?.message || String(e));
@@ -1003,8 +1195,15 @@ export default function PageReglagesAdmin() {
     const nom = String(newAutreNom || "").trim();
     const code = String(newAutreCode || "").trim();
     const ordreRaw = String(newAutreOrdre ?? "").trim();
+    const scope = newAutreScope === "selected" ? "selected" : "all";
+    const visibleToEmpIds = Array.isArray(newAutreVisibleToEmpIds) ? newAutreVisibleToEmpIds : [];
+    const projectLike = newAutreProjectLike === true;
 
     if (!nom) return alert("Nom requis.");
+
+    if (scope === "selected" && visibleToEmpIds.length === 0) {
+      return alert("Choisis au moins un employé si la tâche est limitée.");
+    }
 
     let ordre = null;
     if (ordreRaw !== "") {
@@ -1017,11 +1216,26 @@ export default function PageReglagesAdmin() {
       setAutresAdminError("");
       setAutresAdminLoading(true);
 
-      await addDoc(collection(db, "autresProjets"), { nom, code, ordre, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      await addDoc(collection(db, "autresProjets"), {
+        nom,
+        code,
+        ordre,
+        scope,
+        visibleToEmpIds: scope === "selected" ? visibleToEmpIds : [],
+        projectLike,
+        ouvert: true,
+        note: "",
+        pdfCount: 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       setNewAutreNom("");
       setNewAutreCode("");
       setNewAutreOrdre("");
+      setNewAutreScope("all");
+      setNewAutreVisibleToEmpIds([]);
+      setNewAutreProjectLike(false);
     } catch (e) {
       console.error(e);
       setAutresAdminError(e?.message || String(e));
@@ -1053,7 +1267,10 @@ export default function PageReglagesAdmin() {
       <div style={{ padding: 24, fontFamily: "Arial, system-ui, -apple-system" }}>
         <HeaderRow title="🛠️ Réglages Admin" />
         <h2 style={{ marginTop: 0, fontWeight: 900 }}>Accès refusé</h2>
-        <div style={{ color: "#6b7280" }}>Cette page est réservée aux administrateurs.</div>
+        <div style={{ color: "#6b7280" }}>
+          Cette page est réservée aux administrateurs.
+          {isRH ? " (Compte RH détecté, mais pas admin.)" : ""}
+        </div>
       </div>
     );
   }
@@ -1065,7 +1282,7 @@ export default function PageReglagesAdmin() {
 
         <div style={{ maxWidth: 520, margin: "0 auto" }}>
           <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
-            Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — (Admin)
+            Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — ({getRoleLabel(me)})
           </div>
 
           <section style={section}>
@@ -1109,7 +1326,7 @@ export default function PageReglagesAdmin() {
         )}
 
         <div style={{ fontSize: 12, color: "#6b7280" }}>
-          Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — (Admin)
+          Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — ({getRoleLabel(me)})
         </div>
       </div>
 
@@ -1285,7 +1502,6 @@ export default function PageReglagesAdmin() {
                                 Enregistrer
                               </button>
 
-                              {/* ✅ on garde Supprimer seulement pour Projet (comme tu avais) */}
                               {timeJobType === "projet" && (
                                 <button type="button" onClick={() => deleteSegment(seg)} disabled={timeLoading} style={btnDangerSmall}>
                                   Supprimer
@@ -1362,7 +1578,6 @@ export default function PageReglagesAdmin() {
             </button>
           </div>
 
-          {/* ✅ Emails destinataires facture */}
           <div style={{ marginTop: 12, borderTop: "2px solid #111", paddingTop: 10 }}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Emails — destinataires facture</div>
             <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>1 email par ligne (ou séparé par virgules).</div>
@@ -1413,9 +1628,34 @@ export default function PageReglagesAdmin() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input id="empIsAdmin" type="checkbox" checked={!!employeIsAdminInput} onChange={(e) => setEmployeIsAdminInput(e.target.checked)} />
+            <input
+              id="empIsAdmin"
+              type="checkbox"
+              checked={!!employeIsAdminInput}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setEmployeIsAdminInput(checked);
+                if (checked) setEmployeIsRHInput(false);
+              }}
+            />
             <label htmlFor="empIsAdmin" style={{ fontWeight: 900 }}>
               Admin
+            </label>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              id="empIsRH"
+              type="checkbox"
+              checked={!!employeIsRHInput}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setEmployeIsRHInput(checked);
+                if (checked) setEmployeIsAdminInput(false);
+              }}
+            />
+            <label htmlFor="empIsRH" style={{ fontWeight: 900 }}>
+              Ressource humaine
             </label>
           </div>
 
@@ -1449,7 +1689,7 @@ export default function PageReglagesAdmin() {
                       {!activated && <span style={{ color: "#6b7280" }}> — Code: {emp.activationCode || "—"}</span>}
                     </td>
                     <td style={tdTime}>
-                      <span style={{ fontWeight: 900 }}>{emp.isAdmin ? "ADMIN" : "USER"}</span>
+                      <span style={{ fontWeight: 900 }}>{getRoleLabel(emp)}</span>
                     </td>
                     <td style={tdTime}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1499,10 +1739,61 @@ export default function PageReglagesAdmin() {
             <input value={newAutreCode} onChange={(e) => setNewAutreCode(e.target.value)} style={{ ...input, width: "100%" }} />
           </div>
 
+          <div style={{ width: 180 }}>
+            <label style={label}>Visibilité</label>
+            <select value={newAutreScope} onChange={(e) => setNewAutreScope(e.target.value)} style={{ ...input, width: "100%" }}>
+              <option value="all">Tous</option>
+              <option value="selected">Employés choisis</option>
+            </select>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 180 }}>
+            <input
+              id="newAutreProjectLike"
+              type="checkbox"
+              checked={!!newAutreProjectLike}
+              onChange={(e) => setNewAutreProjectLike(e.target.checked)}
+            />
+            <label htmlFor="newAutreProjectLike" style={{ fontWeight: 900 }}>
+              Tâche spéciale
+            </label>
+          </div>
+
           <button onClick={addAutreRow} disabled={autresAdminLoading} style={btnPrimary}>
             Ajouter
           </button>
         </div>
+
+        {newAutreScope === "selected" && (
+          <div
+            style={{
+              marginBottom: 12,
+              border: "1px solid #111",
+              borderRadius: 10,
+              padding: 10,
+              background: "#f9fafb",
+            }}
+          >
+            <div style={{ fontWeight: 900, marginBottom: 8, fontSize: 12 }}>
+              Visible seulement pour :
+            </div>
+
+            <MultiSelectEmployesDropdown
+              employes={timeEmployes}
+              selectedIds={newAutreVisibleToEmpIds}
+              onToggle={toggleNewAutreEmp}
+              placeholder="Choisir les employés"
+            />
+
+            <div style={{ marginTop: 8, fontSize: 12, color: "#374151", fontWeight: 700 }}>
+              Sélectionnés :{" "}
+              {timeEmployes
+                .filter((emp) => newAutreVisibleToEmpIds.includes(emp.id))
+                .map((emp) => emp.nom)
+                .join(", ") || "Aucun"}
+            </div>
+          </div>
+        )}
 
         <div style={{ overflowX: "auto" }}>
           <table style={tableBlack}>
@@ -1511,12 +1802,22 @@ export default function PageReglagesAdmin() {
                 <th style={thTimeBold}>Nom</th>
                 <th style={thTimeBold}>Ordre</th>
                 <th style={thTimeBold}>Code</th>
+                <th style={thTimeBold}>Visibilité</th>
+                <th style={thTimeBold}>Type</th>
                 <th style={thTimeBold}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {autresAdminRows.map((r) => {
-                const edit = autresRowEdits[r.id] || { nom: r.nom, ordre: r.ordre, code: r.code };
+                const edit = autresRowEdits[r.id] || {
+                  nom: r.nom,
+                  ordre: r.ordre,
+                  code: r.code,
+                  scope: r.scope || "all",
+                  visibleToEmpIds: Array.isArray(r.visibleToEmpIds) ? r.visibleToEmpIds : [],
+                  projectLike: r.projectLike === true,
+                };
+
                 return (
                   <tr key={r.id}>
                     <td style={tdTime}>
@@ -1543,6 +1844,48 @@ export default function PageReglagesAdmin() {
                       />
                     </td>
                     <td style={tdTime}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <select
+                          value={edit.scope || "all"}
+                          onChange={(e) => setAutresEdit(r.id, "scope", e.target.value)}
+                          style={{ ...input, width: 180, padding: "6px 10px" }}
+                        >
+                          <option value="all">Tous</option>
+                          <option value="selected">Employés choisis</option>
+                        </select>
+
+                        {edit.scope === "selected" && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 420 }}>
+                            <MultiSelectEmployesDropdown
+                              employes={timeEmployes}
+                              selectedIds={Array.isArray(edit.visibleToEmpIds) ? edit.visibleToEmpIds : []}
+                              onToggle={(empId) => toggleAutreRowEmp(r.id, empId)}
+                              placeholder="Choisir les employés"
+                            />
+
+                            <div style={{ fontSize: 11, color: "#374151", fontWeight: 800 }}>
+                              {timeEmployes
+                                .filter((emp) => Array.isArray(edit.visibleToEmpIds) && edit.visibleToEmpIds.includes(emp.id))
+                                .map((emp) => emp.nom)
+                                .join(", ") || "Aucun employé sélectionné"}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+
+                    <td style={tdTime}>
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
+                        <input
+                          type="checkbox"
+                          checked={edit.projectLike === true}
+                          onChange={(e) => setAutresEdit(r.id, "projectLike", e.target.checked)}
+                        />
+                        <span>{edit.projectLike ? "Spéciale" : "Simple"}</span>
+                      </label>
+                    </td>
+
+                    <td style={tdTime}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button type="button" onClick={() => saveAutreRow(r)} disabled={autresAdminLoading} style={btnPrimarySmall}>
                           Enregistrer
@@ -1558,7 +1901,7 @@ export default function PageReglagesAdmin() {
 
               {!autresAdminLoading && autresAdminRows.length === 0 && (
                 <tr>
-                  <td colSpan={4} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+                  <td colSpan={6} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
                     Aucune autre tâche pour l’instant.
                   </td>
                 </tr>
@@ -1627,14 +1970,23 @@ const btnPrimary = {
   boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
 };
 const btnPrimarySmall = { ...btnPrimary, padding: "4px 10px", boxShadow: "none", fontSize: 12 };
-const btnDangerSmall = { border: "1px solid #111", background: "#fee2e2", color: "#111", borderRadius: 10, padding: "6px 10px", cursor: "pointer", fontWeight: 900, fontSize: 12 };
+const btnDangerSmall = {
+  border: "1px solid #111",
+  background: "#fee2e2",
+  color: "#111",
+  borderRadius: 10,
+  padding: "6px 10px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 12,
+};
 
 const btnSecondary = { border: "1px solid #111", background: "#fff", color: "#111", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontWeight: 900 };
 const btnSecondarySmall = { ...btnSecondary, padding: "4px 10px", fontSize: 12 };
 
 const tableBlack = { width: "100%", borderCollapse: "collapse", fontSize: 12, border: "2px solid #111", borderRadius: 8 };
 const thTimeBold = { textAlign: "left", padding: 8, borderBottom: "2px solid #111", fontWeight: 900 };
-const tdTime = { padding: 8, borderBottom: "1px solid #111" };
+const tdTime = { padding: 8, borderBottom: "1px solid #111", verticalAlign: "top" };
 
 const alertErr = { background: "#fee2e2", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };
 const alertOk = { background: "#dcfce7", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };

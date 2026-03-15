@@ -448,6 +448,119 @@ exports.sendInvoiceEmail = onCall(
 );
 
 /* =========================
+   ✅ Send Other Task Close Email (Brevo SMTP)
+   =========================
+   Attendu:
+   - otherId (optionnel si pdfPath fourni)
+   - toEmail (requis): string OU array
+   - subject (optionnel)
+   - text (optionnel)
+   - pdfPath (optionnel) ex: "autresProjetsFermes/ABC.pdf"
+*/
+exports.sendOtherTaskCloseEmail = onCall(
+  { secrets: [BREVO_SMTP_USER, BREVO_SMTP_PASS, MAIL_FROM] },
+  async (request) => {
+    const data = request.data || {};
+
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Vous devez être connecté pour envoyer le document.");
+    }
+
+    const otherId = String(data.otherId || "").trim() || null;
+    const toEmailRaw = data.toEmail;
+
+    let toEmails = [];
+    if (Array.isArray(toEmailRaw)) {
+      toEmails = toEmailRaw.map((x) => String(x || "").trim()).filter(Boolean);
+    } else {
+      const s = String(toEmailRaw || "").trim();
+      toEmails = s.includes(",")
+        ? s.split(",").map((x) => x.trim()).filter(Boolean)
+        : s
+        ? [s]
+        : [];
+    }
+
+    if (!toEmails.length) {
+      throw new HttpsError("invalid-argument", "Arguments invalides : toEmail est requis.");
+    }
+
+    const subject = String(data.subject || `Gyrotech – Fermeture tâche spéciale ${otherId || ""}`).trim();
+    const text = String(
+      data.text || "Bonjour, veuillez trouver ci-joint le document de fermeture de la tâche spéciale."
+    ).trim();
+
+    const pdfPath =
+      String(data.pdfPath || "").trim() ||
+      (otherId ? `autresProjetsFermes/${otherId}.pdf` : "");
+
+    if (!pdfPath) {
+      throw new HttpsError("invalid-argument", "Arguments invalides : pdfPath est requis si otherId est absent.");
+    }
+
+    const bucket = admin.storage().bucket();
+    const file = bucket.file(pdfPath);
+
+    const [exists] = await file.exists();
+    if (!exists) {
+      throw new HttpsError("not-found", `Le fichier PDF ${pdfPath} est introuvable dans Storage.`);
+    }
+
+    const [fileBuffer] = await file.download();
+
+    const transporter = nodemailer.createTransport({
+      host: "smtp-relay.brevo.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: BREVO_SMTP_USER.value(),
+        pass: BREVO_SMTP_PASS.value(),
+      },
+    });
+
+    const attachName = otherId ? `fermeture-tache-${otherId}.pdf` : "fermeture-tache.pdf";
+
+    try {
+      await transporter.sendMail({
+        from: MAIL_FROM.value(),
+        to: toEmails,
+        subject,
+        text,
+        attachments: [
+          {
+            filename: attachName,
+            content: fileBuffer,
+            contentType: "application/pdf",
+          },
+        ],
+      });
+
+      logger.info(
+        `Document autre tâche envoyé à ${toEmails.join(", ")} pour otherId=${otherId || "(sans otherId)"} (path=${pdfPath}).`
+      );
+
+      try {
+        await file.delete({ ignoreNotFound: true });
+        logger.info(`PDF autre tâche supprimé du Storage: ${pdfPath}`);
+      } catch (errDel) {
+        logger.error("Erreur lors de la suppression du PDF autre tâche:", errDel);
+      }
+
+      return {
+        ok: true,
+        toEmails,
+        otherId,
+        pdfPath,
+        deletedFromStorage: true,
+      };
+    } catch (err) {
+      logger.error("Erreur Brevo/Nodemailer sendOtherTaskCloseEmail:", err);
+      throw new HttpsError("internal", "Erreur lors de l'envoi du courriel de fermeture.");
+    }
+  }
+);
+
+/* =========================
    ✅ Auto-dépunch de tous les employés à 17h (America/Toronto)
    =========================
    But:

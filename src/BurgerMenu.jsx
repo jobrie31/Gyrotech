@@ -1,7 +1,12 @@
 // BurgerMenu.jsx — Bouton 3 lignes + tiroir gauche (pages)
 // Navigue via window.location.hash => '#/accueil', '#/projets', '#/historique', '#/materiels', '#/reglages'
+//
+// ✅ MODIF (2026-03-14):
+// - Admin et RH voient les mêmes menus "gestion"
+// - Le menu peut filtrer automatiquement certaines pages selon le rôle
+// - Par défaut, "Réglages" est visible pour Admin OU RH
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 // ✅ Le menu ne rend pas les pages. Il ne fait que naviguer par hash.
 const defaultPages = [
@@ -9,11 +14,37 @@ const defaultPages = [
   { key: "projets", label: "Projets" },
   { key: "historique", label: "Historique" }, // ✅ Historique employés
   { key: "materiels", label: "Matériels" },
-  { key: "reglages", label: "Réglages" },
+  { key: "reglages", label: "Réglages", adminMenu: true },
 ];
 
-export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
+export default function BurgerMenu({
+  pages = defaultPages,
+  onNavigate,
+  isAdmin = false,
+  isRH = false,
+}) {
   const [open, setOpen] = useState(false);
+
+  // ✅ Admin et RH voient les mêmes menus de gestion
+  const canSeeAdminMenus = !!isAdmin || !!isRH;
+
+  const visiblePages = useMemo(() => {
+    return (pages || []).filter((p) => {
+      // page explicitement cachée
+      if (p?.hidden === true) return false;
+
+      // visible seulement admin/RH
+      if (p?.adminMenu === true) return canSeeAdminMenus;
+
+      // visible seulement admin pur
+      if (p?.adminOnly === true) return !!isAdmin;
+
+      // visible seulement RH pur
+      if (p?.rhOnly === true) return !!isRH;
+
+      return true;
+    });
+  }, [pages, canSeeAdminMenus, isAdmin, isRH]);
 
   // ESC pour fermer + blocage du scroll quand ouvert
   useEffect(() => {
@@ -68,9 +99,36 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
         }}
       >
         <div style={{ display: "inline-block" }}>
-          <span style={{ display: "block", width: 22, height: 2, background: "#111827", margin: "4px 0", borderRadius: 2 }} />
-          <span style={{ display: "block", width: 22, height: 2, background: "#111827", margin: "4px 0", borderRadius: 2 }} />
-          <span style={{ display: "block", width: 22, height: 2, background: "#111827", margin: "4px 0", borderRadius: 2 }} />
+          <span
+            style={{
+              display: "block",
+              width: 22,
+              height: 2,
+              background: "#111827",
+              margin: "4px 0",
+              borderRadius: 2,
+            }}
+          />
+          <span
+            style={{
+              display: "block",
+              width: 22,
+              height: 2,
+              background: "#111827",
+              margin: "4px 0",
+              borderRadius: 2,
+            }}
+          />
+          <span
+            style={{
+              display: "block",
+              width: 22,
+              height: 2,
+              background: "#111827",
+              margin: "4px 0",
+              borderRadius: 2,
+            }}
+          />
         </div>
       </button>
 
@@ -127,7 +185,9 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
               zIndex: 1,
             }}
           >
-            <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>Menu</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>
+              Menu
+            </div>
             <button
               onClick={() => setOpen(false)}
               aria-label="Fermer le menu"
@@ -145,7 +205,7 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
 
           {/* Liens */}
           <nav style={{ padding: 8 }}>
-            {pages.map((p) => (
+            {visiblePages.map((p) => (
               <button
                 key={p.key}
                 onClick={() => handleItem(p)}
@@ -172,6 +232,19 @@ export default function BurgerMenu({ pages = defaultPages, onNavigate }) {
                 {p.label}
               </button>
             ))}
+
+            {visiblePages.length === 0 && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  color: "#6b7280",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}
+              >
+                Aucun menu disponible.
+              </div>
+            )}
           </nav>
         </aside>
       </div>

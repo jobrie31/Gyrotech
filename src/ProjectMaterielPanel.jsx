@@ -19,21 +19,38 @@ const asInt = (v) => {
   return Number.isFinite(n) ? Math.trunc(n) : NaN;
 };
 
+function getEntityRootCollection(entityType) {
+  return entityType === "autre" ? "autresProjets" : "projets";
+}
+
+function getEntityDocRef(entityType, entityId) {
+  return doc(db, getEntityRootCollection(entityType), entityId);
+}
+
+function getUsagesCollectionRef(entityType, entityId) {
+  return collection(db, getEntityRootCollection(entityType), entityId, "usagesMateriels");
+}
+
 /* ---------- hooks data ---------- */
-function useProject(projId, setError) {
-  const [proj, setProj] = useState(null);
+function useEntity(entityType, entityId, setError) {
+  const [entity, setEntity] = useState(null);
+
   useEffect(() => {
-    if (!projId) return;
-    const ref = doc(db, "projets", projId);
+    if (!entityId) return;
+
+    const ref = getEntityDocRef(entityType, entityId);
     const unsub = onSnapshot(
       ref,
-      (snap) => setProj(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+      (snap) => setEntity(snap.exists() ? { id: snap.id, ...snap.data() } : null),
       (err) => setError?.(err?.message || String(err))
     );
+
     return () => unsub();
-  }, [projId, setError]);
-  return proj;
+  }, [entityType, entityId, setError]);
+
+  return entity;
 }
+
 function useCategories(setError) {
   const [cats, setCats] = useState([]);
   useEffect(() => {
@@ -51,6 +68,7 @@ function useCategories(setError) {
   }, [setError]);
   return cats;
 }
+
 function useMateriels(setError) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
@@ -59,7 +77,7 @@ function useMateriels(setError) {
       qy,
       (snap) => {
         const out = [];
-        snap.forEach((d) => out.push({ id: d.id, ...d.data() })); // {id, nom, prix, categorie}
+        snap.forEach((d) => out.push({ id: d.id, ...d.data() }));
         setRows(out);
       },
       (err) => setError?.(err?.message || String(err))
@@ -68,31 +86,36 @@ function useMateriels(setError) {
   }, [setError]);
   return rows;
 }
-function useUsagesMateriels(projId, setError) {
+
+function useUsagesMateriels(entityType, entityId, setError) {
   const [rows, setRows] = useState([]);
+
   useEffect(() => {
-    if (!projId) return;
-    const qy = query(collection(db, "projets", projId, "usagesMateriels"), orderBy("nom", "asc"));
+    if (!entityId) return;
+
+    const qy = query(getUsagesCollectionRef(entityType, entityId), orderBy("nom", "asc"));
     const unsub = onSnapshot(
       qy,
       (snap) => {
         const out = [];
-        snap.forEach((d) => out.push({ id: d.id, ...d.data() })); // {id, nom, qty, prix?, ...}
+        snap.forEach((d) => out.push({ id: d.id, ...d.data() }));
         setRows(out);
       },
       (err) => setError?.(err?.message || String(err))
     );
+
     return () => unsub();
-  }, [projId, setError]);
+  }, [entityType, entityId, setError]);
+
   return rows;
 }
 
 /* ---------- actions ---------- */
-async function addMaterialQty({ projId, mat, amount }) {
-  // ✅ sécurité: ne permet jamais 0 / négatif
+async function addMaterialQty({ entityType, entityId, mat, amount }) {
   const incVal = Math.max(1, Number(amount) || 0);
 
-  const ref = doc(db, "projets", projId, "usagesMateriels", mat.id);
+  const ref = doc(db, getEntityRootCollection(entityType), entityId, "usagesMateriels", mat.id);
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) {
@@ -114,16 +137,21 @@ async function addMaterialQty({ projId, mat, amount }) {
   });
 }
 
-async function removeOneMaterial({ projId, matId }) {
-  const ref = doc(db, "projets", projId, "usagesMateriels", matId);
+async function removeOneMaterial({ entityType, entityId, matId }) {
+  const ref = doc(db, getEntityRootCollection(entityType), entityId, "usagesMateriels", matId);
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) return;
+
     const cur = Number(snap.data().qty) || 0;
     if (cur <= 1) {
-      tx.delete(ref); // supprime la ligne si on retombe à 0
+      tx.delete(ref);
     } else {
-      tx.update(ref, { qty: cur - 1, updatedAt: serverTimestamp() });
+      tx.update(ref, {
+        qty: cur - 1,
+        updatedAt: serverTimestamp(),
+      });
     }
   });
 }
@@ -158,27 +186,28 @@ function ErrorBanner({ error, onClose }) {
 /* ---------- Main ---------- */
 export default function ProjectMaterielPanel({
   projId,
+  entityType = "projet",
+  entityId = null,
   onClose,
   setParentError,
   inline = false,
   hideSummary = false,
   startInAdd = false,
 }) {
+  const resolvedEntityType = entityType || "projet";
+  const resolvedEntityId = entityId || projId || null;
+
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
   const [showAdd, setShowAdd] = useState(startInAdd);
   const addRef = useRef(null);
-
-  // ✅ feedback visuel sans popup (quantité invalide)
   const [invalidQtyId, setInvalidQtyId] = useState(null);
 
-  const proj = useProject(projId, setError);
+  const entity = useEntity(resolvedEntityType, resolvedEntityId, setError);
   const categories = useCategories(setError);
   const materiels = useMateriels(setError);
-  const usages = useUsagesMateriels(projId, setError);
+  const usages = useUsagesMateriels(resolvedEntityType, resolvedEntityId, setError);
 
-  // ✅ On continue de propager les VRAIES erreurs au parent,
-  //    mais on ne déclenche plus d'erreur pour "Qté ≥ 1" (voir addWithQty)
   useEffect(() => {
     if (error) setParentError?.(error);
   }, [error, setParentError]);
@@ -194,6 +223,7 @@ export default function ProjectMaterielPanel({
 
   const groups = useMemo(() => {
     const term = q.trim().toLowerCase();
+
     const pass = (r) =>
       !term ||
       r.nom?.toLowerCase().includes(term) ||
@@ -215,6 +245,7 @@ export default function ProjectMaterielPanel({
       out.push({ cat: c, items: map.get(c.nom) || [] });
     });
     if (none.length > 0) out.push({ cat: null, items: none });
+
     return out;
   }, [materiels, categories, q]);
 
@@ -224,16 +255,23 @@ export default function ProjectMaterielPanel({
   );
 
   const add1 = (mat) =>
-    addMaterialQty({ projId, mat, amount: 1 }).catch((e) => setError(e?.message || String(e)));
+    addMaterialQty({
+      entityType: resolvedEntityType,
+      entityId: resolvedEntityId,
+      mat,
+      amount: 1,
+    }).catch((e) => setError(e?.message || String(e)));
 
   const dec1 = (u) =>
-    removeOneMaterial({ projId, matId: u.id }).catch((e) => setError(e?.message || String(e)));
+    removeOneMaterial({
+      entityType: resolvedEntityType,
+      entityId: resolvedEntityId,
+      matId: u.id,
+    }).catch((e) => setError(e?.message || String(e)));
 
   const addWithQty = async (mat) => {
-    // ✅ IMPORTANT: plus de setError("Qté ≥ 1.") -> donc plus aucun popup d'erreur (popup + parent)
     const raw = qtyById[mat.id];
 
-    // On exige que l'utilisateur remplisse la quantité (vide => on ne fait rien)
     if (raw == null || String(raw).trim() === "") {
       setInvalidQtyId(mat.id);
       setTimeout(() => setInvalidQtyId(null), 900);
@@ -248,7 +286,12 @@ export default function ProjectMaterielPanel({
     }
 
     try {
-      await addMaterialQty({ projId, mat, amount });
+      await addMaterialQty({
+        entityType: resolvedEntityType,
+        entityId: resolvedEntityId,
+        mat,
+        amount,
+      });
       setQty(mat.id, "");
     } catch (e) {
       setError(e?.message || String(e));
@@ -262,11 +305,12 @@ export default function ProjectMaterielPanel({
     }, 10);
   };
 
-  if (!projId) return null;
+  if (!resolvedEntityId) return null;
+
+  const entityLabel = resolvedEntityType === "autre" ? "autre tâche" : "projet";
 
   const content = (
     <div style={{ width: "100%" }}>
-      {/* Header + bouton Ajouter */}
       <div
         style={{
           display: "flex",
@@ -275,11 +319,15 @@ export default function ProjectMaterielPanel({
           marginBottom: 8,
         }}
       >
-        <h3 style={{ margin: 0 }}>Matériel — {proj?.nom || "…"}</h3>
+        <h3 style={{ margin: 0 }}>
+          Matériel — {entity?.nom || "…"}
+        </h3>
+
         <div style={{ display: "flex", gap: 8 }}>
           <Button variant={showAdd ? "neutral" : "primary"} onClick={toggleAdd}>
             {showAdd ? "Fermer l’ajout" : "Ajouter du matériel"}
           </Button>
+
           {!inline && (
             <Button variant="neutral" onClick={onClose}>
               Fermer
@@ -288,12 +336,10 @@ export default function ProjectMaterielPanel({
         </div>
       </div>
 
-      {/* ✅ Bannière d'erreur (vraies erreurs seulement; la Qté invalide ne déclenche plus setError) */}
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      {/* Résumé très compact (optionnel) */}
       {!hideSummary && (
-        <Card title="Utilisé dans ce projet (simple)">
+        <Card title={`Utilisé dans ce ${entityLabel} (simple)`}>
           <div style={{ ...styles.tableWrap, maxHeight: "unset", overflow: "visible" }}>
             <table style={{ ...styles.table, borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
               <thead>
@@ -363,6 +409,7 @@ export default function ProjectMaterielPanel({
                     </td>
                   </tr>
                 ))}
+
                 {usages.length === 0 && (
                   <tr>
                     <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
@@ -373,6 +420,7 @@ export default function ProjectMaterielPanel({
               </tbody>
             </table>
           </div>
+
           <div style={{ textAlign: "right", marginTop: 6, fontWeight: 800, fontSize: 13 }}>
             Total estimé:{" "}
             {total.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}
@@ -380,8 +428,8 @@ export default function ProjectMaterielPanel({
         </Card>
       )}
 
-      {/* Accordéon: ajouter du matériel */}
       <div ref={addRef} />
+
       {showAdd && (
         <Card title="Ajouter du matériel (catégories)">
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
