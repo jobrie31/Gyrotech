@@ -18,6 +18,11 @@
 // ✅ AJOUT:
 // - Matériel branché directement avec ProjectMaterielPanel
 // - autresProjets/{id}/usagesMateriels via entityType="autre"
+//
+// ✅ MODIF (2026-03-15):
+// - cacher les tâches fermées du tableau principal
+// - ligne jaune pour les tâches spéciales dans le tableau
+// - dans Détails > Informations, afficher les employés visibles seulement si scope=selected
 import CloseAutreProjetWizard from "./CloseAutreProjetWizard";
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { db, auth, storage } from "./firebaseConfig";
@@ -39,11 +44,30 @@ import {
   setDoc,
   writeBatch,
 } from "firebase/firestore";
-import { ref as storageRef, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
+import {
+  ref as storageRef,
+  uploadBytes,
+  getDownloadURL,
+  listAll,
+  deleteObject,
+} from "firebase/storage";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 
 /* ---------- Utils dates / temps ---------- */
-const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
+const MONTHS_FR_ABBR = [
+  "janv",
+  "févr",
+  "mars",
+  "avr",
+  "mai",
+  "juin",
+  "juil",
+  "août",
+  "sept",
+  "oct",
+  "nov",
+  "déc",
+];
 
 function toDateSafe(ts) {
   if (!ts) return null;
@@ -124,8 +148,16 @@ function empDayRef(empId, key) {
 function computeTotalMs(sessions) {
   const now = Date.now();
   return sessions.reduce((acc, s) => {
-    const st = s.start?.toDate ? s.start.toDate().getTime() : s.start ? new Date(s.start).getTime() : null;
-    const en = s.end?.toDate ? s.end.toDate().getTime() : s.end ? new Date(s.end).getTime() : null;
+    const st = s.start?.toDate
+      ? s.start.toDate().getTime()
+      : s.start
+      ? new Date(s.start).getTime()
+      : null;
+    const en = s.end?.toDate
+      ? s.end.toDate().getTime()
+      : s.end
+      ? new Date(s.end).getTime()
+      : null;
     if (!st) return acc;
     return acc + Math.max(0, (en ?? now) - st);
   }, 0);
@@ -134,7 +166,11 @@ function computeTotalMs(sessions) {
 /* ✅ fallback */
 async function empHasOpenJob(empId, key, jobId) {
   if (!empId || !key || !jobId) return false;
-  const qOpen = query(empSegCol(empId, key), where("end", "==", null), where("jobId", "==", jobId));
+  const qOpen = query(
+    empSegCol(empId, key),
+    where("end", "==", null),
+    where("jobId", "==", jobId)
+  );
   const snap = await getDocs(qOpen);
   return !snap.empty;
 }
@@ -218,7 +254,11 @@ function usePresenceTodayAutre(projId, setError) {
         const segRef = seg._ref || null;
         if (!empId || !segRef) continue;
 
-        const st = seg.start?.toDate ? seg.start.toDate() : seg.start ? new Date(seg.start) : null;
+        const st = seg.start?.toDate
+          ? seg.start.toDate()
+          : seg.start
+          ? new Date(seg.start)
+          : null;
         if (st && !isNaN(st.getTime())) {
           const age = Date.now() - st.getTime();
           if (age < GRACE_MS) continue;
@@ -286,7 +326,12 @@ async function depunchWorkersOnAutreProjet(otherId) {
     daysSnap.forEach((d) => dayIds.push(d.id));
 
     for (const day of dayIds) {
-      const segsSnap = await getDocs(query(collection(db, "autresProjets", otherId, "timecards", day, "segments"), orderBy("start", "asc")));
+      const segsSnap = await getDocs(
+        query(
+          collection(db, "autresProjets", otherId, "timecards", day, "segments"),
+          orderBy("start", "asc")
+        )
+      );
       const openSegs = [];
       segsSnap.forEach((sd) => {
         const s = sd.data() || {};
@@ -320,7 +365,11 @@ async function depunchWorkersOnAutreProjet(otherId) {
               }
             }
           } catch (e) {
-            console.error("close_other_depunch employee seg error", { empId, day, segId: seg.id }, e);
+            console.error(
+              "close_other_depunch employee seg error",
+              { empId, day, segId: seg.id },
+              e
+            );
           }
 
           const eDay = empDayRef(empId, day);
@@ -553,7 +602,14 @@ function DocsButtonWithBadge({ count = 0, onClick, title = "Documents" }) {
 }
 
 /* ---------- Popup: créer / renommer ---------- */
-function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = null, currentName = "" }) {
+function PopupNomAutreProjet({
+  open,
+  onClose,
+  onError,
+  mode = "create",
+  docId = null,
+  currentName = "",
+}) {
   const [nom, setNom] = useState("");
 
   useEffect(() => {
@@ -568,7 +624,10 @@ function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = 
       if (!clean) return onError?.("Indique un nom.");
 
       if (mode === "edit" && docId) {
-        await updateDoc(doc(db, "autresProjets", docId), { nom: clean, updatedAt: serverTimestamp() });
+        await updateDoc(doc(db, "autresProjets", docId), {
+          nom: clean,
+          updatedAt: serverTimestamp(),
+        });
       } else {
         await addDoc(collection(db, "autresProjets"), {
           nom: clean,
@@ -618,7 +677,9 @@ function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = 
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}
+        >
           <div style={{ fontWeight: 800, fontSize: 18 }}>
             {mode === "edit" ? "Renommer l’autre projet" : "Créer un autre projet"}
           </div>
@@ -642,7 +703,12 @@ function PopupNomAutreProjet({ open, onClose, onError, mode = "create", docId = 
 
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <FieldV label="Nom">
-            <input value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex.: Projet spécial" style={input} />
+            <input
+              value={nom}
+              onChange={(e) => setNom(e.target.value)}
+              placeholder="Ex.: Projet spécial"
+              style={input}
+            />
           </FieldV>
 
           <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
@@ -688,7 +754,9 @@ function PopupHistoriqueAutreProjet({ open, onClose, projet }) {
         let sumMs = 0;
 
         for (const key of days) {
-          const segSnap = await getDocs(collection(db, "autresProjets", projet.id, "timecards", key, "segments"));
+          const segSnap = await getDocs(
+            collection(db, "autresProjets", projet.id, "timecards", key, "segments")
+          );
 
           segSnap.forEach((sdoc) => {
             const s = sdoc.data();
@@ -703,7 +771,12 @@ function PopupHistoriqueAutreProjet({ open, onClose, projet }) {
             const empKey = s.empId || empName;
             const k = `${key}__${empKey}`;
 
-            const prev = map.get(k) || { date: key, empName, empId: s.empId || null, totalMs: 0 };
+            const prev = map.get(k) || {
+              date: key,
+              empName,
+              empId: s.empId || null,
+              totalMs: 0,
+            };
             prev.totalMs += ms;
             map.set(k, prev);
           });
@@ -729,7 +802,12 @@ function PopupHistoriqueAutreProjet({ open, onClose, projet }) {
 
   if (!open || !projet) return null;
 
-  const th = { textAlign: "left", padding: 8, borderBottom: "1px solid #e0e0e0", whiteSpace: "nowrap" };
+  const th = {
+    textAlign: "left",
+    padding: 8,
+    borderBottom: "1px solid #e0e0e0",
+    whiteSpace: "nowrap",
+  };
   const td = { padding: 8, borderBottom: "1px solid #eee" };
 
   return (
@@ -761,7 +839,9 @@ function PopupHistoriqueAutreProjet({ open, onClose, projet }) {
           fontSize: 13,
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}
+        >
           <div style={{ fontWeight: 900, fontSize: 17 }}>Historique de l’autre tâche</div>
           <button
             onClick={(e) => {
@@ -804,7 +884,9 @@ function PopupHistoriqueAutreProjet({ open, onClose, projet }) {
         </div>
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "4px 0 6px" }}>
-          <div style={{ fontWeight: 800, fontSize: 12 }}>Historique — {showAll ? "tout" : "10 derniers"}</div>
+          <div style={{ fontWeight: 800, fontSize: 12 }}>
+            Historique — {showAll ? "tout" : "10 derniers"}
+          </div>
           <button
             onClick={() => setShowAll((v) => !v)}
             style={btnSecondary}
@@ -1043,7 +1125,15 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
         </div>
 
         <div style={{ fontWeight: 900, margin: "6px 0 10px", fontSize: 18 }}>Documents de la tâche</div>
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 16 }}>
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            border: "1px solid #eee",
+            borderRadius: 14,
+            fontSize: 16,
+          }}
+        >
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={thCenter}>Nom</th>
@@ -1059,7 +1149,11 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
                     <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
                       Ouvrir
                     </a>
-                    <button onClick={() => navigator.clipboard?.writeText(f.url)} style={btnSecondary} title="Copier l’URL">
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(f.url)}
+                      style={btnSecondary}
+                      title="Copier l’URL"
+                    >
                       Copier l’URL
                     </button>
                     <button onClick={() => onDelete(f.name)} style={btnDanger} disabled={busy}>
@@ -1090,7 +1184,16 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
 }
 
 /* ---------- Popup DÉTAILS spéciale ---------- */
-function PopupDetailsAutreProjetSpecial({ open, onClose, projet, onOpenDocs, onOpenHistory, onOpenClose, onOpenMaterial }) {
+function PopupDetailsAutreProjetSpecial({
+  open,
+  onClose,
+  projet,
+  onOpenDocs,
+  onOpenHistory,
+  onOpenClose,
+  onOpenMaterial,
+  employes = [],
+}) {
   const projId = projet?.id || null;
 
   const [live, setLive] = useState(null);
@@ -1111,7 +1214,10 @@ function PopupDetailsAutreProjetSpecial({ open, onClose, projet, onOpenDocs, onO
     const unsub = onSnapshot(doc(db, "autresProjets", projId), (snap) => {
       if (!snap.exists()) return;
       setLive({ id: snap.id, ...snap.data() });
-      setTimeout(() => autoSizeNote(noteRef, NOTE_MIN_ROWS, NOTE_MAX_ROWS, NOTE_LINE_HEIGHT_PX), 0);
+      setTimeout(
+        () => autoSizeNote(noteRef, NOTE_MIN_ROWS, NOTE_MAX_ROWS, NOTE_LINE_HEIGHT_PX),
+        0
+      );
     });
     return () => unsub();
   }, [open, projId]);
@@ -1148,7 +1254,24 @@ function PopupDetailsAutreProjetSpecial({ open, onClose, projet, onOpenDocs, onO
 
   const p = live || projet;
   const title = p.nom || "—";
-  const inputInline = { ...input, fontSize: 16, fontWeight: 900, padding: "9px 10px", borderRadius: 12 };
+
+  const visibleEmpNames =
+    p.scope === "selected" &&
+    Array.isArray(p.visibleToEmpIds) &&
+    p.visibleToEmpIds.length > 0
+      ? employes
+          .filter((e) => p.visibleToEmpIds.includes(e.id))
+          .map((e) => e.nom || "—")
+          .filter(Boolean)
+      : [];
+
+  const inputInline = {
+    ...input,
+    fontSize: 16,
+    fontWeight: 900,
+    padding: "9px 10px",
+    borderRadius: 12,
+  };
   const labelMini = { fontSize: 13, fontWeight: 1000, color: "#334155", marginBottom: 4 };
 
   return (
@@ -1210,6 +1333,25 @@ function PopupDetailsAutreProjetSpecial({ open, onClose, projet, onOpenDocs, onO
               <CardKV k="Statut" v={p.ouvert === false ? "Fermé" : "Ouvert"} />
               <CardKV k="Date de création" v={fmtDate(p.createdAt)} />
               <CardKV k="Documents" v={String(Number(p.pdfCount || 0))} />
+
+              {visibleEmpNames.length > 0 && (
+                <div
+                  style={{
+                    gridColumn: "1 / -1",
+                    border: "1px solid #eee",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    background: "#fffbea",
+                  }}
+                >
+                  <div style={{ fontSize: 10, color: "#666", marginBottom: 4 }}>
+                    Employés attitrés
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>
+                    {visibleEmpNames.join(", ")}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1225,11 +1367,7 @@ function PopupDetailsAutreProjetSpecial({ open, onClose, projet, onOpenDocs, onO
                 Historique
               </button>
 
-              <DocsButtonWithBadge
-                count={p.pdfCount}
-                onClick={onOpenDocs}
-                title="Documents"
-              />
+              <DocsButtonWithBadge count={p.pdfCount} onClick={onOpenDocs} title="Documents" />
 
               {p.ouvert !== false && (
                 <button onClick={onOpenClose} style={btnClose}>
@@ -1248,7 +1386,10 @@ function PopupDetailsAutreProjetSpecial({ open, onClose, projet, onOpenDocs, onO
                   const v = e.target.value;
                   setLive((prev) => (prev ? { ...prev, note: v } : prev));
                   commitPatchDebounced({ note: v });
-                  setTimeout(() => autoSizeNote(noteRef, NOTE_MIN_ROWS, NOTE_MAX_ROWS, NOTE_LINE_HEIGHT_PX), 0);
+                  setTimeout(
+                    () => autoSizeNote(noteRef, NOTE_MIN_ROWS, NOTE_MAX_ROWS, NOTE_LINE_HEIGHT_PX),
+                    0
+                  );
                 }}
                 placeholder="Écris les notes ici…"
                 rows={NOTE_MIN_ROWS}
@@ -1368,7 +1509,14 @@ function PopupFermerAutreProjet({ open, projet, onClose, onConfirm }) {
         <button
           type="button"
           onClick={onConfirm}
-          style={{ ...btnClose, width: "100%", padding: "14px 16px", fontSize: 18, fontWeight: 1000, borderRadius: 16 }}
+          style={{
+            ...btnClose,
+            width: "100%",
+            padding: "14px 16px",
+            fontSize: 18,
+            fontWeight: 1000,
+            borderRadius: 16,
+          }}
         >
           Fermer la tâche
         </button>
@@ -1426,7 +1574,13 @@ function RowAutreProjet({
   }
 
   const statutStyle = { fontWeight: 800, color: statutColor };
-  const rowBg = idx % 2 === 1 ? "#f9fafb" : "#ffffff";
+  const rowBg = p.projectLike
+    ? idx % 2 === 1
+      ? "#fef3c7"
+      : "#fef9c3"
+    : idx % 2 === 1
+    ? "#f9fafb"
+    : "#ffffff";
 
   return (
     <tr
@@ -1452,11 +1606,7 @@ function RowAutreProjet({
                 Matériel
               </button>
 
-              <DocsButtonWithBadge
-                count={p.pdfCount}
-                onClick={() => onShowDocs?.(p)}
-                title="Documents"
-              />
+              <DocsButtonWithBadge count={p.pdfCount} onClick={() => onShowDocs?.(p)} title="Documents" />
 
               <button onClick={() => onShowHistory?.(p)} style={btnSecondary} title="Voir l'historique">
                 Historique
@@ -1521,6 +1671,8 @@ export default function AutresProjetsSection({
   const [materialOpen, setMaterialOpen] = useState(false);
   const [materialProjetId, setMaterialProjetId] = useState(null);
 
+  const [timeEmployes, setTimeEmployes] = useState([]);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setAuthUser(u || null));
     return () => unsub();
@@ -1578,6 +1730,21 @@ export default function AutresProjetsSection({
   }, [authUser?.uid, authUser?.email]);
 
   useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "employes"));
+        const rows = [];
+        snap.forEach((d) => rows.push({ id: d.id, nom: d.data().nom || "(sans nom)" }));
+        rows.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
+        setTimeEmployes(rows);
+      } catch (e) {
+        console.error(e);
+        setError(e?.message || String(e));
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     const c = collection(db, "autresProjets");
     const unsub = onSnapshot(
       c,
@@ -1619,6 +1786,9 @@ export default function AutresProjetsSection({
     const myEmpId = me?.id || null;
 
     return rows.filter((r) => {
+      // ✅ cacher toutes les tâches fermées du tableau principal
+      if (r.ouvert === false) return false;
+
       if (isAdmin) return true;
 
       const scope = r.scope || "all";
@@ -1754,31 +1924,44 @@ export default function AutresProjetsSection({
         currentName={editDoc?.nom || ""}
       />
 
-      <PopupHistoriqueAutreProjet open={histOpen} onClose={() => setHistOpen(false)} projet={histProjet} />
+      <PopupHistoriqueAutreProjet
+        open={histOpen}
+        onClose={() => setHistOpen(false)}
+        projet={histProjet}
+      />
 
       <PopupDetailsAutreProjetSpecial
         open={detailsOpen}
         onClose={() => setDetailsOpen(false)}
         projet={detailsProjet}
+        employes={timeEmployes}
         onOpenDocs={() => {
           if (!detailsProjet) return;
+          setDetailsOpen(false);
           handleShowDocs(detailsProjet);
         }}
         onOpenHistory={() => {
           if (!detailsProjet) return;
+          setDetailsOpen(false);
           handleShowHistory(detailsProjet);
         }}
         onOpenClose={() => {
           if (!detailsProjet) return;
+          setDetailsOpen(false);
           handleShowClose(detailsProjet);
         }}
         onOpenMaterial={() => {
           if (!detailsProjet) return;
+          setDetailsOpen(false);
           handleOpenMaterial(detailsProjet);
         }}
       />
 
-      <PopupDocsManagerAutre open={docsOpen} onClose={() => setDocsOpen(false)} projet={docsProjet} />
+      <PopupDocsManagerAutre
+        open={docsOpen}
+        onClose={() => setDocsOpen(false)}
+        projet={docsProjet}
+      />
 
       <CloseAutreProjetWizard
         open={closeOpen}

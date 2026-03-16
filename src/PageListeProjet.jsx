@@ -69,6 +69,11 @@
 // - Dans création projet: bouton client "Réglages" remplacé par "Ajouter"
 // - Petit popup pour ajouter un client rapidement
 // - Le nouveau client est automatiquement enregistré et sélectionné
+//
+// ✅ MODIF (2026-03-15):
+// - Le popup "Projets fermés" inclut aussi les autres tâches spéciales fermées complètement
+//   avec PDF + email (autresProjets projectLike)
+// - Réouverture / suppression gèrent maintenant projets ET autresProjets
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -90,7 +95,13 @@ import {
   setDoc,
   writeBatch,
 } from "firebase/firestore";
-import { ref as storageRef, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
+import {
+  ref as storageRef,
+  uploadBytes,
+  getDownloadURL,
+  listAll,
+  deleteObject,
+} from "firebase/storage";
 
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import {
@@ -104,7 +115,20 @@ import {
 import { CloseProjectWizard } from "./PageProjetsFermes";
 
 /* ---------------------- Utils ---------------------- */
-const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
+const MONTHS_FR_ABBR = [
+  "janv",
+  "févr",
+  "mars",
+  "avr",
+  "mai",
+  "juin",
+  "juil",
+  "août",
+  "sept",
+  "oct",
+  "nov",
+  "déc",
+];
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -477,6 +501,70 @@ async function deleteProjectDeep(projId) {
   }
 
   await deleteDoc(doc(db, "projets", projId));
+}
+
+/* ---------------------- ✅ Suppression complète autres tâches spéciales (best effort) ---------------------- */
+async function deleteAutreProjetDeep(otherId) {
+  if (!otherId) return;
+
+  try {
+    const usagesSnap = await getDocs(collection(db, "autresProjets", otherId, "usagesMateriels"));
+    const del = [];
+    usagesSnap.forEach((d) => del.push(deleteDoc(d.ref)));
+    if (del.length) await Promise.all(del);
+  } catch (e) {
+    console.error("delete autres usagesMateriels error", e);
+  }
+
+  try {
+    const matsSnap = await getDocs(collection(db, "autresProjets", otherId, "materiel"));
+    const del = [];
+    matsSnap.forEach((d) => del.push(deleteDoc(d.ref)));
+    if (del.length) await Promise.all(del);
+  } catch (e) {
+    console.error("delete autres materiel error", e);
+  }
+
+  try {
+    const base = storageRef(storage, `autresProjets/${otherId}/pdfs`);
+    const res = await listAll(base).catch(() => ({ items: [] }));
+    const del = (res.items || []).map((it) => deleteObject(it));
+    if (del.length) await Promise.all(del);
+  } catch (e) {
+    console.error("delete autres docs error", e);
+  }
+
+  try {
+    await deleteObject(storageRef(storage, `autresProjetsFermes/${otherId}.pdf`));
+  } catch {}
+
+  try {
+    const daysSnap = await getDocs(collection(db, "autresProjets", otherId, "timecards"));
+    const dayIds = [];
+    daysSnap.forEach((d) => dayIds.push(d.id));
+
+    for (const key of dayIds) {
+      try {
+        const segSnap = await getDocs(collection(db, "autresProjets", otherId, "timecards", key, "segments"));
+        const segDel = [];
+        segSnap.forEach((d) => segDel.push(deleteDoc(d.ref)));
+        if (segDel.length) await Promise.all(segDel);
+      } catch {}
+
+      try {
+        await deleteDoc(doc(db, "autresProjets", otherId, "timecards", key));
+      } catch {}
+    }
+  } catch (e) {
+    console.error("delete autres timecards error", e);
+  }
+
+  try {
+    await deleteDoc(doc(db, "autresProjets", otherId));
+  } catch (e) {
+    console.error("delete autreProjet doc error", e);
+    throw e;
+  }
 }
 
 /* ---------------------- Hooks ---------------------- */
@@ -929,38 +1017,103 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
     setLoading(true);
     setLocalError(null);
 
-    const c = collection(db, "projets");
-    const unsub = onSnapshot(
-      c,
+    const cutoff = minusDays(new Date(), 60);
+
+    let projectRows = [];
+    let otherRows = [];
+
+    const rebuild = () => {
+      const merged = [...projectRows, ...otherRows].sort((a, b) => {
+        const da =
+          toDateSafe(a.closedAt || a.fermeCompletAt || a.documentFermetureEnvoyeAt)?.getTime() || 0;
+        const db =
+          toDateSafe(b.closedAt || b.fermeCompletAt || b.documentFermetureEnvoyeAt)?.getTime() || 0;
+        return db - da;
+      });
+
+      setRows(merged);
+      setLoading(false);
+    };
+
+    const unsubProjects = onSnapshot(
+      collection(db, "projets"),
       (snap) => {
-        const cutoff = minusDays(new Date(), 60);
         const list = [];
         snap.forEach((d) => {
-          const data = d.data();
-          if (!data.fermeComplet) return;
+          const data = d.data() || {};
 
-          const isOpen = data?.ouvert !== false;
-          if (isOpen) return;
+          if (!data.fermeComplet) return;
+          if (data?.ouvert !== false) return;
 
           const closedAt = toDateSafe(data.fermeCompletAt);
           if (closedAt && closedAt < cutoff) return;
 
-          list.push({ id: d.id, ...data });
+          list.push({
+            id: d.id,
+            entityType: "projet",
+            typeLabel: "Projet",
+            closedAt: data.fermeCompletAt || null,
+            displayName: data.clientNom || data.nom || "—",
+            displayUnit: data.numeroUnite || "—",
+            ...data,
+          });
         });
-        list.sort((a, b) => {
-          const da = toDateSafe(a.fermeCompletAt)?.getTime() || 0;
-          const dbt = toDateSafe(b.fermeCompletAt)?.getTime() || 0;
-          return dbt - da;
-        });
-        setRows(list);
-        setLoading(false);
+
+        projectRows = list;
+        rebuild();
       },
       (err) => {
         setLoading(false);
         setLocalError(err?.message || String(err));
       }
     );
-    return () => unsub();
+
+    const unsubAutres = onSnapshot(
+      collection(db, "autresProjets"),
+      (snap) => {
+        const list = [];
+        snap.forEach((d) => {
+          const data = d.data() || {};
+
+          const isSpecial = data.projectLike === true;
+          const isClosed = data.ouvert === false;
+          const isFullClosed = data.fermetureConfirmee === true;
+          const isPdfEmail = String(data.documentFermetureType || "") === "pdf_email";
+
+          if (!isSpecial) return;
+          if (!isClosed) return;
+          if (!isFullClosed) return;
+          if (!isPdfEmail) return;
+
+          const closedAt = toDateSafe(
+            data.documentFermetureEnvoyeAt || data.closedAt || data.updatedAt
+          );
+          if (closedAt && closedAt < cutoff) return;
+
+          list.push({
+            id: d.id,
+            entityType: "autre",
+            typeLabel: "Tâche spéciale",
+            closedAt: data.documentFermetureEnvoyeAt || data.closedAt || data.updatedAt || null,
+            displayName: data.nom || "—",
+            displayUnit: "—",
+            ...data,
+          });
+        });
+
+        otherRows = list;
+        rebuild();
+      },
+      (err) => {
+        setLoading(false);
+        setLocalError(err?.message || String(err));
+      }
+    );
+
+    return () => {
+      unsubProjects();
+      unsubAutres();
+    };
   }, [open]);
 
   if (!open) return null;
@@ -985,7 +1138,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
-          width: "min(950px, 96vw)",
+          width: "min(1050px, 96vw)",
           maxHeight: "92vh",
           overflow: "auto",
           borderRadius: 18,
@@ -1008,7 +1161,7 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
         </div>
 
         <div style={{ fontSize: 16, color: "#6b7280", marginBottom: 12, fontWeight: 700 }}>
-          Projets fermés complètement depuis moins de 2 mois. Tu peux les réouvrir au besoin.
+          Projets fermés complètement et tâches spéciales fermées avec PDF + email depuis moins de 2 mois.
         </div>
 
         {localError && <ErrorBanner error={localError} onClose={() => setLocalError(null)} />}
@@ -1026,8 +1179,9 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
           >
             <thead>
               <tr style={{ background: "#f6f7f8" }}>
-                <th style={th}>BT</th>
-                <th style={th}>Client</th>
+                <th style={th}>Type</th>
+                <th style={th}>BT / Nom</th>
+                <th style={th}>Client / Tâche</th>
                 <th style={th}># d'Unité</th>
                 <th style={th}>Date fermeture</th>
                 <th style={th}>Remarque</th>
@@ -1037,34 +1191,46 @@ function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={6} style={{ padding: 12, color: "#666", fontSize: 18 }}>
+                  <td colSpan={7} style={{ padding: 12, color: "#666", fontSize: 18 }}>
                     Chargement…
                   </td>
                 </tr>
               )}
+
               {!loading &&
-                rows.map((p) => (
-                  <tr key={p.id}>
-                    <td style={tdRow}>{p.dossierNo != null ? p.dossierNo : "—"}</td>
-                    <td style={tdRow}>{p.clientNom || p.nom || "—"}</td>
-                    <td style={tdRow}>{p.numeroUnite || "—"}</td>
-                    <td style={tdRow}>{fmtDate(p.fermeCompletAt)}</td>
-                    <td style={{ ...tdRow, color: "#6b7280" }}>Projet archivé (sera supprimé après 2 mois).</td>
-                    <td style={tdRow} onClick={(e) => e.stopPropagation()}>
-                      <div style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "center" }}>
-                        <button type="button" onClick={() => onReopen?.(p)} style={btnBlue}>
-                          Réouvrir
-                        </button>
-                        <button type="button" title="Supprimer définitivement" onClick={() => onDelete?.(p)} style={btnTrash}>
-                          🗑️
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                rows.map((p) => {
+                  const isProjet = p.entityType === "projet";
+                  return (
+                    <tr key={`${p.entityType}-${p.id}`}>
+                      <td style={tdRow}>{p.typeLabel || "—"}</td>
+                      <td style={tdRow}>
+                        {isProjet ? (p.dossierNo != null ? p.dossierNo : "—") : (p.nom || "—")}
+                      </td>
+                      <td style={tdRow}>{p.displayName || "—"}</td>
+                      <td style={tdRow}>{p.displayUnit || "—"}</td>
+                      <td style={tdRow}>{fmtDate(p.closedAt || p.fermeCompletAt || p.documentFermetureEnvoyeAt)}</td>
+                      <td style={{ ...tdRow, color: "#6b7280" }}>
+                        {isProjet
+                          ? "Projet archivé (sera supprimé après 2 mois)."
+                          : "Tâche spéciale archivée (PDF + email envoyés)."}
+                      </td>
+                      <td style={tdRow} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "center" }}>
+                          <button type="button" onClick={() => onReopen?.(p)} style={btnBlue}>
+                            Réouvrir
+                          </button>
+                          <button type="button" title="Supprimer définitivement" onClick={() => onDelete?.(p)} style={btnTrash}>
+                            🗑️
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} style={{ padding: 12, color: "#666", fontSize: 18 }}>
+                  <td colSpan={7} style={{ padding: 12, color: "#666", fontSize: 18 }}>
                     Aucun projet fermé récemment.
                   </td>
                 </tr>
@@ -1946,8 +2112,6 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const createStartMsRef = useRef(null);
   const prevMarqueIdRef = useRef(null);
 
-  
-
   useEffect(() => {
     if (!open) return;
     setMsg("");
@@ -2576,7 +2740,10 @@ export default function PageListeProjet({ isAdmin = false }) {
     }
     if (!proj?.id) return;
 
-    const ok = window.confirm("Supprimer ce projet définitivement ?");
+    const isAutre = proj?.entityType === "autre";
+    const label = isAutre ? "cette tâche spéciale" : "ce projet";
+
+    const ok = window.confirm(`Supprimer ${label} définitivement ?`);
     if (!ok) return;
 
     try {
@@ -2586,7 +2753,11 @@ export default function PageListeProjet({ isAdmin = false }) {
       if (hist?.projet?.id === proj.id) closeHistorique();
       if (materialProjId === proj.id) setMaterialProjId(null);
 
-      await deleteProjectDeep(proj.id);
+      if (isAutre) {
+        await deleteAutreProjetDeep(proj.id);
+      } else {
+        await deleteProjectDeep(proj.id);
+      }
     } catch (e) {
       console.error(e);
       setError(e?.message || String(e));
@@ -2609,10 +2780,31 @@ export default function PageListeProjet({ isAdmin = false }) {
 
   const handleReopenClosed = async (proj) => {
     if (!proj?.id) return;
-    const ok = window.confirm("Voulez-vous réouvrir ce projet ?");
+
+    const isAutre = proj?.entityType === "autre";
+    const ok = window.confirm(
+      isAutre
+        ? "Voulez-vous réouvrir cette tâche spéciale ?"
+        : "Voulez-vous réouvrir ce projet ?"
+    );
     if (!ok) return;
+
     try {
-      await updateDoc(doc(db, "projets", proj.id), { ouvert: true });
+      if (isAutre) {
+        await updateDoc(doc(db, "autresProjets", proj.id), {
+          ouvert: true,
+          closedAt: null,
+          fermetureConfirmee: false,
+          documentFermetureEnvoyeA: null,
+          documentFermetureEnvoyeAt: null,
+          documentFermetureType: null,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await updateDoc(doc(db, "projets", proj.id), {
+          ouvert: true,
+        });
+      }
     } catch (e) {
       console.error(e);
       setError(e?.message || String(e));
