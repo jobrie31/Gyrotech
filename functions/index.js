@@ -68,7 +68,6 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
       return;
     }
 
-    // On ne fait quelque chose QUE si end existe après update
     if (afterEnd == null) {
       logger.info("syncProjectSegOnEmpClose EXIT afterEnd-null", {
         empId,
@@ -80,7 +79,6 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
       return;
     }
 
-    // Si avant et après avaient déjà un end, on skip
     if (beforeEnd != null && afterEnd != null) {
       logger.info("syncProjectSegOnEmpClose EXIT already-closed-before", {
         empId,
@@ -187,13 +185,7 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
 
 /* =========================
    ✅ SHUTDOWN GLOBAL (Admin) — Kick ALL users
-   =========================
-   But:
-   - Révoquer les refresh tokens Auth de TOUS les utilisateurs
-   - Incrémenter config/security.sessionVersion pour forcer logout + hard reload côté client
-   Sécurité:
-   - Seuls les admins (employes where uid==request.auth.uid && isAdmin==true) peuvent l'utiliser
-*/
+   ========================= */
 exports.kickAllUsers = onCall(async (request) => {
   try {
     if (!request.auth || !request.auth.uid) {
@@ -256,11 +248,13 @@ const MAIL_FROM = defineSecret("MAIL_FROM");
 /* =========================
    ✅ Activate Account (email + code + password)
    =========================
-   - PAS besoin d’être connecté (request.auth peut être null)
-   - Vérifie que l’email existe dans "employes" (emailLower)
-   - Vérifie le code DU TRAVAILLEUR: employes.activationCode (fallback: code/activation)
-   - Crée l’utilisateur Auth OU met à jour son mot de passe si déjà existant
-   - Marque le doc employé comme activé + écrit uid + retire activationCode
+   - PAS besoin d’être connecté
+   - Vérifie que l’email existe dans "employes"
+   - Vérifie le code d’activation
+   - Crée ou met à jour l’utilisateur Auth
+   - Marque le doc employé comme activé
+   - ✅ crée aussi users/{uid} pour les règles Storage
+   - ✅ ajoute custom claims
 */
 exports.activateAccount = onCall(async (request) => {
   try {
@@ -327,6 +321,13 @@ exports.activateAccount = onCall(async (request) => {
     }
 
     const now = admin.firestore.Timestamp.now();
+    const role =
+      empData.isAdmin === true
+        ? "admin"
+        : empData.isRH === true
+        ? "rh"
+        : "user";
+
     await empRef.set(
       {
         uid: userRecord.uid,
@@ -336,6 +337,28 @@ exports.activateAccount = onCall(async (request) => {
       },
       { merge: true }
     );
+
+    await db.collection("users").doc(userRecord.uid).set(
+      {
+        uid: userRecord.uid,
+        empId: empDoc.id,
+        nom: empData.nom || "",
+        email: email,
+        emailLower: email,
+        role,
+        isAdmin: empData.isAdmin === true,
+        isRH: empData.isRH === true,
+        active: true,
+        activatedAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+
+    await admin.auth().setCustomUserClaims(userRecord.uid, {
+      role,
+      isAdmin: empData.isAdmin === true,
+    });
 
     return { ok: true, uid: userRecord.uid };
   } catch (err) {
@@ -347,14 +370,7 @@ exports.activateAccount = onCall(async (request) => {
 
 /* =========================
    ✅ Send Invoice Email (Brevo SMTP)
-   =========================
-   Attendu:
-   - projetId (requis si pdfPath absent)
-   - toEmail (requis): string OU array
-   - subject (optionnel)
-   - text (optionnel)
-   - pdfPath (optionnel) ex: "factures/ABC.pdf"
-*/
+   ========================= */
 exports.sendInvoiceEmail = onCall(
   { secrets: [BREVO_SMTP_USER, BREVO_SMTP_PASS, MAIL_FROM] },
   async (request) => {
@@ -449,14 +465,7 @@ exports.sendInvoiceEmail = onCall(
 
 /* =========================
    ✅ Send Other Task Close Email (Brevo SMTP)
-   =========================
-   Attendu:
-   - otherId (optionnel si pdfPath fourni)
-   - toEmail (requis): string OU array
-   - subject (optionnel)
-   - text (optionnel)
-   - pdfPath (optionnel) ex: "autresProjetsFermes/ABC.pdf"
-*/
+   ========================= */
 exports.sendOtherTaskCloseEmail = onCall(
   { secrets: [BREVO_SMTP_USER, BREVO_SMTP_PASS, MAIL_FROM] },
   async (request) => {
@@ -562,12 +571,7 @@ exports.sendOtherTaskCloseEmail = onCall(
 
 /* =========================
    ✅ Auto-dépunch de tous les employés à 17h (America/Toronto)
-   =========================
-   But:
-   - Fermer TOUS les segments employé ouverts (end=null) pour aujourd'hui
-   - Fermer les segments correspondants côté projets et autres tâches
-   - Mettre employes/{empId}/timecards/{day}.end = now
-*/
+   ========================= */
 function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,

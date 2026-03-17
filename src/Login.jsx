@@ -1,5 +1,4 @@
-// src/Login.jsx
-import { useEffect, useState } from "react"; // ✅ useEffect ajouté
+import { useEffect, useState } from "react";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { auth, functions } from "./firebaseConfig";
@@ -11,7 +10,6 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  // Activation
   const [code, setCode] = useState("");
   const [newPass, setNewPass] = useState("");
   const [newPass2, setNewPass2] = useState("");
@@ -20,7 +18,6 @@ export default function Login() {
   const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // ✅ Message 1 fois après "kick" (mise à jour)
   useEffect(() => {
     try {
       const flag = window.localStorage?.getItem("sessionKickMsg");
@@ -35,11 +32,13 @@ export default function Login() {
     e.preventDefault();
     setBusy(true);
     setError("");
+    setInfo("");
 
     const emailClean = (email || "").trim().toLowerCase();
 
     try {
-      await signInWithEmailAndPassword(auth, emailClean, password);
+      const cred = await signInWithEmailAndPassword(auth, emailClean, password);
+      await cred.user.getIdToken(true);
     } catch (err) {
       setError(mapError(err?.code, err?.message));
     } finally {
@@ -51,6 +50,8 @@ export default function Login() {
     e.preventDefault();
     setBusy(true);
     setError("");
+    setInfo("");
+
     const emailClean = (email || "").trim().toLowerCase();
     const codeClean = (code || "").trim();
     const p1 = (newPass || "").trim();
@@ -92,8 +93,8 @@ export default function Login() {
       setNewPass2("");
       setCode("");
 
-      // Option: auto-login direct
-      await signInWithEmailAndPassword(auth, emailClean, p1);
+      const cred = await signInWithEmailAndPassword(auth, emailClean, p1);
+      await cred.user.getIdToken(true);
     } catch (err) {
       setError(mapError(err?.code, err?.message));
     } finally {
@@ -225,7 +226,6 @@ function mapError(code, message) {
     "auth/wrong-password": "Mot de passe incorrect.",
     "auth/too-many-requests": "Trop d’essais. Réessaie plus tard.",
 
-    // Cloud Function
     "functions/invalid-argument": "Infos invalides.",
     "functions/permission-denied": "Accès refusé.",
     "functions/not-found": "Email introuvable/ non autorisé.",
@@ -237,7 +237,6 @@ function mapError(code, message) {
 
   if (code && messages[code]) return messages[code];
 
-  // ✅ afficher le message serveur s'il existe (souvent le vrai texte de HttpsError)
   if (typeof message === "string" && message.trim()) {
     return message.replace(/^FirebaseError:\s*/i, "").trim();
   }

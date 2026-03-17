@@ -657,9 +657,11 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
 /* ---------------------- Popup DOCS Manager ---------------------- */
 function PopupDocsManager({ open, onClose, projet }) {
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [files, setFiles] = useState([]);
   const inputRef = useRef(null);
+  const reqIdRef = useRef(0);
 
   const syncPdfCountExact = async (count) => {
     if (!projet?.id) return;
@@ -671,39 +673,55 @@ function PopupDocsManager({ open, onClose, projet }) {
   };
 
   useEffect(() => {
-    if (!open || !projet?.id) return;
-    let cancelled = false;
+    if (!open || !projet?.id) {
+      setFiles([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    const myReqId = ++reqIdRef.current;
+
+    // ✅ IMPORTANT: vider immédiatement pour ne jamais voir les docs du projet précédent
+    setFiles([]);
+    setError(null);
+    setLoading(true);
 
     (async () => {
       try {
         const base = storageRef(storage, `projets/${projet.id}/pdfs`);
-        const res = await listAll(base).catch(() => ({ items: [] }));
+        const res = await listAll(base);
+
         const entries = await Promise.all(
           (res.items || []).map(async (itemRef) => {
             const url = await getDownloadURL(itemRef);
-            const name = itemRef.name;
-            return { name, url };
+            return {
+              name: itemRef.name,
+              url,
+            };
           })
         );
 
+        // ✅ si entre-temps on a changé de projet, on ignore cette réponse
+        if (reqIdRef.current !== myReqId) return;
+
         const sorted = entries.sort((a, b) => a.name.localeCompare(b.name));
-        if (!cancelled) setFiles(sorted);
+        setFiles(sorted);
 
         const current = Number(projet?.pdfCount ?? 0);
-        if (!cancelled && sorted.length !== current) {
+        if (sorted.length !== current) {
           await syncPdfCountExact(sorted.length);
         }
       } catch (e) {
-        if (!cancelled) {
-          console.error(e);
-          setError(e?.message || String(e));
+        if (reqIdRef.current !== myReqId) return;
+        console.error(e);
+        setError(e?.message || String(e));
+      } finally {
+        if (reqIdRef.current === myReqId) {
+          setLoading(false);
         }
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [open, projet?.id]);
 
   const pickFile = () => inputRef.current?.click();
@@ -722,6 +740,7 @@ function PopupDocsManager({ open, onClose, projet }) {
 
     setBusy(true);
     setError(null);
+
     try {
       const safeName = file.name.replace(/[^\w.\-()]/g, "_");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -748,8 +767,10 @@ function PopupDocsManager({ open, onClose, projet }) {
   const onDelete = async (name) => {
     if (!projet?.id) return;
     if (!window.confirm(`Supprimer « ${name} » ?`)) return;
+
     setBusy(true);
     setError(null);
+
     try {
       const fileRef = storageRef(storage, `projets/${projet.id}/pdfs/${name}`);
       await deleteObject(fileRef);
@@ -816,9 +837,10 @@ function PopupDocsManager({ open, onClose, projet }) {
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-          <button onClick={pickFile} style={btnPrimary} disabled={busy}>
+          <button onClick={pickFile} style={btnPrimary} disabled={busy || loading}>
             {busy ? "Téléversement..." : "Ajouter un document"}
           </button>
+
           <input
             ref={inputRef}
             type="file"
@@ -829,38 +851,61 @@ function PopupDocsManager({ open, onClose, projet }) {
         </div>
 
         <div style={{ fontWeight: 900, margin: "6px 0 10px", fontSize: 18 }}>Documents du projet</div>
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}>
+
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            border: "1px solid #eee",
+            borderRadius: 14,
+            fontSize: 18,
+          }}
+        >
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={thCenter}>Nom</th>
               <th style={thCenter}>Actions</th>
             </tr>
           </thead>
+
           <tbody>
-            {files.map((f, i) => (
-              <tr key={i}>
-                <td style={{ ...tdCenter, wordBreak: "break-word" }}>{f.name}</td>
-                <td style={tdCenter}>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
-                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
-                      Ouvrir
-                    </a>
-                    <button onClick={() => navigator.clipboard?.writeText(f.url)} style={btnSecondary} title="Copier l’URL">
-                      Copier l’URL
-                    </button>
-                    <button onClick={() => onDelete(f.name)} style={btnDanger} disabled={busy}>
-                      Supprimer
-                    </button>
-                  </div>
+            {loading ? (
+              <tr>
+                <td colSpan={2} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 18 }}>
+                  Chargement des documents...
                 </td>
               </tr>
-            ))}
-            {files.length === 0 && (
+            ) : files.length === 0 ? (
               <tr>
                 <td colSpan={2} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 18 }}>
                   Aucun document.
                 </td>
               </tr>
+            ) : (
+              files.map((f, i) => (
+                <tr key={i}>
+                  <td style={{ ...tdCenter, wordBreak: "break-word" }}>{f.name}</td>
+                  <td style={tdCenter}>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+                      <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
+                        Ouvrir
+                      </a>
+
+                      <button
+                        onClick={() => navigator.clipboard?.writeText(f.url)}
+                        style={btnSecondary}
+                        title="Copier l’URL"
+                      >
+                        Copier l’URL
+                      </button>
+
+                      <button onClick={() => onDelete(f.name)} style={btnDanger} disabled={busy}>
+                        Supprimer
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>
@@ -1566,7 +1611,12 @@ export default function PageProjets({ onOpenMaterial }) {
         }}
       />
 
-      <PopupDocsManager open={pdfMgr.open} onClose={closePDF} projet={pdfMgr.projet} />
+      <PopupDocsManager
+        key={pdfMgr.projet?.id || "no-project"}
+        open={pdfMgr.open}
+        onClose={closePDF}
+        projet={pdfMgr.projet}
+      />
 
       {materialProjId && <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={() => {}} />}
 
