@@ -572,6 +572,7 @@ exports.sendOtherTaskCloseEmail = onCall(
 /* =========================
    ✅ Auto-dépunch de tous les employés à 17h (America/Toronto)
    ========================= */
+
 function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -579,6 +580,44 @@ function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
     month: "2-digit",
     day: "2-digit",
   }).format(date);
+}
+
+function getTorontoCutoff17Timestamp(baseDate = new Date()) {
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Toronto",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(baseDate);
+
+  const year = dateParts.find((p) => p.type === "year")?.value;
+  const month = dateParts.find((p) => p.type === "month")?.value;
+  const day = dateParts.find((p) => p.type === "day")?.value;
+
+  if (!year || !month || !day) {
+    throw new Error("Impossible de calculer la date Toronto pour le cutoff 17h.");
+  }
+
+  // On prend midi UTC ce jour-là pour lire proprement l'offset réel de Toronto
+  // (gère automatiquement heure avancée / heure normale)
+  const probe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12, 0, 0));
+
+  const tzParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Toronto",
+    timeZoneName: "longOffset",
+  }).formatToParts(probe);
+
+  const offsetRaw = tzParts.find((p) => p.type === "timeZoneName")?.value || "GMT-04:00";
+  const isoOffset = offsetRaw.replace("GMT", "");
+
+  const iso = `${year}-${month}-${day}T17:00:00${isoOffset}`;
+  return admin.firestore.Timestamp.fromDate(new Date(iso));
+}
+
+function getStartMillis(data) {
+  const start = data?.start;
+  if (!start || typeof start.toMillis !== "function") return null;
+  return start.toMillis();
 }
 
 async function commitInChunks(db, ops, chunkSize = 450) {
@@ -590,31 +629,71 @@ async function commitInChunks(db, ops, chunkSize = 450) {
   }
 }
 
-async function closeProjSegmentsForEmp(db, projId, empId, dayKey, nowTs) {
-  const segsRef = db.collection("projets").doc(projId).collection("timecards").doc(dayKey).collection("segments");
+async function closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs) {
+  const segsRef = db
+    .collection("projets")
+    .doc(projId)
+    .collection("timecards")
+    .doc(dayKey)
+    .collection("segments");
 
   const snap = await segsRef.where("empId", "==", empId).where("end", "==", null).get();
   if (snap.empty) return 0;
 
-  const ops = snap.docs.map((d) => ({
-    ref: d.ref,
-    data: { end: nowTs, updatedAt: nowTs },
-  }));
+  const cutoffMs = cutoffTs.toMillis();
+
+  const ops = snap.docs
+    .filter((d) => {
+      const data = d.data() || {};
+      const startMs = getStartMillis(data);
+      if (startMs == null) return false;
+      if (startMs > cutoffMs) return false;
+      return true;
+    })
+    .map((d) => ({
+      ref: d.ref,
+      data: {
+        end: cutoffTs,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+    }));
+
+  if (!ops.length) return 0;
 
   await commitInChunks(db, ops);
   return ops.length;
 }
 
-async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, nowTs) {
-  const segsRef = db.collection("autresProjets").doc(otherId).collection("timecards").doc(dayKey).collection("segments");
+async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs) {
+  const segsRef = db
+    .collection("autresProjets")
+    .doc(otherId)
+    .collection("timecards")
+    .doc(dayKey)
+    .collection("segments");
 
   const snap = await segsRef.where("empId", "==", empId).where("end", "==", null).get();
   if (snap.empty) return 0;
 
-  const ops = snap.docs.map((d) => ({
-    ref: d.ref,
-    data: { end: nowTs, updatedAt: nowTs },
-  }));
+  const cutoffMs = cutoffTs.toMillis();
+
+  const ops = snap.docs
+    .filter((d) => {
+      const data = d.data() || {};
+      const startMs = getStartMillis(data);
+      if (startMs == null) return false;
+      if (startMs > cutoffMs) return false;
+      return true;
+    })
+    .map((d) => ({
+      ref: d.ref,
+      data: {
+        end: cutoffTs,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+    }));
+
+  if (!ops.length) return 0;
 
   await commitInChunks(db, ops);
   return ops.length;
@@ -627,8 +706,15 @@ exports.autoDepunchAllAt17 = onSchedule(
   },
   async () => {
     const db = admin.firestore();
-    const nowTs = admin.firestore.Timestamp.now();
-    const dayKey = dayKeyInTZ(new Date(), "America/Toronto");
+    const now = new Date();
+    const cutoffTs = getTorontoCutoff17Timestamp(now);
+    const cutoffMs = cutoffTs.toMillis();
+    const dayKey = dayKeyInTZ(now, "America/Toronto");
+
+    logger.info("autoDepunchAllAt17 START", {
+      dayKey,
+      cutoffIso: cutoffTs.toDate().toISOString(),
+    });
 
     const empsSnap = await db.collection("employes").get();
 
@@ -642,15 +728,47 @@ exports.autoDepunchAllAt17 = onSchedule(
       const empData = empDoc.data() || {};
 
       try {
-        const empSegsRef = db.collection("employes").doc(empId).collection("timecards").doc(dayKey).collection("segments");
-        const openEmpSnap = await empSegsRef.where("end", "==", null).get();
-        const openEmpDocs = openEmpSnap.docs;
+        const empSegsRef = db
+          .collection("employes")
+          .doc(empId)
+          .collection("timecards")
+          .doc(dayKey)
+          .collection("segments");
 
-        if (openEmpDocs.length === 0) continue;
+        const openEmpSnap = await empSegsRef.where("end", "==", null).get();
+
+        const eligibleOpenEmpDocs = openEmpSnap.docs.filter((d) => {
+          const data = d.data() || {};
+          const startMs = getStartMillis(data);
+
+          if (startMs == null) {
+            logger.warn("autoDepunchAllAt17 skip emp seg: missing start", {
+              empId,
+              segId: d.id,
+              dayKey,
+            });
+            return false;
+          }
+
+          if (startMs > cutoffMs) {
+            logger.info("autoDepunchAllAt17 skip emp seg: started after cutoff", {
+              empId,
+              segId: d.id,
+              dayKey,
+              startIso: data.start?.toDate?.()?.toISOString?.() || null,
+              cutoffIso: cutoffTs.toDate().toISOString(),
+            });
+            return false;
+          }
+
+          return true;
+        });
+
+        if (eligibleOpenEmpDocs.length === 0) continue;
 
         let jobTokens = Array.from(
           new Set(
-            openEmpDocs
+            eligibleOpenEmpDocs
               .map((d) => (d.data()?.jobId ? String(d.data().jobId) : ""))
               .filter((s) => s && (s.startsWith("proj:") || s.startsWith("other:")))
           )
@@ -666,25 +784,49 @@ exports.autoDepunchAllAt17 = onSchedule(
         for (const t of jobTokens) {
           if (t.startsWith("proj:")) {
             const projId = t.slice(5);
-            closedProjSegsTotal += await closeProjSegmentsForEmp(db, projId, empId, dayKey, nowTs);
+            if (projId) {
+              closedProjSegsTotal += await closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs);
+            }
           } else if (t.startsWith("other:")) {
             const otherId = t.slice(6);
-            closedOtherSegsTotal += await closeOtherSegmentsForEmp(db, otherId, empId, dayKey, nowTs);
+            if (otherId) {
+              closedOtherSegsTotal += await closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs);
+            }
           }
         }
 
-        const ops = openEmpDocs.map((d) => ({
+        const ops = eligibleOpenEmpDocs.map((d) => ({
           ref: d.ref,
-          data: { end: nowTs, updatedAt: nowTs },
+          data: {
+            end: cutoffTs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
         }));
+
         await commitInChunks(db, ops);
         closedEmpSegsTotal += ops.length;
 
-        await db.collection("employes").doc(empId).collection("timecards").doc(dayKey).set({ end: nowTs, updatedAt: nowTs }, { merge: true });
+        await db
+          .collection("employes")
+          .doc(empId)
+          .collection("timecards")
+          .doc(dayKey)
+          .set(
+            {
+              end: cutoffTs,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
 
         empsTouched += 1;
 
-        logger.info(`autoDepunchAllAt17: depunch emp=${empId} segs=${ops.length} tokens=${jobTokens.join(",")}`);
+        logger.info("autoDepunchAllAt17 depunch employee OK", {
+          empId,
+          segsClosed: ops.length,
+          tokens: jobTokens,
+          cutoffIso: cutoffTs.toDate().toISOString(),
+        });
       } catch (e) {
         logger.error(`autoDepunchAllAt17 FAILED (${empId}):`, e?.message || e);
       }
