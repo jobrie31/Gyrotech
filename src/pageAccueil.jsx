@@ -76,7 +76,7 @@ import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
 
 // ✅ BUILD TAG (debug cache / versions)
-const APP_BUILD = "2.4";
+const APP_BUILD = "2.5";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {

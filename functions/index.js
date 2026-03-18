@@ -655,6 +655,8 @@ async function closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs) {
       data: {
         end: cutoffTs,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        closedBy: "auto_depunch_17",
+        closedReason: "cutoff_17",
       },
     }));
 
@@ -690,6 +692,8 @@ async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs) {
       data: {
         end: cutoffTs,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        closedBy: "auto_depunch_17",
+        closedReason: "cutoff_17",
       },
     }));
 
@@ -800,6 +804,8 @@ exports.autoDepunchAllAt17 = onSchedule(
           data: {
             end: cutoffTs,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            closedBy: "auto_depunch_17",
+            closedReason: "cutoff_17",
           },
         }));
 
@@ -815,6 +821,8 @@ exports.autoDepunchAllAt17 = onSchedule(
             {
               end: cutoffTs,
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              closedBy: "auto_depunch_17",
+              closedReason: "cutoff_17",
             },
             { merge: true }
           );
