@@ -178,6 +178,113 @@ function BroadcastPopup({ open, text, isAuthor, onSeen, onCloseAdminEdit, onClos
   );
 }
 
+
+function AlarmPopup({ open, text, onClose }) {
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.58)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 25000,
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(900px, 95vw)",
+          background: "#fff7ed",
+          borderRadius: 28,
+          padding: "26px 28px 30px",
+          boxShadow: "0 28px 90px rgba(0,0,0,0.42)",
+          border: "4px solid #ea580c",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+          <button
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 30,
+              fontWeight: 1000,
+              cursor: "pointer",
+              color: "#7c2d12",
+              lineHeight: 1,
+            }}
+            title="Fermer"
+          >
+            ×
+          </button>
+        </div>
+
+        <div
+          style={{
+            fontSize: 52,
+            fontWeight: 1000,
+            marginBottom: 16,
+          }}
+        >
+          ⏰
+        </div>
+
+        <div
+          style={{
+            fontSize: 38,
+            fontWeight: 1000,
+            color: "#7c2d12",
+            marginBottom: 10,
+          }}
+        >
+          ALARME
+        </div>
+
+        <div
+          style={{
+            fontSize: 34,
+            fontWeight: 1000,
+            lineHeight: 1.25,
+            color: "#111827",
+            background: "#ffffff",
+            border: "2px solid #fdba74",
+            borderRadius: 20,
+            padding: "22px 18px",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {text}
+        </div>
+
+        <div style={{ marginTop: 22 }}>
+          <button
+            onClick={onClose}
+            style={{
+              border: "2px solid #9a3412",
+              background: "#ea580c",
+              color: "#fff",
+              borderRadius: 14,
+              padding: "14px 28px",
+              fontSize: 24,
+              fontWeight: 1000,
+              cursor: "pointer",
+            }}
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState(getRouteFromHash());
 
@@ -208,6 +315,101 @@ export default function App() {
   // UI admin/RH
   const [broadcastEditOpen, setBroadcastEditOpen] = useState(false);
   const [broadcastDraft, setBroadcastDraft] = useState("");
+
+  const [alarmItems, setAlarmItems] = useState([]);
+  const [alarmPopupOpen, setAlarmPopupOpen] = useState(false);
+  const [alarmPopupText, setAlarmPopupText] = useState("");
+
+
+  function getTorontoNowParts(date = new Date()) {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Toronto",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+
+    const parts = fmt.formatToParts(date);
+    const get = (type) => parts.find((p) => p.type === type)?.value || "";
+
+    return {
+      year: get("year"),
+      month: get("month"),
+      day: get("day"),
+      hour: get("hour"),
+      minute: get("minute"),
+      weekday: get("weekday"),
+    };
+  }
+
+  function isWeekdayShort(s) {
+    return ["Mon", "Tue", "Wed", "Thu", "Fri",'Sat'].includes(String(s || ""));
+  }
+
+  function playAlarmSound() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+
+      const ctx = new AudioCtx();
+
+      const startHorn = async () => {
+        try {
+          if (ctx.state === "suspended") {
+            await ctx.resume();
+          }
+
+          const now = ctx.currentTime;
+
+          const makeHorn = (start, freq, duration) => {
+            const osc1 = ctx.createOscillator();
+            const osc2 = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc1.type = "sawtooth";
+            osc2.type = "square";
+
+            osc1.frequency.value = freq;
+            osc2.frequency.value = freq * 1.01;
+
+            gain.gain.setValueAtTime(0.0001, start);
+            gain.gain.exponentialRampToValueAtTime(0.18, start + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+            osc1.connect(gain);
+            osc2.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc1.start(start);
+            osc2.start(start);
+
+            osc1.stop(start + duration);
+            osc2.stop(start + duration);
+          };
+
+          // genre “PUN… PUNNN”
+          makeHorn(now + 0.00, 300, 0.20);
+          makeHorn(now + 0.38, 300, 0.46);
+        } catch (e) {
+          console.error("alarm horn error:", e);
+        }
+
+        setTimeout(() => {
+          try {
+            ctx.close();
+          } catch {}
+        }, 2000);
+      };
+
+      startHorn();
+    } catch (e) {
+      console.error("playAlarmSound error:", e);
+    }
+  }
 
   // router
   useEffect(() => {
@@ -611,6 +813,85 @@ export default function App() {
     }
   };
 
+
+  useEffect(() => {
+    if (!user) {
+      setAlarmItems([]);
+      return;
+    }
+
+    const ref = doc(db, "config", "alarmes");
+
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const data = snap.exists() ? snap.data() || {} : {};
+        const list = Array.isArray(data.items) ? data.items : [];
+
+        const clean = list
+          .map((x) => ({
+            id: String(x.id || ""),
+            label: String(x.label || "").trim(),
+            time: String(x.time || "").trim(),
+            active: x.active !== false,
+          }))
+          .filter((x) => x.id && x.label && /^\d{2}:\d{2}$/.test(x.time));
+
+        setAlarmItems(clean);
+      },
+      (err) => {
+        console.error("alarmes listener error:", err);
+        setAlarmItems([]);
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const tick = () => {
+      try {
+        const now = getTorontoNowParts(new Date());
+
+        if (!isWeekdayShort(now.weekday)) return;
+
+        const hhmm = `${now.hour}:${now.minute}`;
+        const dateKey = `${now.year}-${now.month}-${now.day}`;
+        const minuteKey = `${dateKey}_${hhmm}`;
+        const matches = alarmItems.filter((a) => a.active && a.time === hhmm);
+
+        if (!matches.length) return;
+
+        const storageKey = `alarmSeen_${String(user.uid || "").toLowerCase()}`;
+        const lastMinuteKey = window.localStorage?.getItem(storageKey) || "";
+
+        if (lastMinuteKey === minuteKey) return;
+
+        const text =
+          matches.length === 1
+            ? matches[0].label
+            : matches.map((x) => `• ${x.label}`).join("\n");
+
+        setAlarmPopupText(text);
+        setAlarmPopupOpen(true);
+        playAlarmSound();
+
+        try {
+          window.localStorage?.setItem(storageKey, minuteKey);
+        } catch {}
+      } catch (e) {
+        console.error("alarm tick error:", e);
+      }
+    };
+
+    tick();
+    const timerId = window.setInterval(tick, 15000);
+
+    return () => window.clearInterval(timerId);
+  }, [user?.uid, alarmItems]);
+
   /* ===================== UI ===================== */
   if (user === undefined) {
     return <div style={{ padding: 24 }}>Chargement...</div>;
@@ -811,6 +1092,12 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      <AlarmPopup
+        open={alarmPopupOpen}
+        text={alarmPopupText}
+        onClose={() => setAlarmPopupOpen(false)}
+      />
 
       <BroadcastPopup
         open={showBroadcastPopup}

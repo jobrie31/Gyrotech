@@ -5,6 +5,7 @@ import { db, auth } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "./firebaseConfig";
+import PageAlarmesAdmin from "./PageAlarmesAdmin";
 import {
   doc,
   getDoc,
@@ -1528,6 +1529,13 @@ export default function PageReglagesAdmin() {
           );
         })()}
       </section>
+
+      {/* ===================== 1.5) ALARMES ===================== */}
+      <section style={section}>
+        <h3 style={h3Bold}>Alarmes</h3>
+        <PageAlarmesAdmin />
+      </section>
+
 
       {/* ===================== 2) FACTURATION ===================== */}
       <section style={section}>
