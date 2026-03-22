@@ -60,7 +60,7 @@ function parseISO_YYYYMMDD(v) {
 function startOfSunday(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
-  const day = x.getDay(); // 0=dim
+  const day = x.getDay();
   x.setDate(x.getDate() - day);
   return x;
 }
@@ -94,6 +94,23 @@ function fallbackNameFromUser(user, initialEmploye = "Jo") {
   }
 
   return initialEmploye;
+}
+
+function makeSafeUploadName(file) {
+  const original = String(file?.name || "fichier").trim();
+  const safeBase = original.replace(/[^\w.\-()]/g, "_");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+  const lowerType = String(file?.type || "").toLowerCase();
+  const hasExt = /\.[a-z0-9]{2,6}$/i.test(safeBase);
+
+  if (hasExt) return `${stamp}_${safeBase}`;
+  if (lowerType === "application/pdf") return `${stamp}_${safeBase}.pdf`;
+  if (lowerType.startsWith("image/")) {
+    const ext = (lowerType.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "");
+    return `${stamp}_${safeBase}.${ext}`;
+  }
+  return `${stamp}_${safeBase}`;
 }
 
 /* ===================== ✅ PP helpers (même logique que HistoriqueEmploye) ===================== */
@@ -151,7 +168,7 @@ function remboursementPdfFolder(year, pp, id) {
   return `depensesRemboursements/${String(year)}/${String(pp)}/items/${String(id)}/pdfs`;
 }
 
-/* ===================== Popup PDF Manager (Remboursement) ===================== */
+/* ===================== Popup pièces jointes ===================== */
 function PopupPDFManagerRemboursement({
   open,
   onClose,
@@ -164,7 +181,9 @@ function PopupPDFManagerRemboursement({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [files, setFiles] = useState([]);
-  const inputRef = useRef(null);
+
+  const inputAnyRef = useRef(null);
+  const inputCameraRef = useRef(null);
 
   const year = recRef?.year;
   const pp = recRef?.pp;
@@ -222,15 +241,18 @@ function PopupPDFManagerRemboursement({
     };
   }, [open, year, pp, id, refreshKey]);
 
-  const pickFile = () => inputRef.current?.click();
+  const pickAnyFile = () => inputAnyRef.current?.click();
+  const pickCamera = () => inputCameraRef.current?.click();
 
-  const onPicked = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
+  const handlePickedFile = async (file) => {
     if (!file) return;
 
-    if (file.type !== "application/pdf") {
-      setError("Sélectionne un PDF (.pdf).");
+    const type = String(file.type || "").toLowerCase();
+    const isPdf = type === "application/pdf";
+    const isImage = type.startsWith("image/");
+
+    if (!isPdf && !isImage) {
+      setError("Sélectionne un PDF ou une image/photo.");
       return;
     }
 
@@ -242,15 +264,16 @@ function PopupPDFManagerRemboursement({
 
     setBusy(true);
     setError(null);
-    try {
-      const safeName = file.name.replace(/[^\w.\-()]/g, "_");
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const name = `${stamp}_${safeName}`;
 
+    try {
+      const name = makeSafeUploadName(file);
       const path = `${remboursementPdfFolder(year, pp, id)}/${name}`;
       const dest = storageRef(storage, path);
 
-      await uploadBytes(dest, file, { contentType: "application/pdf" });
+      await uploadBytes(dest, file, {
+        contentType: file.type || (isPdf ? "application/pdf" : "application/octet-stream"),
+      });
+
       const url = await getDownloadURL(dest);
 
       setFiles((prev) => {
@@ -264,6 +287,18 @@ function PopupPDFManagerRemboursement({
     } finally {
       setBusy(false);
     }
+  };
+
+  const onPickedAny = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    await handlePickedFile(file);
+  };
+
+  const onPickedCamera = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    await handlePickedFile(file);
   };
 
   const onDelete = async (name) => {
@@ -323,7 +358,7 @@ function PopupPDFManagerRemboursement({
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 1000, fontSize: 22 }}>PDF – Remboursement</div>
+          <div style={{ fontWeight: 1000, fontSize: 22 }}>Pièces jointes – Remboursement</div>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -349,7 +384,7 @@ function PopupPDFManagerRemboursement({
               fontSize: 13,
             }}
           >
-            Tu peux ajouter tes PDFs tout de suite. Ils seront <b>téléversés automatiquement</b> dès que tu enregistres le remboursement.
+            Tu peux ajouter tes PDFs ou photos tout de suite. Ils seront <b>téléversés automatiquement</b> dès que tu enregistres le remboursement.
           </div>
         ) : null}
 
@@ -369,9 +404,9 @@ function PopupPDFManagerRemboursement({
           </div>
         ) : null}
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
           <button
-            onClick={pickFile}
+            onClick={pickAnyFile}
             disabled={busy}
             style={{
               border: "2px solid #0f172a",
@@ -384,10 +419,42 @@ function PopupPDFManagerRemboursement({
               opacity: busy ? 0.6 : 1,
             }}
           >
-            {busy ? "Téléversement..." : "Ajouter un PDF"}
+            {busy ? "Téléversement..." : "Ajouter PDF ou photo"}
           </button>
 
-          <input ref={inputRef} type="file" accept="application/pdf" onChange={onPicked} style={{ display: "none" }} />
+          <button
+            onClick={pickCamera}
+            disabled={busy}
+            style={{
+              border: "2px solid #2563eb",
+              background: "#2563eb",
+              color: "#fff",
+              borderRadius: 12,
+              padding: "10px 12px",
+              fontWeight: 1000,
+              cursor: busy ? "not-allowed" : "pointer",
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            {busy ? "Téléversement..." : "📷 Prendre une photo"}
+          </button>
+
+          <input
+            ref={inputAnyRef}
+            type="file"
+            accept="application/pdf,image/*"
+            onChange={onPickedAny}
+            style={{ display: "none" }}
+          />
+
+          <input
+            ref={inputCameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={onPickedCamera}
+            style={{ display: "none" }}
+          />
 
           <div style={{ fontWeight: 900, color: "#64748b" }}>{totalCount} fichier(s)</div>
         </div>
@@ -404,7 +471,9 @@ function PopupPDFManagerRemboursement({
               <tr key={`pending_${p.name}`}>
                 <td style={{ padding: 10, borderBottom: "1px solid #eee", wordBreak: "break-word" }}>
                   <div style={{ fontWeight: 900 }}>{p.name}</div>
-                  <div style={{ fontSize: 12, fontWeight: 900, color: "#b45309" }}>En attente (sera upload à l’enregistrement)</div>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "#b45309" }}>
+                    En attente (sera upload à l’enregistrement)
+                  </div>
                 </td>
                 <td style={{ padding: 10, borderBottom: "1px solid #eee", textAlign: "center" }}>
                   <div style={{ display: "inline-flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
@@ -490,7 +559,7 @@ function PopupPDFManagerRemboursement({
             {totalCount === 0 ? (
               <tr>
                 <td colSpan={2} style={{ padding: 14, color: "#666", textAlign: "center" }}>
-                  Aucun PDF.
+                  Aucun fichier.
                 </td>
               </tr>
             ) : null}
@@ -675,14 +744,17 @@ export default function FeuilleDepensesExcel({ isAdmin = false, defaultTaux = 0.
         });
       } catch {}
     };
-  }, []);
+  }, [pendingPdfs]);
 
   const addPendingPdf = (file) => {
-    const safeName = String(file?.name || "document.pdf").replace(/[^\w.\-()]/g, "_");
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const name = `${stamp}_${safeName}`;
+    if (!file) return;
+
+    const name = makeSafeUploadName(file);
     const localUrl = URL.createObjectURL(file);
-    setPendingPdfs((prev) => [...(prev || []), { name, file, localUrl }].sort((a, b) => a.name.localeCompare(b.name)));
+
+    setPendingPdfs((prev) =>
+      [...(prev || []), { name, file, localUrl }].sort((a, b) => a.name.localeCompare(b.name))
+    );
   };
 
   const removePendingPdf = (name) => {
@@ -807,7 +879,9 @@ export default function FeuilleDepensesExcel({ isAdmin = false, defaultTaux = 0.
     await Promise.all(
       list.map(async (p) => {
         const dest = storageRef(storage, `${folder}/${p.name}`);
-        await uploadBytes(dest, p.file, { contentType: "application/pdf" });
+        await uploadBytes(dest, p.file, {
+          contentType: p.file?.type || "application/octet-stream",
+        });
       })
     );
 
@@ -1119,7 +1193,7 @@ export default function FeuilleDepensesExcel({ isAdmin = false, defaultTaux = 0.
                   </td>
 
                   <td style={styles.listTd}>
-                    <span style={pdfBadgeStyle} title={hasPdf ? "PDF présent" : "Aucun PDF"}>
+                    <span style={pdfBadgeStyle} title={hasPdf ? "Pièce jointe présente" : "Aucune pièce jointe"}>
                       {hasPdf ? "✓" : "✕"}
                     </span>
                   </td>
@@ -1351,9 +1425,9 @@ export default function FeuilleDepensesExcel({ isAdmin = false, defaultTaux = 0.
                 fontWeight: 1000,
                 cursor: "pointer",
               }}
-              title="Gérer les PDFs"
+              title="Gérer les pièces jointes"
             >
-              📄 Ajouter un PDF
+              📎 Gérer pièces jointes
             </button>
           </div>
 

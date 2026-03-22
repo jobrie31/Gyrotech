@@ -414,7 +414,7 @@ export default function App() {
         osc2.frequency.setValueAtTime(freq * 1.01, start);
 
         gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.35, start + 0.03);
         gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
 
         osc1.connect(gain);
@@ -428,7 +428,6 @@ export default function App() {
         osc2.stop(start + duration);
       };
 
-      // son un peu plus aigu, style "pun... punnn"
       makeHorn(now + 0.00, 420, 0.18);
       makeHorn(now + 0.32, 420, 0.42);
     } catch (e) {
@@ -895,6 +894,9 @@ export default function App() {
     const tick = () => {
       try {
         const now = getTorontoNowParts(new Date());
+
+        const isWeekday = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(String(now.weekday || ""));
+        if (!isWeekday) return;
 
         const hhmm = `${now.hour}:${now.minute}`;
         const dateKey = `${now.year}-${now.month}-${now.day}`;
