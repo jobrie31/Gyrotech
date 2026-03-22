@@ -1,6 +1,4 @@
-// App.jsx
-
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebaseConfig";
 
@@ -178,7 +176,6 @@ function BroadcastPopup({ open, text, isAuthor, onSeen, onCloseAdminEdit, onClos
   );
 }
 
-
 function AlarmPopup({ open, text, onClose }) {
   if (!open) return null;
 
@@ -320,6 +317,9 @@ export default function App() {
   const [alarmPopupOpen, setAlarmPopupOpen] = useState(false);
   const [alarmPopupText, setAlarmPopupText] = useState("");
 
+  // ✅ audio Safari/iPhone
+  const audioCtxRef = useRef(null);
+  const audioUnlockedRef = useRef(false);
 
   function getTorontoNowParts(date = new Date()) {
     const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -346,70 +346,112 @@ export default function App() {
     };
   }
 
-  function isWeekdayShort(s) {
-    return ["Mon", "Tue", "Wed", "Thu", "Fri",'Sat'].includes(String(s || ""));
+  function ensureAudioContext() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return null;
+
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioCtx();
+      }
+
+      return audioCtxRef.current;
+    } catch (e) {
+      console.error("ensureAudioContext error:", e);
+      return null;
+    }
+  }
+
+  async function unlockAudio() {
+    try {
+      const ctx = ensureAudioContext();
+      if (!ctx) return false;
+
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      gain.gain.setValueAtTime(0.00001, ctx.currentTime);
+      osc.frequency.value = 440;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.01);
+
+      audioUnlockedRef.current = true;
+      return true;
+    } catch (e) {
+      console.error("unlockAudio error:", e);
+      return false;
+    }
   }
 
   function playAlarmSound() {
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
+      const ctx = ensureAudioContext();
+      if (!ctx) return;
 
-      const ctx = new AudioCtx();
+      if (ctx.state !== "running") {
+        console.warn("AudioContext non débloqué sur cet appareil.");
+        return;
+      }
 
-      const startHorn = async () => {
-        try {
-          if (ctx.state === "suspended") {
-            await ctx.resume();
-          }
+      const now = ctx.currentTime;
 
-          const now = ctx.currentTime;
+      const makeHorn = (start, freq, duration) => {
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        const gain = ctx.createGain();
 
-          const makeHorn = (start, freq, duration) => {
-            const osc1 = ctx.createOscillator();
-            const osc2 = ctx.createOscillator();
-            const gain = ctx.createGain();
+        osc1.type = "sawtooth";
+        osc2.type = "square";
 
-            osc1.type = "sawtooth";
-            osc2.type = "square";
+        osc1.frequency.setValueAtTime(freq, start);
+        osc2.frequency.setValueAtTime(freq * 1.01, start);
 
-            osc1.frequency.value = freq;
-            osc2.frequency.value = freq * 1.01;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
 
-            gain.gain.setValueAtTime(0.0001, start);
-            gain.gain.exponentialRampToValueAtTime(0.18, start + 0.03);
-            gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+        osc1.connect(gain);
+        osc2.connect(gain);
+        gain.connect(ctx.destination);
 
-            osc1.connect(gain);
-            osc2.connect(gain);
-            gain.connect(ctx.destination);
+        osc1.start(start);
+        osc2.start(start);
 
-            osc1.start(start);
-            osc2.start(start);
-
-            osc1.stop(start + duration);
-            osc2.stop(start + duration);
-          };
-
-          // genre “PUN… PUNNN”
-          makeHorn(now + 0.00, 300, 0.20);
-          makeHorn(now + 0.38, 300, 0.46);
-        } catch (e) {
-          console.error("alarm horn error:", e);
-        }
-
-        setTimeout(() => {
-          try {
-            ctx.close();
-          } catch {}
-        }, 2000);
+        osc1.stop(start + duration);
+        osc2.stop(start + duration);
       };
 
-      startHorn();
+      // son un peu plus aigu, style "pun... punnn"
+      makeHorn(now + 0.00, 420, 0.18);
+      makeHorn(now + 0.32, 420, 0.42);
     } catch (e) {
       console.error("playAlarmSound error:", e);
     }
   }
+
+  // ✅ Débloquer l'audio au premier geste utilisateur (important iPhone Safari)
+  useEffect(() => {
+    const tryUnlock = async () => {
+      await unlockAudio();
+    };
+
+    window.addEventListener("touchstart", tryUnlock, { passive: true });
+    window.addEventListener("pointerdown", tryUnlock, { passive: true });
+    window.addEventListener("click", tryUnlock, { passive: true });
+
+    return () => {
+      window.removeEventListener("touchstart", tryUnlock);
+      window.removeEventListener("pointerdown", tryUnlock);
+      window.removeEventListener("click", tryUnlock);
+    };
+  }, []);
 
   // router
   useEffect(() => {
@@ -813,7 +855,6 @@ export default function App() {
     }
   };
 
-
   useEffect(() => {
     if (!user) {
       setAlarmItems([]);
@@ -855,8 +896,6 @@ export default function App() {
       try {
         const now = getTorontoNowParts(new Date());
 
-        if (!isWeekdayShort(now.weekday)) return;
-
         const hhmm = `${now.hour}:${now.minute}`;
         const dateKey = `${now.year}-${now.month}-${now.day}`;
         const minuteKey = `${dateKey}_${hhmm}`;
@@ -887,7 +926,7 @@ export default function App() {
     };
 
     tick();
-    const timerId = window.setInterval(tick, 15000);
+    const timerId = window.setInterval(tick, 10000);
 
     return () => window.clearInterval(timerId);
   }, [user?.uid, alarmItems]);
@@ -1070,6 +1109,26 @@ export default function App() {
               ) : null}
             </>
           ) : null}
+
+          <button
+            type="button"
+            onClick={async () => {
+              await unlockAudio();
+              playAlarmSound();
+            }}
+            style={{
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color: "#0f172a",
+              borderRadius: 10,
+              padding: "4px 10px",
+              fontWeight: 900,
+              cursor: "pointer",
+            }}
+            title="Tester le son d’alarme"
+          >
+            🔊 Tester son
+          </button>
         </div>
 
         <div style={{ justifySelf: "end" }}>
@@ -1196,11 +1255,7 @@ export default function App() {
         subtitle="Clique ici pour actualiser l’application et repartir propre."
       />
 
-      <BurgerMenu
-        pages={pages}
-        isAdmin={isAdmin}
-        isRH={isRH}
-      />
+      <BurgerMenu pages={pages} isAdmin={isAdmin} isRH={isRH} />
 
       {route === "accueil" && !isRH && <PageAccueil />}
       {route === "projets" && !isRH && <PageListeProjet isAdmin={isAdmin} />}

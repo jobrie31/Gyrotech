@@ -4,9 +4,8 @@ import { doc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 
 function buildTimes() {
   const out = [];
-  for (let h = 8; h <= 18; h++) {
-    for (let m = 0; m < 60; m += 5) {
-      if (h === 18 && m > 0) break; // max 18:00
+  for (let h = 0; h <= 23; h++) {
+    for (let m = 0; m < 60; m += 1) {
       const hh = String(h).padStart(2, "0");
       const mm = String(m).padStart(2, "0");
       out.push(`${hh}:${mm}`);
@@ -69,7 +68,8 @@ export default function PageAlarmesAdmin() {
         {
           items: nextItems,
           updatedAt: serverTimestamp(),
-          updatedBy: String(auth?.currentUser?.email || "").trim().toLowerCase() || null,
+          updatedBy:
+            String(auth?.currentUser?.email || "").trim().toLowerCase() || null,
         },
         { merge: true }
       );
@@ -127,7 +127,7 @@ export default function PageAlarmesAdmin() {
   return (
     <div>
       <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-        Alarmes locales dans l’application, du lundi au vendredi, entre 08:00 et 18:00, aux 5 minutes.
+        Alarmes locales dans l’application, à chaque minute, 24 heures sur 24, 7 jours sur 7.
       </div>
 
       {err ? (
