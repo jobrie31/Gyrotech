@@ -875,7 +875,6 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  /* ========= DÉ-PUNCH AUTOMATIQUE À 17H (ADMIN + page ouverte) ========= */
   useEffect(() => {
     if (!canUseAdminPage) return;
 
@@ -1536,7 +1535,6 @@ export default function PageReglagesAdmin() {
         <PageAlarmesAdmin />
       </section>
 
-
       {/* ===================== 2) FACTURATION ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Facturation</h3>
@@ -1608,6 +1606,27 @@ export default function PageReglagesAdmin() {
               </button>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* ===================== 2.5) APPROBATION FEUILLES DE DÉPENSES ===================== */}
+      <section style={section}>
+        <h3 style={h3Bold}>Approbation des feuilles de dépenses</h3>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          Pour l’instant, toutes les feuilles de dépenses sont envoyées en attente et peuvent être approuvées par <b>n’importe quel admin</b>.
+        </div>
+        <div
+          style={{
+            background: "#fef9c3",
+            border: "2px solid #facc15",
+            color: "#92400e",
+            borderRadius: 10,
+            padding: 10,
+            fontWeight: 900,
+            fontSize: 12,
+          }}
+        >
+          Statut actuel : ⌛ À approuver par un admin
         </div>
       </section>
 

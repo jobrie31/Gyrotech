@@ -21,6 +21,7 @@ import StartDayGate from "./StartDayGate";
 
 import {
   collection,
+  collectionGroup,
   getDocs,
   limit,
   onSnapshot,
@@ -292,7 +293,7 @@ export default function App() {
   const [me, setMe] = useState(null);
   const [meLoading, setMeLoading] = useState(true);
 
-  // ✅ Notif clignotante (note admin pour l’employé connecté) — TOUS BLOCS
+  // ✅ Notif clignotante (note RH pour le compte connecté) — TOUS BLOCS
   const [noteNotifOn, setNoteNotifOn] = useState(false);
 
   // ✅ meta cache des notes (Firestore)
@@ -312,6 +313,8 @@ export default function App() {
   // UI admin/RH
   const [broadcastEditOpen, setBroadcastEditOpen] = useState(false);
   const [broadcastDraft, setBroadcastDraft] = useState("");
+  const [remboursementNotifOn, setRemboursementNotifOn] = useState(false);
+  const [remboursementAdminNotifOn, setRemboursementAdminNotifOn] = useState(false);
 
   const [alarmItems, setAlarmItems] = useState([]);
   const [alarmPopupOpen, setAlarmPopupOpen] = useState(false);
@@ -428,7 +431,7 @@ export default function App() {
         osc2.stop(start + duration);
       };
 
-      makeHorn(now + 0.00, 420, 0.18);
+      makeHorn(now + 0.0, 420, 0.18);
       makeHorn(now + 0.32, 420, 0.42);
     } catch (e) {
       console.error("playAlarmSound error:", e);
@@ -681,7 +684,7 @@ export default function App() {
     window.location.hash = "#/accueil";
   };
 
-  /* ===================== 🔔 NOTIF NOTE ADMIN (NON-ADMIN) — TOUS BLOCS (Firestore) ===================== */
+  /* ===================== 🔔 NOTIF NOTE RH (ADMIN + EMPLOYÉ NORMAL) — TOUS BLOCS ===================== */
 
   useEffect(() => {
     setNoteNotifOn(false);
@@ -705,7 +708,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     if (!me?.id) return;
-    if (isAdmin) return;
+    if (isRH) return; // ✅ RH n'a pas de boîte perso RH
 
     const empId = me.id;
     const colRef = collection(db, "employes", empId, "payBlockNotes");
@@ -738,7 +741,91 @@ export default function App() {
     );
 
     return () => unsub();
-  }, [user, me?.id, isAdmin]);
+  }, [user, me?.id, isRH]);
+
+  /* ===================== 🧾 NOTIF RH — remboursements approuvés à télécharger ===================== */
+
+  useEffect(() => {
+    setRemboursementNotifOn(false);
+    setRemboursementAdminNotifOn(false);
+  }, [user?.uid, me?.id, isRH, isAdmin]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!me?.id) return;
+    if (!isRH) return;
+
+    const qAllItems = query(collectionGroup(db, "items"));
+
+    const unsub = onSnapshot(
+      qAllItems,
+      (snap) => {
+        let hasPendingApprovedForRH = false;
+
+        snap.forEach((d) => {
+          if (hasPendingApprovedForRH) return;
+
+          const path = String(d.ref.path || "");
+          if (!path.startsWith("depensesRemboursements/")) return;
+
+          const data = d.data() || {};
+          const approvalStatus = String(data.approvalStatus || "").toLowerCase();
+          if (approvalStatus !== "approved") return;
+
+          const downloadedAtMs = safeToMs(data.approvalDownloadedByRHAt);
+          if (!downloadedAtMs) {
+            hasPendingApprovedForRH = true;
+          }
+        });
+
+        setRemboursementNotifOn(hasPendingApprovedForRH);
+      },
+      (err) => {
+        console.error("remboursement RH notif snapshot error:", err);
+        setRemboursementNotifOn(false);
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid, me?.id, isRH]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!me?.id) return;
+    if (!isAdmin) return;
+
+    const qAllItems = query(collectionGroup(db, "items"));
+
+    const unsub = onSnapshot(
+      qAllItems,
+      (snap) => {
+        let hasPendingForAdmin = false;
+
+        snap.forEach((d) => {
+          if (hasPendingForAdmin) return;
+
+          const path = String(d.ref.path || "");
+          if (!path.startsWith("depensesRemboursements/")) return;
+
+          const data = d.data() || {};
+          const approvalStatus = String(data.approvalStatus || "").toLowerCase();
+          const completed = !!data.completed;
+
+          if (!completed && approvalStatus === "pending") {
+            hasPendingForAdmin = true;
+          }
+        });
+
+        setRemboursementAdminNotifOn(hasPendingForAdmin);
+      },
+      (err) => {
+        console.error("remboursement ADMIN notif snapshot error:", err);
+        setRemboursementAdminNotifOn(false);
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid, me?.id, isAdmin]);
 
   /* ===================== 📣 LISTENERS BROADCAST ===================== */
 
@@ -895,7 +982,9 @@ export default function App() {
       try {
         const now = getTorontoNowParts(new Date());
 
-        const isWeekday = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(String(now.weekday || ""));
+        const isWeekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].includes(
+          String(now.weekday || "")
+        );
         if (!isWeekday) return;
 
         const hhmm = `${now.hour}:${now.minute}`;
@@ -996,6 +1085,12 @@ export default function App() {
         borderBottom: "2px solid #ff0000",
         boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
       }
+    : (remboursementNotifOn || remboursementAdminNotifOn)
+    ? {
+        animation: "notifBlinkORANGE 1.4s infinite",
+        borderBottom: "2px solid #f97316",
+        boxShadow: "0 0 0 2px rgba(249,115,22,0.22) inset, 0 0 24px rgba(249,115,22,0.30)",
+      }
     : broadcastNotifOn
     ? {
         animation: "notifBlinkBLEU 0.70s infinite",
@@ -1005,7 +1100,7 @@ export default function App() {
     : null;
 
   const connectedStyle =
-    noteNotifOn || broadcastNotifOn
+    noteNotifOn || remboursementNotifOn || remboursementAdminNotifOn || broadcastNotifOn
       ? {
           color: "#ffffff",
           fontWeight: 1000,
@@ -1019,6 +1114,11 @@ export default function App() {
         @keyframes notifBlinkVIF {
           0%   { background: #ffffff; }
           50%  { background: #ff0000; }
+          100% { background: #ffffff; }
+        }
+        @keyframes notifBlinkORANGE {
+          0%   { background: #ffffff; }
+          50%  { background: #f97316; }
           100% { background: #ffffff; }
         }
         @keyframes notifBlinkBLEU {
@@ -1043,10 +1143,46 @@ export default function App() {
             ...connectedStyle,
           }}
         >
-          <span>
-            Connecté: {user.email}
-            {isAdmin ? " — Admin" : isRH ? " — RH" : ""}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span>
+              Connecté: {user.email}
+              {isAdmin ? " — Admin" : isRH ? " — RH" : ""}
+            </span>
+
+            {isAdmin && remboursementAdminNotifOn ? (
+              <span
+                style={{
+                  border: "1px solid rgba(255,255,255,0.75)",
+                  background: "rgba(255,255,255,0.18)",
+                  color: "inherit",
+                  borderRadius: 999,
+                  fontSize: 13,
+                  padding: "4px 10px",
+                  fontWeight: 1000,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Un remboursement est à approuver
+              </span>
+            ) : null}
+
+            {isRH && remboursementNotifOn ? (
+              <span
+                style={{
+                  border: "1px solid rgba(255,255,255,0.75)",
+                  background: "rgba(255,255,255,0.18)",
+                  color: "inherit",
+                  borderRadius: 999,
+                  fontSize: 13,
+                  padding: "4px 10px",
+                  fontWeight: 1000,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Un remboursement approuvé est à télécharger
+              </span>
+            ) : null}
+          </div>
 
           {hasBroadcastText ? (
             <button
@@ -1136,18 +1272,20 @@ export default function App() {
         <div style={{ justifySelf: "end" }}>
           <button
             onClick={handleLogout}
-            style={
-              noteNotifOn
-                ? {
-                    border: "2px solid #ff0000",
-                    background: "#ffffff",
-                    borderRadius: 8,
-                    padding: "6px 10px",
-                    fontWeight: 1000,
-                    cursor: "pointer",
-                  }
-                : undefined
-            }
+            style={{
+              border: noteNotifOn
+                ? "2px solid #ff0000"
+                : (remboursementNotifOn || remboursementAdminNotifOn)
+                ? "2px solid #f97316"
+                : "1px solid #cbd5e1",
+              background: "#ffffff",
+              borderRadius: 7,
+              padding: "1px 6px",
+              fontWeight: 800,
+              fontSize: 11,
+              lineHeight: 1,
+              cursor: "pointer",
+            }}
           >
             Se déconnecter
           </button>
@@ -1272,7 +1410,11 @@ export default function App() {
         />
       )}
       {route === "feuille-depenses" && (isAdmin || isRH) && (
-        <FeuilleDepensesExcel employeNom={me?.nom || ""} activeTab="PP4" />
+        <FeuilleDepensesExcel
+          isAdmin={isAdmin}
+          isRH={isRH}
+          initialEmploye={me?.nom || "Jo"}
+        />
       )}
       {route === "test-ocr" && isAdmin && <Test />}
 

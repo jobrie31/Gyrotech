@@ -529,6 +529,7 @@ export default function HistoriqueEmploye({
   const isAdmin = !!isAdminProp;
   const isRH = !!isRHProp;
   const isPrivileged = isAdmin || isRH;
+  const requiresHistoryCode = isAdmin; // ✅ RH n'a plus besoin du code
   const canWriteNotes = isRH;
   const hasPersonalInbox = !isRH; // employé normal + admin reçoivent des notes RH personnelles
 
@@ -580,7 +581,7 @@ export default function HistoriqueEmploye({
     return () => window.removeEventListener("hashchange", lockIfLeft);
   }, []);
 
-  /* ===================== 🔒 Code requis (ADMIN/RH) ===================== */
+  /* ===================== 🔒 Code requis (ADMIN seulement) ===================== */
   const [expectedCode, setExpectedCode] = useState("");
   const [codeLoading, setCodeLoading] = useState(true);
   const [codeInput, setCodeInput] = useState("");
@@ -593,13 +594,15 @@ export default function HistoriqueEmploye({
       try {
         setCodeLoading(true);
         setCodeErr("");
-        setUnlocked(false);
         setCodeInput("");
 
-        if (!isPrivileged) {
+        if (!requiresHistoryCode) {
           setExpectedCode("");
+          setUnlocked(true); // ✅ RH entre directement
           return;
         }
+
+        setUnlocked(false);
 
         const ref = doc(db, "config", "adminAccess");
         const snap = await getDoc(ref);
@@ -615,7 +618,7 @@ export default function HistoriqueEmploye({
     return () => {
       cancelled = true;
     };
-  }, [isPrivileged]);
+  }, [requiresHistoryCode]);
 
   const tryUnlock = () => {
     const entered = String(codeInput || "").trim();
@@ -635,14 +638,16 @@ export default function HistoriqueEmploye({
     const lockIfLeft = () => {
       const h = String(window.location.hash || "").toLowerCase();
       if (!h.includes("historique")) {
-        setUnlocked(false);
-        setCodeInput("");
-        setCodeErr("");
+        if (requiresHistoryCode) {
+          setUnlocked(false);
+          setCodeInput("");
+          setCodeErr("");
+        }
       }
     };
     window.addEventListener("hashchange", lockIfLeft);
     return () => window.removeEventListener("hashchange", lockIfLeft);
-  }, []);
+  }, [requiresHistoryCode]);
 
   /* ===================== employés ===================== */
   const [employes, setEmployes] = useState([]);
@@ -1546,7 +1551,7 @@ export default function HistoriqueEmploye({
     );
   }
 
-  if (isPrivileged && !unlocked) {
+  if (requiresHistoryCode && !unlocked) {
     return (
       <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
         <TopBar
