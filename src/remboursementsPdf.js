@@ -5,6 +5,7 @@ import {
   listAll,
   getDownloadURL,
   getMetadata,
+  deleteObject,
 } from "firebase/storage";
 import { storage } from "./firebaseConfig";
 
@@ -53,9 +54,7 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([u8arr], { type: mime });
 }
 
-/**
- * Fallback classique: télécharge directement dans le dossier par défaut
- */
+/* ---------------------- Téléchargement ---------------------- */
 function downloadBlobClassic(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -67,13 +66,7 @@ function downloadBlobClassic(blob, fileName) {
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-/**
- * Nouvelle version:
- * - essaie d'ouvrir "Enregistrer sous..." si le navigateur supporte showSaveFilePicker
- * - sinon fallback sur téléchargement classique
- */
 async function downloadBlob(blob, fileName) {
-  // Support Chrome / Edge / certains navigateurs Chromium
   if ("showSaveFilePicker" in window) {
     try {
       const handle = await window.showSaveFilePicker({
@@ -91,11 +84,10 @@ async function downloadBlob(blob, fileName) {
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      return;
+      return true;
     } catch (err) {
-      // Si l'utilisateur annule, on arrête sans lancer un download automatique
       if (err?.name === "AbortError") {
-        return;
+        return false;
       }
 
       console.warn(
@@ -105,17 +97,18 @@ async function downloadBlob(blob, fileName) {
     }
   }
 
-  // Fallback si non supporté ou si erreur
   downloadBlobClassic(blob, fileName);
+  return true;
 }
 
+/* ---------------------- Pièces jointes ---------------------- */
 function guessAttachmentKind(name = "", contentType = "") {
   const n = String(name || "").toLowerCase();
   const t = String(contentType || "").toLowerCase();
 
   if (t.startsWith("image/")) return "image";
   if (t === "application/pdf") return "pdf";
-  if (/\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(n)) return "image";
+  if (/\.(png|jpg|jpeg|webp|gif|bmp|heic|heif)$/i.test(n)) return "image";
   if (/\.pdf$/i.test(n)) return "pdf";
   return "unknown";
 }
@@ -146,6 +139,20 @@ async function listStoredAttachmentsForRecord(year, pp, id) {
   return files.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export async function deleteStoredAttachmentsForRecord(year, pp, id) {
+  if (!year || !pp || !id) return;
+
+  const folderRef = storageRef(storage, remboursementPdfFolder(year, pp, id));
+  const res = await listAll(folderRef).catch(() => ({ items: [] }));
+
+  await Promise.all(
+    (res.items || []).map(async (itemRef) => {
+      await deleteObject(itemRef);
+    })
+  );
+}
+
+/* ---------------------- Snapshot HTML ---------------------- */
 function makeSnapshotHtml(rec) {
   const rows = Array.isArray(rec?.rows) ? rec.rows : [];
   const totals = rec?.totals || {};
@@ -196,11 +203,11 @@ function makeSnapshotHtml(rec) {
 
         <div style="padding:16px 18px 6px 18px;">
           <div style="display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:12px;">
-            <div style="font-size:16px;"><b>Employé :</b> ${safe(rec?.employeNom || "—")}</div>
+            <div style="font-size:24px;font-weight:900;"><b>Employé :</b> ${safe(rec?.employeNom || "—")}</div>
             <div style="font-size:16px;"><b>Date réf. :</b> ${safe(rec?.dateRef || "—")}</div>
           </div>
 
-          <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;">
+          <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:16px;">
             <thead>
               <tr>
                 <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Date</th>
@@ -235,15 +242,11 @@ function makeSnapshotHtml(rec) {
           </div>
 
           <div style="margin-top:16px;display:flex;justify-content:flex-end;">
-            <div style="border:1px solid #94a3b8;border-radius:12px;padding:12px 16px;background:#fbfdff;min-width:270px;">
-              <div style="display:flex;justify-content:space-between;gap:12px;font-size:14px;">
-                <span><b>Début</b></span>
-                <span>${safe(rec?.ppStart || "—")}</span>
+            <div style="border:1px solid #94a3b8;border-radius:12px;padding:12px 16px;background:#fbfdff;min-width:420px;">
+              <div style="text-align:center;font-size:16px;font-weight:900;line-height:1.25;margin-bottom:10px;">
+                ${safe(rec?.employeNom || "Employé")} • ${safe(rec?.ppStart || "—")} • ${safe(rec?.pp || "—")}
               </div>
-              <div style="display:flex;justify-content:space-between;gap:12px;font-size:14px;margin-top:6px;">
-                <span><b>Fin</b></span>
-                <span>${safe(rec?.ppEnd || "—")}</span>
-              </div>
+
               <div style="margin-top:10px;padding-top:10px;border-top:2px solid #0f172a;display:flex;justify-content:space-between;gap:12px;font-size:16px;font-weight:900;">
                 <span>Total remboursement</span>
                 <span>${safe(fmtMoney(totals?.remboursement || 0))} $</span>
@@ -279,6 +282,7 @@ async function renderSnapshotToPngDataUrl(rec) {
   }
 }
 
+/* ---------------------- Construction du PDF ---------------------- */
 async function buildDownloadPdfForRemboursement(rec, attachments = []) {
   const pdfDoc = await PDFDocument.create();
 
@@ -288,7 +292,6 @@ async function buildDownloadPdfForRemboursement(rec, attachments = []) {
   const maxW = pageWidth - margin * 2;
   const maxH = pageHeight - margin * 2;
 
-  // Page 1 = screenshot du remboursement
   const pngDataUrl = await renderSnapshotToPngDataUrl(rec);
   const pngBytes = await blobToUint8Array(dataUrlToBlob(pngDataUrl));
   const pngImage = await pdfDoc.embedPng(pngBytes);
@@ -304,7 +307,6 @@ async function buildDownloadPdfForRemboursement(rec, attachments = []) {
     height: pngDims.height * scale,
   });
 
-  // Pages suivantes = pièces jointes
   for (const att of attachments) {
     if (!att?.url) continue;
 
@@ -314,7 +316,9 @@ async function buildDownloadPdfForRemboursement(rec, attachments = []) {
         /\.png$/i.test(att.name) ||
         String(att.contentType || "").toLowerCase().includes("png");
 
-      const img = isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+      const img = isPng
+        ? await pdfDoc.embedPng(bytes)
+        : await pdfDoc.embedJpg(bytes);
 
       const page = pdfDoc.addPage([pageWidth, pageHeight]);
       const dims = img.scale(1);
@@ -358,11 +362,14 @@ export async function downloadRemboursementPdf(rec) {
     rec.pp,
     rec.id
   );
+
   const pdfBytes = await buildDownloadPdfForRemboursement(rec, attachments);
 
   const fileName = `Remboursement_${String(rec.employeNom || "Employe")
     .replace(/[^\w\-]+/g, "_")}_${rec.year}_${rec.pp}_${rec.dateRef || "sans_date"}.pdf`;
 
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
-  await downloadBlob(blob, fileName);
+
+  const saved = await downloadBlob(blob, fileName);
+  return saved;
 }

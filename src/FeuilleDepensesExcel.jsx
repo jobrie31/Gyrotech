@@ -5,6 +5,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   limit,
   onSnapshot,
@@ -23,7 +24,10 @@ import {
   deleteObject,
 } from "firebase/storage";
 import { onAuthStateChanged } from "firebase/auth";
-import { downloadRemboursementPdf } from "./remboursementsPdf";
+import {
+  downloadRemboursementPdf,
+  deleteStoredAttachmentsForRecord,
+} from "./remboursementsPdf";
 import PopupAnciensRemboursements from "./PopupAnciensRemboursements";
 
 /* ---------------------- Utils ---------------------- */
@@ -708,7 +712,9 @@ function PopupPDFManagerRemboursement({
           </tbody>
         </table>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+        <div
+          style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}
+        >
           <button
             onClick={onClose}
             style={{
@@ -741,6 +747,7 @@ export default function FeuilleDepensesExcel({
     d.setHours(0, 0, 0, 0);
     return d;
   }, []);
+
   const initialPP = useMemo(
     () => getPPFromPayBlockStart(startOfSunday(today)).pp || "PP1",
     [today]
@@ -797,10 +804,15 @@ export default function FeuilleDepensesExcel({
   const [downloadingId, setDownloadingId] = useState("");
   const [deletingId, setDeletingId] = useState("");
   const [approvingId, setApprovingId] = useState("");
+  const [saving, setSaving] = useState(false);
+
   const datePickerRefs = useRef({});
 
   useEffect(() => {
-    const q = query(itemsColRef(ppYear, activePP), orderBy("createdAtMs", "desc"));
+    const q = query(
+      itemsColRef(ppYear, activePP),
+      orderBy("createdAtMs", "desc")
+    );
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -811,36 +823,6 @@ export default function FeuilleDepensesExcel({
     );
     return () => unsub();
   }, [ppYear, activePP]);
-
-  useEffect(() => {
-    const unsubs = [];
-
-    const init = {};
-    for (const pp of ppTabs) init[pp] = 0;
-    setCountsByPP(init);
-
-    for (const pp of ppTabs) {
-      const qPP = query(itemsColRef(ppYear, pp));
-      const unsub = onSnapshot(
-        qPP,
-        (snap) => {
-          const list = snap.docs.map((d) => d.data() || {});
-          const activeCount = list.filter((x) => !x?.completed).length;
-          setCountsByPP((prev) => ({ ...(prev || {}), [pp]: activeCount }));
-        },
-        (err) => console.error(`depenses counts snapshot error (${pp}):`, err)
-      );
-      unsubs.push(unsub);
-    }
-
-    return () => {
-      unsubs.forEach((fn) => {
-        try {
-          fn?.();
-        } catch {}
-      });
-    };
-  }, [ppYear, ppTabs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -864,6 +846,7 @@ export default function FeuilleDepensesExcel({
             limit(1)
           );
           const snap = await getDocs(qEmp);
+
           if (!cancelled && !snap.empty) {
             const empDoc = snap.docs[0];
             const data = empDoc.data() || {};
@@ -891,11 +874,120 @@ export default function FeuilleDepensesExcel({
     };
   }, [initialEmploye]);
 
+  const currentEmailLower = String(auth.currentUser?.email || "")
+    .trim()
+    .toLowerCase();
+
+  const canAccessRecord = (rec) => {
+    if (isAdmin || isRH) return true;
+
+    const recEmployeId = String(rec?.employeId || "").trim();
+    const recUid = String(rec?.employeUid || "").trim();
+    const recEmailLower = String(rec?.employeEmailLower || "")
+      .trim()
+      .toLowerCase();
+    const recNom = String(rec?.employeNom || "").trim().toLowerCase();
+    const currentNom = String(employeNom || "").trim().toLowerCase();
+
+    if (
+      currentEmploye?.id &&
+      recEmployeId &&
+      recEmployeId === String(currentEmploye.id)
+    ) {
+      return true;
+    }
+
+    if (
+      auth.currentUser?.uid &&
+      recUid &&
+      recUid === String(auth.currentUser.uid)
+    ) {
+      return true;
+    }
+
+    if (currentEmailLower && recEmailLower && recEmailLower === currentEmailLower) {
+      return true;
+    }
+
+    if (currentNom && recNom && recNom === currentNom) {
+      return true;
+    }
+
+    return false;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "config", "facture"));
+        if (!snap.exists() || cancelled) return;
+
+        const data = snap.data() || {};
+        const tauxConfig = Number(data.tauxHoraire);
+
+        if (!isNaN(tauxConfig)) {
+          setGlobalTaux(tauxConfig);
+
+          setRows((prev) =>
+            (prev || []).map((r) => ({
+              ...r,
+              taux: String(tauxConfig),
+            }))
+          );
+        }
+      } catch (e) {
+        console.error("load tauxHoraire error:", e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubs = [];
+
+    const init = {};
+    for (const pp of ppTabs) init[pp] = 0;
+    setCountsByPP(init);
+
+    for (const pp of ppTabs) {
+      const qPP = query(itemsColRef(ppYear, pp));
+      const unsub = onSnapshot(
+        qPP,
+        (snap) => {
+          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          const visible = list.filter((x) => canAccessRecord(x));
+          const activeCount = visible.filter((x) => !x?.completed).length;
+          setCountsByPP((prev) => ({ ...(prev || {}), [pp]: activeCount }));
+        },
+        (err) => console.error(`depenses counts snapshot error (${pp}):`, err)
+      );
+      unsubs.push(unsub);
+    }
+
+    return () => {
+      unsubs.forEach((fn) => {
+        try {
+          fn?.();
+        } catch {}
+      });
+    };
+  }, [ppYear, ppTabs, isAdmin, isRH, currentEmploye, employeNom, currentEmailLower]);
+
   const resetEditor = () => {
-    setRows([emptyRow(), emptyRow(), emptyRow(), emptyRow()]);
+    setRows([
+      { ...emptyRow(), taux: String(globalTaux ?? "") },
+      { ...emptyRow(), taux: String(globalTaux ?? "") },
+      { ...emptyRow(), taux: String(globalTaux ?? "") },
+      { ...emptyRow(), taux: String(globalTaux ?? "") },
+    ]);
     setNotes("");
-    setGlobalTaux(defaultTaux);
     setEditingRef(null);
+
     try {
       (pendingPdfs || []).forEach((p) => {
         try {
@@ -903,10 +995,10 @@ export default function FeuilleDepensesExcel({
         } catch {}
       });
     } catch {}
+
     setPendingPdfs([]);
     datePickerRefs.current = {};
   };
-
   useEffect(() => {
     return () => {
       try {
@@ -947,6 +1039,11 @@ export default function FeuilleDepensesExcel({
 
   const openPDFMgr = () => setPdfMgr({ open: true });
   const closePDFMgr = () => setPdfMgr({ open: false });
+  const autoResizeTextarea = (el) => {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
 
   const openDatePicker = (idx) => {
     const el = datePickerRefs.current[idx];
@@ -961,35 +1058,33 @@ export default function FeuilleDepensesExcel({
   };
 
   const setCell = (idx, key, value) => {
-    setRows((prev) => {
-      const copy = [...prev];
-      const cur = { ...(copy[idx] || {}) };
+  setRows((prev) => {
+    const copy = [...prev];
+    const cur = { ...(copy[idx] || {}) };
 
-      if (key === "date") cur[key] = formatYYYYMMDDInput(value);
-      else cur[key] = value;
+    if (key === "date") cur[key] = formatYYYYMMDDInput(value);
+    else cur[key] = value;
 
-      if (key === "km") {
-        const kmNum = parseNumberLoose(value);
-        if (kmNum != null && kmNum !== 0) {
-          if (String(cur.taux || "").trim() === "") cur.taux = String(globalTaux);
-        }
-      }
+    // toujours forcer le taux venant des Réglages Admin
+    cur.taux = String(globalTaux ?? "");
 
-      copy[idx] = cur;
-      return copy;
-    });
+    copy[idx] = cur;
+    return copy;
+  });
+};
 
-    if (key === "taux" && isAdmin) {
-      const t = parseNumberLoose(value);
-      if (t != null) setGlobalTaux(t);
-    }
-  };
-
-  const addRow = () => setRows((p) => [...(p || []), emptyRow()]);
+  const addRow = () =>
+    setRows((p) => [
+      ...(p || []),
+      {
+        ...emptyRow(),
+        taux: String(globalTaux ?? ""),
+      },
+    ]);
 
   const isEditable = (key) => {
     if (key === "montant") return false;
-    if (key === "taux") return isAdmin;
+    if (key === "taux") return false;
     return true;
   };
 
@@ -1025,6 +1120,7 @@ export default function FeuilleDepensesExcel({
     () => (firstValidDate ? startOfSunday(firstValidDate) : null),
     [firstValidDate]
   );
+
   const computedPPInfo = useMemo(
     () =>
       computedPayBlockStart
@@ -1032,6 +1128,7 @@ export default function FeuilleDepensesExcel({
         : { pp: "—", index: null },
     [computedPayBlockStart]
   );
+
   const computedPayBlockEnd = useMemo(
     () => (computedPayBlockStart ? addDays(computedPayBlockStart, 13) : null),
     [computedPayBlockStart]
@@ -1040,15 +1137,20 @@ export default function FeuilleDepensesExcel({
   const saveTargetYear = computedPayBlockStart
     ? computedPayBlockStart.getFullYear()
     : null;
+
   const saveTargetPP =
     computedPPInfo?.pp && computedPPInfo.pp !== "—" ? computedPPInfo.pp : null;
 
+  const visiblePpList = useMemo(() => {
+    return (ppList || []).filter((r) => canAccessRecord(r));
+  }, [ppList, isAdmin, isRH, currentEmploye, employeNom, currentEmailLower]);
+
   const activeList = useMemo(() => {
-    return (ppList || []).filter((r) => !r?.completed);
-  }, [ppList]);
+    return visiblePpList.filter((r) => !r?.completed);
+  }, [visiblePpList]);
 
   const completedList = useMemo(() => {
-    return (ppList || [])
+    return visiblePpList
       .filter((r) => !!r?.completed)
       .sort((a, b) => {
         const aMs =
@@ -1057,7 +1159,7 @@ export default function FeuilleDepensesExcel({
           b?.completedAt?.toMillis?.() || b?.updatedAtMs || b?.createdAtMs || 0;
         return bMs - aMs;
       });
-  }, [ppList]);
+  }, [visiblePpList]);
 
   const headerPeriodSubText = useMemo(() => {
     return `${fmtDateISO(ppRangeList.start)} → ${fmtDateISO(
@@ -1092,13 +1194,12 @@ export default function FeuilleDepensesExcel({
     },
   ];
 
-  const [saving, setSaving] = useState(false);
-
   const uploadPendingTo = async (year, pp, id) => {
     const list = pendingPdfs || [];
     if (!list.length) return;
 
     const folder = remboursementPdfFolder(year, pp, id);
+
     await Promise.all(
       list.map(async (p) => {
         const dest = storageRef(storage, `${folder}/${p.name}`);
@@ -1123,6 +1224,7 @@ export default function FeuilleDepensesExcel({
         if (p?.localUrl) URL.revokeObjectURL(p.localUrl);
       } catch {}
     });
+
     setPendingPdfs([]);
     setPdfRefreshKey((k) => k + 1);
   };
@@ -1136,6 +1238,13 @@ export default function FeuilleDepensesExcel({
       year: Number(saveTargetYear),
       pp: String(saveTargetPP),
       employeNom: String(employeNom || "—"),
+
+      employeId: currentEmploye?.id || null,
+      employeUid: auth.currentUser?.uid || null,
+      employeEmailLower: String(auth.currentUser?.email || "")
+        .trim()
+        .toLowerCase(),
+
       notes: String(notes || ""),
       globalTaux: Number(globalTaux || defaultTaux),
       rows,
@@ -1164,6 +1273,7 @@ export default function FeuilleDepensesExcel({
     };
 
     setSaving(true);
+
     try {
       if (!editingRef?.id) {
         const newRef = await addDoc(itemsColRef(saveTargetYear, saveTargetPP), {
@@ -1190,7 +1300,13 @@ export default function FeuilleDepensesExcel({
           completedAt: null,
           completedById: null,
           completedByName: "",
+          employeId: currentEmploye?.id || null,
+          employeUid: auth.currentUser?.uid || null,
+          employeEmailLower: String(auth.currentUser?.email || "")
+            .trim()
+            .toLowerCase(),
         };
+
         setEditingRef(newEditing);
 
         await uploadPendingTo(newEditing.year, newEditing.pp, newEditing.id);
@@ -1221,6 +1337,7 @@ export default function FeuilleDepensesExcel({
           createdAtMs: keepCreatedAtMs,
           pdfCount: keepPdfCount,
         });
+
         await deleteDoc(itemDocRef(oldYear, oldPP, id));
 
         await uploadPendingTo(saveTargetYear, saveTargetPP, id);
@@ -1240,13 +1357,24 @@ export default function FeuilleDepensesExcel({
 
   const loadRecordIntoEditor = (rec) => {
     if (!rec) return;
+    if (!canAccessRecord(rec)) return;
 
     setNotes(String(rec.notes || ""));
-    setGlobalTaux(Number(rec.globalTaux ?? defaultTaux) || defaultTaux);
+    const forcedTaux = Number(globalTaux ?? defaultTaux) || defaultTaux;
+
+    setGlobalTaux(forcedTaux);
     setRows(
       Array.isArray(rec.rows) && rec.rows.length
-        ? rec.rows
-        : [emptyRow(), emptyRow(), emptyRow(), emptyRow()]
+        ? rec.rows.map((row) => ({
+            ...row,
+            taux: String(forcedTaux),
+          }))
+        : [
+            { ...emptyRow(), taux: String(forcedTaux) },
+            { ...emptyRow(), taux: String(forcedTaux) },
+            { ...emptyRow(), taux: String(forcedTaux) },
+            { ...emptyRow(), taux: String(forcedTaux) },
+          ]
     );
 
     setEditingRef({
@@ -1268,6 +1396,9 @@ export default function FeuilleDepensesExcel({
       completedAt: rec.completedAt || null,
       completedById: rec.completedById || null,
       completedByName: String(rec.completedByName || ""),
+      employeId: rec?.employeId || null,
+      employeUid: rec?.employeUid || null,
+      employeEmailLower: rec?.employeEmailLower || "",
     });
 
     setPpYear(Number(rec.year || ppYear));
@@ -1277,11 +1408,20 @@ export default function FeuilleDepensesExcel({
 
   const deleteRemboursement = async (rec) => {
     if (!rec?.id) return;
-    const ok = window.confirm("Supprimer ce remboursement?");
+    if (!canAccessRecord(rec)) return;
+
+    const ok = window.confirm(
+      "Supprimer ce remboursement et ses pièces jointes ?"
+    );
     if (!ok) return;
 
     try {
       setDeletingId(String(rec.id));
+
+      // 1) supprimer les fichiers dans Storage
+      await deleteStoredAttachmentsForRecord(rec.year, rec.pp, rec.id);
+
+      // 2) supprimer le document Firestore
       await deleteDoc(itemDocRef(rec.year, rec.pp, rec.id));
     } catch (e) {
       console.error(e);
@@ -1293,6 +1433,7 @@ export default function FeuilleDepensesExcel({
 
   const approveRemboursement = async (rec) => {
     if (!rec?.id || !isAdmin) return;
+    if (!canAccessRecord(rec)) return;
 
     try {
       setApprovingId(String(rec.id));
@@ -1316,9 +1457,18 @@ export default function FeuilleDepensesExcel({
   };
 
   const handleDownload = async (rec) => {
+    if (!rec?.id) return;
+    if (!canAccessRecord(rec)) return;
+
     try {
       setDownloadingId(String(rec.id));
-      await downloadRemboursementPdf(rec);
+
+      const didDownload = await downloadRemboursementPdf(rec);
+
+      // si l'utilisateur a annulé "Enregistrer sous..."
+      if (!didDownload) {
+        return;
+      }
 
       const isApproved =
         String(rec?.approvalStatus || "").toLowerCase() === "approved";
@@ -1355,7 +1505,7 @@ export default function FeuilleDepensesExcel({
       if (isRH && !downloadedByRHAt) {
         return {
           text: approvedBy
-            ? `✓ Approuvé par ${approvedBy} — à télécharger`
+            ? `✓ Approuvé par ${approvedBy} — à télécharger par Manon`
             : "✓ Approuvé — à télécharger",
           bg: "#ffedd5",
           border: "#fb923c",
@@ -1459,18 +1609,17 @@ export default function FeuilleDepensesExcel({
     },
     td: {
       border: "1px solid #cbd5e1",
-      fontSize: 12,
-      padding: "6px 6px",
-      height: 32,
+      fontSize: 16,
+      padding: "8px 6px",
       background: "white",
-      verticalAlign: "middle",
+      verticalAlign: "top",
       textAlign: "center",
     },
     input: {
       width: "100%",
       border: "none",
       outline: "none",
-      fontSize: 12,
+      fontSize: 16,
       background: "transparent",
       padding: 0,
       margin: 0,
@@ -1478,6 +1627,23 @@ export default function FeuilleDepensesExcel({
       color: "inherit",
       textAlign: "center",
       height: 28,
+    },
+    textareaCell: {
+      width: "100%",
+      border: "none",
+      outline: "none",
+      fontSize: 16,
+      background: "transparent",
+      padding: 0,
+      margin: 0,
+      fontFamily: "inherit",
+      color: "inherit",
+      textAlign: "center",
+      resize: "none",
+      overflow: "hidden",
+      minHeight: 32,
+      lineHeight: 1.25,
+      boxSizing: "border-box",
     },
     totalRowCell: {
       border: "1px solid #94a3b8",
@@ -1572,12 +1738,6 @@ export default function FeuilleDepensesExcel({
       padding: "10px 8px",
       fontWeight: 1000,
       color: "#0f172a",
-    },
-    listTd: {
-      borderBottom: "1px solid #eef2f7",
-      padding: "10px 8px",
-      verticalAlign: "top",
-      background: "#ffffff",
     },
     listTdPending: {
       borderBottom: "1px solid #eab308",
@@ -1740,7 +1900,7 @@ export default function FeuilleDepensesExcel({
                 <tr key={r.id}>
                   <td style={rowCellStyle}>
                     <div style={{ fontWeight: 1000 }}>
-                      {r.employeNom || "—"}
+                      {isAdmin || isRH ? r.employeNom || "—" : "Mon remboursement"}
                     </div>
                   </td>
 
@@ -1880,14 +2040,18 @@ export default function FeuilleDepensesExcel({
           </div>
         </div>
 
-        <div style={{ marginTop: 12, display: "flex", justifyContent: "center" }}>
+        <div
+          style={{ marginTop: 12, display: "flex", justifyContent: "center" }}
+        >
           <div style={styles.empPill}>
             <div>Employé :</div>
             <div>{employeNom || "—"}</div>
           </div>
         </div>
 
-        <div style={{ marginTop: 10, display: "flex", justifyContent: "center" }}>
+        <div
+          style={{ marginTop: 10, display: "flex", justifyContent: "center" }}
+        >
           <div style={styles.approvalBadge(editorApprovalUi)}>
             {editorApprovalUi.text}
           </div>
@@ -1921,8 +2085,7 @@ export default function FeuilleDepensesExcel({
                         {(() => {
                           const km = parseNumberLoose(r.km) || 0;
                           const tauxLocal = parseNumberLoose(r.taux);
-                          const tauxEff =
-                            tauxLocal != null ? tauxLocal : globalTaux;
+                          const tauxEff = tauxLocal != null ? tauxLocal : globalTaux;
                           const m = km * (Number(tauxEff) || 0);
                           return m ? fmtMoney(m) : "";
                         })()}
@@ -1943,9 +2106,7 @@ export default function FeuilleDepensesExcel({
                           style={{
                             ...styles.input,
                             opacity: !isEditable(c.key) ? 0.75 : 1,
-                            cursor: !isEditable(c.key)
-                              ? "not-allowed"
-                              : "text",
+                            cursor: !isEditable(c.key) ? "not-allowed" : "text",
                             paddingRight: 0,
                           }}
                           value={String(r[c.key] ?? "")}
@@ -2000,17 +2161,20 @@ export default function FeuilleDepensesExcel({
                         />
                       </div>
                     ) : (
-                      <input
-                        type="text"
+                      <textarea
+                        rows={1}
                         style={{
-                          ...styles.input,
+                          ...styles.textareaCell,
                           opacity: !isEditable(c.key) ? 0.75 : 1,
-                          cursor: !isEditable(c.key)
-                            ? "not-allowed"
-                            : "text",
+                          cursor: !isEditable(c.key) ? "not-allowed" : "text",
                         }}
                         value={String(r[c.key] ?? "")}
-                        onChange={(e) => setCell(idx, c.key, e.target.value)}
+                        onChange={(e) => {
+                          setCell(idx, c.key, e.target.value);
+                          autoResizeTextarea(e.target);
+                        }}
+                        onInput={(e) => autoResizeTextarea(e.target)}
+                        ref={(el) => autoResizeTextarea(el)}
                         readOnly={!isEditable(c.key)}
                       />
                     )}
@@ -2062,7 +2226,11 @@ export default function FeuilleDepensesExcel({
 
           <div>
             <div
-              style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginBottom: 10,
+              }}
             >
               <button
                 type="button"
@@ -2083,18 +2251,18 @@ export default function FeuilleDepensesExcel({
             </div>
 
             <div style={styles.periodCard}>
-              <div style={{ fontWeight: 1100, fontSize: 13, marginBottom: 6 }}>
-                Période (auto par date) :{" "}
-                <span style={{ fontWeight: 1200 }}>{computedPPInfo.pp}</span>
-              </div>
-
-              <div style={styles.periodRow}>
-                <span style={{ fontWeight: 900 }}>Début :</span>
-                <span>{fmtDateISO(computedPayBlockStart)}</span>
-              </div>
-              <div style={styles.periodRow}>
-                <span style={{ fontWeight: 900 }}>Fin :</span>
-                <span>{fmtDateISO(computedPayBlockEnd)}</span>
+              <div
+                style={{
+                  textAlign: "center",
+                  fontWeight: 1100,
+                  fontSize: 16,
+                  lineHeight: 1.25,
+                  marginBottom: 10,
+                }}
+              >
+                {computedPayBlockStart
+                  ? `${employeNom || "Employé"} • ${fmtDateISO(computedPayBlockStart)} • ${computedPPInfo.pp}`
+                  : `${employeNom || "Employé"} • — • ${computedPPInfo.pp}`}
               </div>
 
               <div
@@ -2111,10 +2279,10 @@ export default function FeuilleDepensesExcel({
                     gap: 10,
                   }}
                 >
-                  <span style={{ fontWeight: 1100, fontSize: 13 }}>
+                  <span style={{ fontWeight: 1100, fontSize: 15 }}>
                     Total remboursement :
                   </span>
-                  <span style={{ fontWeight: 1100, fontSize: 13 }}>
+                  <span style={{ fontWeight: 1100, fontSize: 15 }}>
                     {fmtMoney(totals.remboursement)} $
                   </span>
                 </div>
@@ -2142,20 +2310,12 @@ export default function FeuilleDepensesExcel({
                 : "💾 Enregistrer le remboursement"}
             </button>
 
-            {isAdmin ? (
-              <div style={styles.hintOk}>
-                ✅ Pour changer le taux : clique dans une cellule de la colonne{" "}
-                <b>Taux</b> et écris.
-                <div style={{ marginTop: 6 }}>
-                  Taux global actuel (auto-rempli quand tu écris des KM):{" "}
-                  <b>{fmtMoney(globalTaux)}</b>
-                </div>
+            <div style={styles.hintWarn}>
+              ⚠️ Le taux est défini dans <b>Réglages Admin</b> et ne peut pas être modifié ici.
+              <div style={{ marginTop: 6 }}>
+                Taux actuel : <b>{fmtMoney(globalTaux)}</b>
               </div>
-            ) : (
-              <div style={styles.hintWarn}>
-                ⚠️ Le taux est modifiable par un admin seulement.
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
@@ -2280,6 +2440,7 @@ export default function FeuilleDepensesExcel({
           {ppTabs.map((pp) => {
             const count = Number(countsByPP?.[pp] || 0) || 0;
             const active = pp === activePP;
+
             return (
               <div
                 key={pp}

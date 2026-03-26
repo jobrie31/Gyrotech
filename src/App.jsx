@@ -673,10 +673,6 @@ export default function App() {
     if (route === "test-ocr" && !isAdmin) {
       window.location.hash = "#/accueil";
     }
-
-    if (route === "feuille-depenses" && !(isAdmin || isRH)) {
-      window.location.hash = "#/accueil";
-    }
   }, [route, meLoading, isAdmin, isRH]);
 
   const handleLogout = async () => {
@@ -1409,7 +1405,7 @@ export default function App() {
           meEmpId={me?.id || ""}
         />
       )}
-      {route === "feuille-depenses" && (isAdmin || isRH) && (
+      {route === "feuille-depenses" && (
         <FeuilleDepensesExcel
           isAdmin={isAdmin}
           isRH={isRH}

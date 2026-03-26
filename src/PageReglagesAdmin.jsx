@@ -1041,6 +1041,7 @@ export default function PageReglagesAdmin() {
     });
   };
 
+
   useEffect(() => {
     if (!canUseAdminPage) {
       setAutresAdminRows([]);
@@ -1569,7 +1570,7 @@ export default function PageReglagesAdmin() {
           </div>
 
           <div style={{ maxWidth: 260 }}>
-            <label style={label}>Taux horaire (main-d&apos;œuvre)</label>
+            <label style={label}>Taux sur la route</label>
             <input
               value={factureTauxHoraire}
               onChange={(e) => setFactureTauxHoraire(e.target.value)}

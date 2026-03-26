@@ -1639,18 +1639,16 @@ export default function HistoriqueEmploye({
 
   const rightSlot = (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      {isPrivileged ? (
-        <button
-          type="button"
-          style={btnFeuilleDepenses}
-          onClick={() => {
-            window.location.hash = "#/feuille-depenses";
-          }}
-          title="Ouvrir la feuille de dépenses"
-        >
-          🧾 Feuille dépenses
-        </button>
-      ) : null}
+      <button
+        type="button"
+        style={btnFeuilleDepenses}
+        onClick={() => {
+          window.location.hash = "#/feuille-depenses";
+        }}
+        title="Ouvrir la feuille de dépenses"
+      >
+        🧾 Feuille dépenses
+      </button>
 
       <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
         Connecté: <strong>{user?.email || "—"}</strong>{" "}
