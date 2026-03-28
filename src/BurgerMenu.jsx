@@ -1,18 +1,17 @@
 // BurgerMenu.jsx — Bouton 3 lignes + tiroir gauche (pages)
 // Navigue via window.location.hash => '#/accueil', '#/projets', '#/historique', '#/materiels', '#/reglages'
 //
-// ✅ MODIF (2026-03-14):
+// ✅ MODIF:
+// - Compatible avec PageProjets au lieu de PageListeProjet
 // - Admin et RH voient les mêmes menus "gestion"
 // - Le menu peut filtrer automatiquement certaines pages selon le rôle
 // - Par défaut, "Réglages" est visible pour Admin OU RH
 
 import React, { useEffect, useMemo, useState } from "react";
 
-// ✅ Le menu ne rend pas les pages. Il ne fait que naviguer par hash.
 const defaultPages = [
-  { key: "accueil", label: "PageAccueil" },
-  { key: "projets", label: "Projets" },
-  { key: "historique", label: "Historique" }, // ✅ Historique employés
+  { key: "accueil", label: "Accueil" },
+  { key: "historique", label: "Historique" },
   { key: "materiels", label: "Matériels" },
   { key: "reglages", label: "Réglages", adminMenu: true },
 ];
@@ -25,28 +24,18 @@ export default function BurgerMenu({
 }) {
   const [open, setOpen] = useState(false);
 
-  // ✅ Admin et RH voient les mêmes menus de gestion
   const canSeeAdminMenus = !!isAdmin || !!isRH;
 
   const visiblePages = useMemo(() => {
     return (pages || []).filter((p) => {
-      // page explicitement cachée
       if (p?.hidden === true) return false;
-
-      // visible seulement admin/RH
       if (p?.adminMenu === true) return canSeeAdminMenus;
-
-      // visible seulement admin pur
       if (p?.adminOnly === true) return !!isAdmin;
-
-      // visible seulement RH pur
       if (p?.rhOnly === true) return !!isRH;
-
       return true;
     });
   }, [pages, canSeeAdminMenus, isAdmin, isRH]);
 
-  // ESC pour fermer + blocage du scroll quand ouvert
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") setOpen(false);
@@ -74,7 +63,6 @@ export default function BurgerMenu({
 
   return (
     <>
-      {/* Bouton burger (3 lignes) — fixe en haut à gauche */}
       <button
         aria-label="Ouvrir le menu"
         onClick={() => setOpen(true)}
@@ -132,7 +120,6 @@ export default function BurgerMenu({
         </div>
       </button>
 
-      {/* Overlay + Tiroir gauche */}
       <div
         role="dialog"
         aria-modal="true"
@@ -144,7 +131,6 @@ export default function BurgerMenu({
           zIndex: 20000,
         }}
       >
-        {/* Overlay assombri */}
         <div
           onClick={() => setOpen(false)}
           style={{
@@ -156,7 +142,6 @@ export default function BurgerMenu({
           }}
         />
 
-        {/* Drawer */}
         <aside
           style={{
             position: "absolute",
@@ -173,7 +158,6 @@ export default function BurgerMenu({
             flexDirection: "column",
           }}
         >
-          {/* Header */}
           <div
             style={{
               display: "flex",
@@ -203,7 +187,6 @@ export default function BurgerMenu({
             </button>
           </div>
 
-          {/* Liens */}
           <nav style={{ padding: 8 }}>
             {visiblePages.map((p) => (
               <button

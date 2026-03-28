@@ -39,7 +39,7 @@ function addDays(d, n) {
 function startOfSunday(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
-  const day = x.getDay(); // 0=dim
+  const day = x.getDay();
   x.setDate(x.getDate() - day);
   return x;
 }
@@ -97,42 +97,46 @@ function fmtMoneyComma(n) {
   if (!isFinite(v)) return "";
   return v.toFixed(2).replace(".", ",");
 }
+function getNomFamille(nomComplet) {
+  const s = String(nomComplet || "").trim();
+  if (!s) return "";
+  const parts = s.split(/\s+/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1].toLowerCase() : "";
+}
+function compareEmployesParNomFamille(a, b) {
+  const nomFamA = getNomFamille(a?.nom);
+  const nomFamB = getNomFamille(b?.nom);
+
+  const cmpFamille = nomFamA.localeCompare(nomFamB, "fr-CA");
+  if (cmpFamille !== 0) return cmpFamille;
+
+  return String(a?.nom || "").localeCompare(String(b?.nom || ""), "fr-CA");
+}
 function parseMoneyInput(v) {
   const s = String(v || "").trim().replace(",", ".");
   const n = Number(s);
   if (!isFinite(n)) return null;
   return n;
 }
+function getCurrentSickYear() {
+  return new Date().getFullYear();
+}
+function getSickDaysRemaining(emp) {
+  const currentYear = getCurrentSickYear();
+  const storedYear = Number(emp?.joursMaladieAnnee || 0);
+  const storedRemaining = Number(emp?.joursMaladieRestants);
 
-const MONTHS_FR_SHORT_NOACC = [
-  "jan",
-  "fev",
-  "mar",
-  "avr",
-  "mai",
-  "jun",
-  "jul",
-  "aou",
-  "sep",
-  "oct",
-  "nov",
-  "dec",
-];
+  if (storedYear !== currentYear) return 2;
+  if (!Number.isFinite(storedRemaining)) return 2;
+
+  return Math.max(0, Math.min(2, storedRemaining));
+}
+
 function formatRangeFRShort(d1, d2) {
   if (!d1 || !d2) return "";
   const a = d1 instanceof Date ? d1 : new Date(d1);
   const b = d2 instanceof Date ? d2 : new Date(d2);
-
-  const dA = a.getDate();
-  const mA = MONTHS_FR_SHORT_NOACC[a.getMonth()];
-  const yA = a.getFullYear();
-
-  const dB = b.getDate();
-  const mB = MONTHS_FR_SHORT_NOACC[b.getMonth()];
-  const yB = b.getFullYear();
-
-  if (yA === yB) return `${dA} ${mA} au ${dB} ${mB} ${yB}`;
-  return `${dA} ${mA} ${yA} au ${dB} ${mB} ${yB}`;
+  return `${dayKey(a)} au ${dayKey(b)}`;
 }
 
 function parseISOInput(v) {
@@ -204,7 +208,25 @@ function getEmpIdFromHash() {
   return parts[1] || "";
 }
 
-/* ===================== ✅ PP (Pay Period) helpers ===================== */
+function getActorDisplayName(user, employes = []) {
+  const uid = String(user?.uid || "");
+  const emailLower = String(user?.email || "").trim().toLowerCase();
+
+  const emp =
+    employes.find((e) => String(e?.uid || "") === uid) ||
+    employes.find((e) => String(e?.emailLower || "").trim().toLowerCase() === emailLower) ||
+    employes.find((e) => String(e?.email || "").trim().toLowerCase() === emailLower) ||
+    null;
+
+  return (
+    String(emp?.nom || "").trim() ||
+    String(user?.displayName || "").trim() ||
+    String(user?.email || "").trim() ||
+    "Admin"
+  );
+}
+
+/* ===================== ✅ PP helpers ===================== */
 function sundayOnOrBefore(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -249,7 +271,11 @@ function getPPFromPayBlockStart(payBlockStart) {
   start.setHours(0, 0, 0, 0);
 
   const pp1 = getCyclePP1StartForDate(start);
-  const diffDays = Math.floor((start.getTime() - pp1.getTime()) / 86400000);
+
+  const startUTC = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const pp1UTC = Date.UTC(pp1.getFullYear(), pp1.getMonth(), pp1.getDate());
+
+  const diffDays = Math.round((startUTC - pp1UTC) / 86400000);
   const idx = Math.floor(diffDays / 14) + 1;
 
   if (idx < 1 || idx > 26) return { pp: "PP?", index: null };
@@ -454,6 +480,21 @@ const btnFeuilleDepenses = {
   gap: 8,
   boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
 };
+const plusAdminBtn = {
+  border: "1px solid #92400e",
+  background: "#fff7ed",
+  color: "#92400e",
+  borderRadius: 999,
+  width: 28,
+  height: 28,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 1000,
+  fontSize: 18,
+  cursor: "pointer",
+  flex: "0 0 auto",
+};
 
 /* ---------------------- Top bar ---------------------- */
 function TopBar({ title, rightSlot = null, flashTitle = false }) {
@@ -529,9 +570,9 @@ export default function HistoriqueEmploye({
   const isAdmin = !!isAdminProp;
   const isRH = !!isRHProp;
   const isPrivileged = isAdmin || isRH;
-  const requiresHistoryCode = isAdmin; // ✅ RH n'a plus besoin du code
+  const requiresHistoryCode = isAdmin;
   const canWriteNotes = isRH;
-  const hasPersonalInbox = !isRH; // employé normal + admin reçoivent des notes RH personnelles
+  const hasPersonalInbox = !isRH;
 
   /* ===================== 🔒 PORTE: MOT DE PASSE (NON-ADMIN/RH) ===================== */
   const [pwUnlocked, setPwUnlocked] = useState(false);
@@ -560,8 +601,7 @@ export default function HistoriqueEmploye({
     } catch (e) {
       const code = e?.code || "";
       if (code === "auth/wrong-password") setPwErr("Mot de passe incorrect.");
-      else if (code === "auth/too-many-requests")
-        setPwErr("Trop d’essais. Réessaie plus tard.");
+      else if (code === "auth/too-many-requests") setPwErr("Trop d’essais. Réessaie plus tard.");
       else setPwErr(e?.message || "Erreur d’authentification.");
     } finally {
       setPwBusy(false);
@@ -598,7 +638,7 @@ export default function HistoriqueEmploye({
 
         if (!requiresHistoryCode) {
           setExpectedCode("");
-          setUnlocked(true); // ✅ RH entre directement
+          setUnlocked(true);
           return;
         }
 
@@ -658,13 +698,18 @@ export default function HistoriqueEmploye({
       (snap) => {
         const list = [];
         snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
+        list.sort(compareEmployesParNomFamille);
         setEmployes(list);
       },
       (err) => setError(err?.message || String(err))
     );
     return () => unsub();
   }, []);
+
+  const actorDisplayName = useMemo(
+    () => getActorDisplayName(user, employes),
+    [user, employes]
+  );
 
   const derivedMeEmpId = useMemo(() => {
     if (meEmpId) return meEmpId;
@@ -728,10 +773,17 @@ export default function HistoriqueEmploye({
   const [repliesFS, setRepliesFS] = useState({});
   const [replyMeta, setReplyMeta] = useState({});
   const [noteMeta, setNoteMeta] = useState({});
+  const [adminReplyLikeMeta, setAdminReplyLikeMeta] = useState({});
   const [noteDrafts, setNoteDrafts] = useState({});
   const [replyDrafts, setReplyDrafts] = useState({});
   const [noteStatus, setNoteStatus] = useState({});
   const [replyStatus, setReplyStatus] = useState({});
+  const [adminReplyLikeStatus, setAdminReplyLikeStatus] = useState({});
+  const [adminReplyModal, setAdminReplyModal] = useState({
+    open: false,
+    empId: "",
+    draft: "",
+  });
 
   const saveTimersRef = useRef({});
   const replyTimersRef = useRef({});
@@ -754,6 +806,25 @@ export default function HistoriqueEmploye({
     return String(repliesFS?.[empId] || "");
   };
   const setReplyDraft = (empId, value) => setReplyDrafts((p) => ({ ...(p || {}), [empId]: value }));
+
+  const getAdminReplyLike = (empId) => adminReplyLikeMeta?.[empId] || {};
+  const getAdminReplyLikeText = (empId) =>
+    String(adminReplyLikeMeta?.[empId]?.text || "").trim();
+
+  const getEffectiveYellowAtMs = (empId) => {
+    const replyAtMs = Number(replyMeta?.[empId]?.atMs || 0) || 0;
+    const adminReplyLikeAtMs = Number(adminReplyLikeMeta?.[empId]?.atMs || 0) || 0;
+    return Math.max(replyAtMs, adminReplyLikeAtMs);
+  };
+
+  const openAdminReplyModalForEmp = (empId) => {
+    const current = String(adminReplyLikeMeta?.[empId]?.text || "");
+    setAdminReplyModal({
+      open: true,
+      empId,
+      draft: current,
+    });
+  };
 
   const scheduleAutoSave = (empId) => {
     if (!empId) return;
@@ -782,7 +853,21 @@ export default function HistoriqueEmploye({
     try {
       await setDoc(
         noteDocRef(empId, payBlockKey),
-        { note, updatedAt: serverTimestamp(), updatedBy: user?.email || "" },
+        {
+          note,
+          updatedAt: serverTimestamp(),
+          updatedBy: user?.email || "",
+
+          targetEmpId: empId,
+          targetEmailLower: String(
+            employes.find((e) => e.id === empId)?.emailLower ||
+              employes.find((e) => e.id === empId)?.email ||
+              ""
+          )
+            .trim()
+            .toLowerCase(),
+          targetUid: String(employes.find((e) => e.id === empId)?.uid || "").trim(),
+        },
         { merge: true }
       );
 
@@ -832,6 +917,71 @@ export default function HistoriqueEmploye({
     }
   };
 
+  const saveAdminReplyLikeForEmp = async (empId, rawText) => {
+    if (!empId || !isAdmin) return;
+    const text = String(rawText || "").trim();
+
+    setAdminReplyLikeStatus((p) => ({
+      ...(p || {}),
+      [empId]: { saving: true, savedAt: p?.[empId]?.savedAt || null, err: "" },
+    }));
+
+    try {
+      if (!text) {
+        await setDoc(
+          noteDocRef(empId, payBlockKey),
+          {
+            adminReplyLikeText: deleteField(),
+            adminReplyLikeAuthor: deleteField(),
+            adminReplyLikeAt: deleteField(),
+          },
+          { merge: true }
+        );
+
+        setAdminReplyLikeMeta((p) => ({
+          ...(p || {}),
+          [empId]: { text: "", author: "", at: null, atMs: 0 },
+        }));
+      } else {
+        await setDoc(
+          noteDocRef(empId, payBlockKey),
+          {
+            adminReplyLikeText: text,
+            adminReplyLikeAuthor: actorDisplayName,
+            adminReplyLikeAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        setAdminReplyLikeMeta((p) => ({
+          ...(p || {}),
+          [empId]: {
+            text,
+            author: actorDisplayName,
+            at: new Date(),
+            atMs: Date.now(),
+          },
+        }));
+      }
+
+      setAdminReplyLikeStatus((p) => ({
+        ...(p || {}),
+        [empId]: { saving: false, savedAt: Date.now(), err: "" },
+      }));
+    } catch (e) {
+      const msg =
+        e?.code === "permission-denied"
+          ? "Accès refusé: Firestore bloque l’enregistrement (rules)."
+          : e?.message || String(e);
+
+      setAdminReplyLikeStatus((p) => ({
+        ...(p || {}),
+        [empId]: { saving: false, savedAt: p?.[empId]?.savedAt || null, err: msg },
+      }));
+      setError(msg);
+    }
+  };
+
   const statusLabel = (empId) => {
     const s = noteStatus?.[empId] || {};
     if (s.saving) return "Sauvegarde…";
@@ -846,12 +996,21 @@ export default function HistoriqueEmploye({
     if (s.savedAt) return "Réponse sauvegardée ✅";
     return "";
   };
+  const adminReplyLikeStatusLabel = (empId) => {
+    const s = adminReplyLikeStatus?.[empId] || {};
+    if (s.saving) return "Sauvegarde message admin…";
+    if (s.err) return s.err;
+    if (s.savedAt) return "Message admin sauvegardé ✅";
+    return "";
+  };
 
   useEffect(() => {
     setNoteDrafts({});
     setReplyDrafts({});
     setNoteStatus({});
     setReplyStatus({});
+    setAdminReplyLikeStatus({});
+    setAdminReplyModal({ open: false, empId: "", draft: "" });
 
     const timers = saveTimersRef.current || {};
     Object.keys(timers).forEach((k) => clearTimeout(timers[k]));
@@ -916,7 +1075,7 @@ export default function HistoriqueEmploye({
     return replyAtMs <= seen;
   };
 
-  /* ===================== ✅ INBOX PERSO NOTES RH (employé normal + admin) ===================== */
+  /* ===================== ✅ INBOX PERSO NOTES RH ===================== */
   const [myNotesMetaByBlock, setMyNotesMetaByBlock] = useState({});
 
   const selfNotesEnabled =
@@ -966,7 +1125,6 @@ export default function HistoriqueEmploye({
       const seenMs = Number(meta.seenMs || 0) || 0;
       const hasText = !!meta.hasText;
       if (!hasText || !updMs) continue;
-
       if (updMs > seenMs) out.push({ blockKey, updMs });
     }
     out.sort((a, b) => (b.updMs || 0) - (a.updMs || 0));
@@ -987,7 +1145,7 @@ export default function HistoriqueEmploye({
     return out;
   }, [myUnseenNoteDocs]);
 
-  /* ===================== ✅ SELF DOC LISTENER (pour réponse + note perso admin/employé) ===================== */
+  /* ===================== ✅ SELF DOC LISTENER ===================== */
   useEffect(() => {
     if (!selfNotesEnabled) return;
 
@@ -1043,6 +1201,16 @@ export default function HistoriqueEmploye({
             seenBy: String(data.noteSeenByEmpBy || ""),
           },
         }));
+
+        setAdminReplyLikeMeta((p) => ({
+          ...(p || {}),
+          [derivedMeEmpId]: {
+            text: String(data.adminReplyLikeText || ""),
+            author: String(data.adminReplyLikeAuthor || ""),
+            at: toJSDateMaybe(data.adminReplyLikeAt),
+            atMs: safeToMs(data.adminReplyLikeAt),
+          },
+        }));
       },
       (err) => setError(err?.message || String(err))
     );
@@ -1050,10 +1218,9 @@ export default function HistoriqueEmploye({
     return () => unsub();
   }, [selfNotesEnabled, derivedMeEmpId, payBlockKey]);
 
-  // PRIVILEGED: listeners (note + reply) pour tous
+  /* ===================== PRIVILEGED: listeners pour tous ===================== */
   useEffect(() => {
-    if (!isPrivileged) return;
-    if (!unlocked) return;
+    if (!isPrivileged || !unlocked) return;
 
     const list = (employes || []).filter((e) => e?.id);
     const unsubs = [];
@@ -1105,6 +1272,16 @@ export default function HistoriqueEmploye({
             },
           }));
 
+          setAdminReplyLikeMeta((p) => ({
+            ...(p || {}),
+            [empId]: {
+              text: String(data.adminReplyLikeText || ""),
+              author: String(data.adminReplyLikeAuthor || ""),
+              at: toJSDateMaybe(data.adminReplyLikeAt),
+              atMs: safeToMs(data.adminReplyLikeAt),
+            },
+          }));
+
           setNoteDrafts((p) => {
             if (p?.[empId] !== undefined) return p;
             return { ...(p || {}), [empId]: note };
@@ -1129,7 +1306,7 @@ export default function HistoriqueEmploye({
     };
   }, [isPrivileged, unlocked, payBlockKey, employes]);
 
-  /* ===================== ✅ PRIVILEGED: ALERTES RH SUR RÉPONSES (TOUS BLOCS) ===================== */
+  /* ===================== ✅ ALERTES RH SUR RÉPONSES (employé OU admin dans jaune) ===================== */
   const [allRepliesByDoc, setAllRepliesByDoc] = useState({});
   useEffect(() => {
     if (!isPrivileged || !unlocked) return;
@@ -1141,24 +1318,36 @@ export default function HistoriqueEmploye({
         const map = {};
         snap.forEach((d) => {
           const data = d.data() || {};
+
           const reply = String(data.reply || "").trim();
-          const atMs = safeToMs(data.replyAt);
-          if (!reply || !atMs) return;
+          const replyAtMs = safeToMs(data.replyAt);
+
+          const adminReplyLikeText = String(data.adminReplyLikeText || "").trim();
+          const adminReplyLikeAtMs = safeToMs(data.adminReplyLikeAt);
+
+          const hasEmployeeReply = !!reply && !!replyAtMs;
+          const hasAdminReplyLike = !!adminReplyLikeText && !!adminReplyLikeAtMs;
+
+          if (!hasEmployeeReply && !hasAdminReplyLike) return;
 
           const parts = String(d.ref.path || "").split("/");
           const empId = parts?.[1] || "";
           const blockKey = parts?.[3] || "";
           if (!empId || !blockKey) return;
 
-          const replySeenAtMs = safeToMs(data.replySeenByAdminAt);
+          const seenAtMs = safeToMs(data.replySeenByAdminAt);
+          const effectiveAtMs = Math.max(replyAtMs || 0, adminReplyLikeAtMs || 0);
 
           map[`${empId}__${blockKey}`] = {
             empId,
             blockKey,
             reply,
-            atMs,
+            replyAtMs,
+            adminReplyLikeText,
+            adminReplyLikeAtMs,
+            effectiveAtMs,
             by: String(data.replyBy || ""),
-            seenAtMs: replySeenAtMs,
+            seenAtMs,
           };
         });
         setAllRepliesByDoc(map);
@@ -1173,8 +1362,8 @@ export default function HistoriqueEmploye({
     if (!isPrivileged || !unlocked) return [];
     const arr = Object.values(allRepliesByDoc || {});
     return arr
-      .filter((x) => !isReplySeenFS(x.atMs, x.seenAtMs))
-      .sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
+      .filter((x) => !isReplySeenFS(x.effectiveAtMs, x.seenAtMs))
+      .sort((a, b) => (b.effectiveAtMs || 0) - (a.effectiveAtMs || 0));
   }, [isPrivileged, unlocked, allRepliesByDoc]);
 
   const adminUnseenReplyCount = adminAlertList.length;
@@ -1194,7 +1383,7 @@ export default function HistoriqueEmploye({
 
   const flashRHTitle = isRH && unlocked && adminUnseenReplyCount > 0;
 
-  /* ===================== TAUX HORAIRE + VACANCES (ADMIN seul) ===================== */
+  /* ===================== TAUX HORAIRE + MALADIE ===================== */
   const [rateDrafts, setRateDrafts] = useState({});
   const rateDraftValue = (empId, current) => {
     const v = rateDrafts?.[empId];
@@ -1202,63 +1391,48 @@ export default function HistoriqueEmploye({
     return current == null ? "" : String(current).replace(".", ",");
   };
 
-  const [vacDrafts, setVacDrafts] = useState({});
-  const vacDraftValue = (empId, current) => {
-    const v = vacDrafts?.[empId];
-    if (v !== undefined) return v;
-    return current == null ? "" : String(current).replace(".", ",");
-  };
-
-  function parsePercentInput(v) {
-    const s = String(v || "").trim().replace(",", ".");
-    if (!s) return null;
-    const n = Number(s);
-    if (!isFinite(n)) return null;
-    return Math.max(0, Math.min(100, n));
-  }
-
-  const saveRateAndVac = async (empId) => {
+  const saveRateAndSickDays = async (empId) => {
     if (!isAdmin) return;
 
     const rawRate = rateDrafts?.[empId];
-    const rawVac = vacDrafts?.[empId];
-
     const hasRate = rawRate !== undefined;
-    const hasVac = rawVac !== undefined;
-
-    if (!hasRate && !hasVac) return;
+    if (!hasRate) return;
 
     const payload = {};
-
-    if (hasRate) {
-      const n = parseMoneyInput(rawRate);
-      if (n == null) return setError("Taux horaire invalide. Exemple: 32,50");
-      payload.tauxHoraire = n;
-    }
-
-    if (hasVac) {
-      const p = parsePercentInput(rawVac);
-      if (p == null) return setError("Vacance (%) invalide. Exemple: 4 ou 4,0");
-      payload.vacancePct = p;
-    }
+    const n = parseMoneyInput(rawRate);
+    if (n == null) return setError("Taux horaire invalide. Exemple: 32,50");
+    payload.tauxHoraire = n;
 
     try {
       await updateDoc(doc(db, "employes", empId), payload);
+      setRateDrafts((p) => {
+        const c = { ...(p || {}) };
+        delete c[empId];
+        return c;
+      });
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  };
 
-      if (hasRate) {
-        setRateDrafts((p) => {
-          const c = { ...(p || {}) };
-          delete c[empId];
-          return c;
-        });
-      }
-      if (hasVac) {
-        setVacDrafts((p) => {
-          const c = { ...(p || {}) };
-          delete c[empId];
-          return c;
-        });
-      }
+  const adjustSickDays = async (empId, delta) => {
+    if (!(isAdmin || isRH)) return;
+    if (!empId) return;
+
+    const emp = employes.find((e) => e.id === empId);
+    if (!emp) return;
+
+    const currentYear = getCurrentSickYear();
+    const currentRemaining = getSickDaysRemaining(emp);
+    const nextRemaining = Math.max(0, Math.min(2, currentRemaining + delta));
+
+    try {
+      await updateDoc(doc(db, "employes", empId), {
+        joursMaladieRestants: nextRemaining,
+        joursMaladieAnnee: currentYear,
+        joursMaladieUpdatedAt: serverTimestamp(),
+        joursMaladieUpdatedBy: user?.email || "",
+      });
     } catch (e) {
       setError(e?.message || String(e));
     }
@@ -1324,7 +1498,10 @@ export default function HistoriqueEmploye({
   const myTotal2Weeks = useMemo(() => round2(myTotalWeek1 + myTotalWeek2), [myTotalWeek1, myTotalWeek2]);
 
   /* ===================== PRIVILEGED : Sommaire + détail ===================== */
-  const visibleEmployes = useMemo(() => (isPrivileged ? employes : []), [employes, isPrivileged]);
+  const visibleEmployes = useMemo(() => {
+    if (!isPrivileged) return [];
+    return (employes || []).filter((e) => e?.isRH !== true);
+  }, [employes, isPrivileged]);
 
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryErr, setSummaryErr] = useState("");
@@ -1355,7 +1532,6 @@ export default function HistoriqueEmploye({
         nom: emp?.nom || "(sans nom)",
         email: emp?.email || "",
         tauxHoraire: emp?.tauxHoraire ?? null,
-        vacancePct: emp?.vacancePct ?? null,
         week1: w1,
         week2: w2,
         total: t,
@@ -1364,18 +1540,14 @@ export default function HistoriqueEmploye({
 
     async function loadSummary() {
       try {
-        if (!isPrivileged) return;
-        if (!unlocked) return;
+        if (!isPrivileged || !unlocked) return;
 
         setSummaryErr("");
         setSummaryLoading(true);
 
         const list = (visibleEmployes || []).filter((e) => e?.id);
         const computed = await mapLimit(list, 6, computeEmployeeTotals);
-
-        const clean = (computed || [])
-          .filter(Boolean)
-          .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
+        const clean = (computed || []).filter(Boolean).sort(compareEmployesParNomFamille);
 
         if (!cancelled) setSummaryRows(clean);
       } catch (e) {
@@ -1422,14 +1594,14 @@ export default function HistoriqueEmploye({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailErr, setDetailErr] = useState("");
   const [detailRows, setDetailRows] = useState([]);
+  const [sickModal, setSickModal] = useState({ open: false, empId: "" });
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadDetail(empId) {
       try {
-        if (!isPrivileged || !unlocked) return;
-        if (!empId) return;
+        if (!isPrivileged || !unlocked || !empId) return;
 
         setDetailErr("");
         setDetailLoading(true);
@@ -1472,11 +1644,13 @@ export default function HistoriqueEmploye({
   );
   const detailTotal2Weeks = useMemo(() => round2(detailTotalWeek1 + detailTotalWeek2), [detailTotalWeek1, detailTotalWeek2]);
 
-  /* ===================== Données perso RH -> admin/employé ===================== */
+  /* ===================== Données perso ===================== */
   const myNote = getDraft(derivedMeEmpId);
   const myReply = getReplyDraft(derivedMeEmpId);
   const myReplyStatusText = replyStatusLabel(derivedMeEmpId);
   const myReplyStatusObj = replyStatus?.[derivedMeEmpId] || {};
+  const myAdminReplyLike = getAdminReplyLike(derivedMeEmpId);
+  const myAdminReplyLikeText = String(myAdminReplyLike?.text || "").trim();
 
   const myNoteUpdatedAtMs = Number(noteMeta?.[derivedMeEmpId]?.updatedAtMs || 0) || 0;
   const myNoteSeenAtMs = Number(noteMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
@@ -1484,10 +1658,55 @@ export default function HistoriqueEmploye({
   const myNoteSeen = hasMyNoteText ? isNoteSeenFS(myNoteUpdatedAtMs, myNoteSeenAtMs) : true;
   const myNoteSeenAt = noteMeta?.[derivedMeEmpId]?.seenAt || null;
 
-  const myReplyAtMs = Number(replyMeta?.[derivedMeEmpId]?.atMs || 0) || 0;
+  const myEffectiveYellowAtMs = getEffectiveYellowAtMs(derivedMeEmpId);
   const myReplySeenAtMs = Number(replyMeta?.[derivedMeEmpId]?.seenAtMs || 0) || 0;
-  const myReplySeenByRH = myReplyAtMs ? isReplySeenFS(myReplyAtMs, myReplySeenAtMs) : true;
+  const myReplySeenByRH = myEffectiveYellowAtMs
+    ? isReplySeenFS(myEffectiveYellowAtMs, myReplySeenAtMs)
+    : true;
   const myReplySeenAt = replyMeta?.[derivedMeEmpId]?.seenAt || null;
+
+  const renderReplyBubbleContent = (empId, maxWidth = 320) => {
+    const employeeReply = String(repliesFS?.[empId] || "").trim();
+    const adminLike = getAdminReplyLike(empId);
+    const adminText = String(adminLike?.text || "").trim();
+    const adminAuthor = String(adminLike?.author || "").trim();
+    const adminAt = adminLike?.at || null;
+
+    if (!employeeReply && !adminText) return null;
+
+    return (
+      <div style={{ ...replyBubbleInline, maxWidth }}>
+        {employeeReply ? <div style={{ whiteSpace: "pre-wrap" }}>{employeeReply}</div> : null}
+
+        {adminText ? (
+          <div
+            style={{
+              whiteSpace: "pre-wrap",
+              fontWeight: 1000,
+              marginTop: employeeReply ? 8 : 0,
+              paddingTop: employeeReply ? 8 : 0,
+              borderTop: employeeReply ? "1px solid rgba(146,64,14,0.20)" : "none",
+            }}
+          >
+            {adminText}
+            {adminAuthor ? ` — ${adminAuthor}` : ""}
+            {adminAt ? (
+              <div
+                style={{
+                  marginTop: 4,
+                  fontSize: 11,
+                  fontWeight: 900,
+                  color: "#92400e",
+                }}
+              >
+                {fmtDateTimeFR(adminAt)}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   /* ===================== Guards screens ===================== */
   if (!isPrivileged && !pwUnlocked) {
@@ -1814,7 +2033,7 @@ export default function HistoriqueEmploye({
                   </span>
 
                   <span style={pill("#f1f5f9", "#e2e8f0", "#0f172a")}>
-                    Vacance: {fmtMoneyComma(myEmpObj?.vacancePct)} %
+                    Maladie restant: {getSickDaysRemaining(myEmpObj)}
                   </span>
                 </div>
               </div>
@@ -1891,29 +2110,56 @@ export default function HistoriqueEmploye({
                   </div>
 
                   <div>
-                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Ma réponse (si je veux répondre)</div>
-                    <textarea
-                      rows={3}
-                      value={myReply}
-                      onChange={(e) => {
-                        setReplyDraft(derivedMeEmpId, e.target.value);
-                        scheduleAutoSaveReply(derivedMeEmpId);
-                      }}
-                      onBlur={() => saveReplyForEmp(derivedMeEmpId)}
-                      placeholder="Écrire ta réponse…"
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Espace pour communiquer avec comptabilité</div>
+
+                    <div
                       style={{
-                        width: "100%",
                         border: "1px solid #eab308",
                         background: "#fef08a",
                         borderRadius: 12,
-                        padding: "10px 12px",
-                        fontSize: 13,
-                        resize: "vertical",
+                        padding: 10,
                       }}
-                    />
+                    >
+                      <textarea
+                        rows={3}
+                        value={myReply}
+                        onChange={(e) => {
+                          setReplyDraft(derivedMeEmpId, e.target.value);
+                          scheduleAutoSaveReply(derivedMeEmpId);
+                        }}
+                        onBlur={() => saveReplyForEmp(derivedMeEmpId)}
+                        placeholder="Écrire ta réponse…"
+                        style={{
+                          width: "100%",
+                          border: "1px solid #eab308",
+                          background: "#fffde7",
+                          borderRadius: 12,
+                          padding: "10px 12px",
+                          fontSize: 13,
+                          resize: "vertical",
+                        }}
+                      />
+
+                      {myAdminReplyLikeText ? (
+                        <div
+                          style={{
+                            marginTop: 8,
+                            paddingTop: 8,
+                            borderTop: "1px solid rgba(146,64,14,0.20)",
+                            whiteSpace: "pre-wrap",
+                            fontWeight: 1000,
+                            fontSize: 13,
+                            lineHeight: 1.25,
+                          }}
+                        >
+                          {myAdminReplyLikeText}
+                          {myAdminReplyLike?.author ? ` — ${myAdminReplyLike.author}` : ""}
+                        </div>
+                      ) : null}
+                    </div>
 
                     <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                      {myReplyAtMs ? (
+                      {myEffectiveYellowAtMs ? (
                         <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
                           {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
                         </span>
@@ -1983,7 +2229,6 @@ export default function HistoriqueEmploye({
 
         {navBar}
 
-        {/* ✅ NOUVEAU : inbox perso pour ADMIN */}
         {hasPersonalInbox && (
           <>
             {myUnseenNoteCount > 0 ? (
@@ -2088,29 +2333,56 @@ export default function HistoriqueEmploye({
                 </div>
 
                 <div>
-                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Ma réponse au RH</div>
-                  <textarea
-                    rows={3}
-                    value={myReply}
-                    onChange={(e) => {
-                      setReplyDraft(derivedMeEmpId, e.target.value);
-                      scheduleAutoSaveReply(derivedMeEmpId);
-                    }}
-                    onBlur={() => saveReplyForEmp(derivedMeEmpId)}
-                    placeholder="Écrire ma réponse…"
+                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Espace pour communiquer avec comptabilité</div>
+
+                  <div
                     style={{
-                      width: "100%",
                       border: "1px solid #eab308",
                       background: "#fef08a",
                       borderRadius: 12,
-                      padding: "10px 12px",
-                      fontSize: 13,
-                      resize: "vertical",
+                      padding: 10,
                     }}
-                  />
+                  >
+                    <textarea
+                      rows={3}
+                      value={myReply}
+                      onChange={(e) => {
+                        setReplyDraft(derivedMeEmpId, e.target.value);
+                        scheduleAutoSaveReply(derivedMeEmpId);
+                      }}
+                      onBlur={() => saveReplyForEmp(derivedMeEmpId)}
+                      placeholder="Écrire ma réponse…"
+                      style={{
+                        width: "100%",
+                        border: "1px solid #eab308",
+                        background: "#fffde7",
+                        borderRadius: 12,
+                        padding: "10px 12px",
+                        fontSize: 13,
+                        resize: "vertical",
+                      }}
+                    />
+
+                    {myAdminReplyLikeText ? (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          paddingTop: 8,
+                          borderTop: "1px solid rgba(146,64,14,0.20)",
+                          whiteSpace: "pre-wrap",
+                          fontWeight: 1000,
+                          fontSize: 13,
+                          lineHeight: 1.25,
+                        }}
+                      >
+                        {myAdminReplyLikeText}
+                        {myAdminReplyLike?.author ? ` — ${myAdminReplyLike.author}` : ""}
+                      </div>
+                    ) : null}
+                  </div>
 
                   <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    {myReplyAtMs ? (
+                    {myEffectiveYellowAtMs ? (
                       <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
                         {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
                       </span>
@@ -2226,12 +2498,17 @@ export default function HistoriqueEmploye({
                       const status = statusLabel(r.id);
 
                       const reply = String(repliesFS?.[r.id] || "").trim();
-                      const replyAtMs = Number(replyMeta?.[r.id]?.atMs || 0) || 0;
+                      const adminReplyText = getAdminReplyLikeText(r.id);
+
                       const replySeenAtMs = Number(replyMeta?.[r.id]?.seenAtMs || 0) || 0;
                       const replySeenAt = replyMeta?.[r.id]?.seenAt || null;
 
                       const hasReply = !!reply;
-                      const seen = hasReply ? isReplySeenFS(replyAtMs, replySeenAtMs) : true;
+                      const hasAdminReply = !!adminReplyText;
+                      const effectiveYellowAtMs = getEffectiveYellowAtMs(r.id);
+                      const seen = effectiveYellowAtMs
+                        ? isReplySeenFS(effectiveYellowAtMs, replySeenAtMs)
+                        : true;
 
                       const globalUnseenForEmp = adminAlertList.find((x) => x.empId === r.id);
 
@@ -2240,6 +2517,9 @@ export default function HistoriqueEmploye({
                       const noteSeenByEmpAt = noteMeta?.[r.id]?.seenAt || null;
                       const noteHasText = !!String(getDraft(r.id) || "").trim();
                       const noteSeenByEmp = noteHasText ? isNoteSeenFS(noteUpdatedAtMs, noteSeenByEmpAtMs) : true;
+
+                      const adminMsgStatus = adminReplyLikeStatusLabel(r.id);
+                      const adminMsgStatusObj = adminReplyLikeStatus?.[r.id] || {};
 
                       return (
                         <tr key={r.id}>
@@ -2346,9 +2626,22 @@ export default function HistoriqueEmploye({
                                 ) : null}
                               </div>
 
-                              {reply ? (
+                              {(hasReply || hasAdminReply) ? (
                                 <div style={{ display: "grid", gap: 6, alignItems: "start" }}>
-                                  <div style={replyBubbleInline}>{reply}</div>
+                                  <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                                    {renderReplyBubbleContent(r.id, 360)}
+
+                                    {isAdmin ? (
+                                      <button
+                                        type="button"
+                                        style={plusAdminBtn}
+                                        title="Ajouter un message admin dans la case jaune"
+                                        onClick={() => openAdminReplyModalForEmp(r.id)}
+                                      >
+                                        +
+                                      </button>
+                                    ) : null}
+                                  </div>
 
                                   <label
                                     style={{
@@ -2381,6 +2674,48 @@ export default function HistoriqueEmploye({
                                       Vu le {fmtDateTimeFR(replySeenAt)}
                                     </div>
                                   ) : null}
+
+                                  {adminMsgStatus ? (
+                                    <div
+                                      style={{
+                                        fontSize: 12,
+                                        fontWeight: 900,
+                                        color: adminMsgStatusObj.err
+                                          ? "#b91c1c"
+                                          : adminMsgStatusObj.saving
+                                          ? "#7c2d12"
+                                          : "#166534",
+                                      }}
+                                    >
+                                      {adminMsgStatus}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : isAdmin ? (
+                                <div style={{ display: "grid", gap: 6, alignItems: "start" }}>
+                                  <button
+                                    type="button"
+                                    style={plusAdminBtn}
+                                    title="Ajouter un message admin dans la case jaune"
+                                    onClick={() => openAdminReplyModalForEmp(r.id)}
+                                  >
+                                    +
+                                  </button>
+                                  {adminMsgStatus ? (
+                                    <div
+                                      style={{
+                                        fontSize: 12,
+                                        fontWeight: 900,
+                                        color: adminMsgStatusObj.err
+                                          ? "#b91c1c"
+                                          : adminMsgStatusObj.saving
+                                          ? "#7c2d12"
+                                          : "#166534",
+                                      }}
+                                    >
+                                      {adminMsgStatus}
+                                    </div>
+                                  ) : null}
                                 </div>
                               ) : null}
                             </div>
@@ -2405,7 +2740,6 @@ export default function HistoriqueEmploye({
           </Card>
         </div>
 
-        {/* MODAL DÉTAIL */}
         {detailEmpId && (
           <Modal
             title={`Détail — ${detailEmp?.nom || detailEmpId}`}
@@ -2439,58 +2773,89 @@ export default function HistoriqueEmploye({
                 </div>
               </div>
 
-              {/* ✅ Taux + Vacances */}
               <Card>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    <div style={{ fontWeight: 1000 }}>Paramètres paie</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                      Modifiable par admin seulement.
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div
+                    style={{
+                      border: "1px solid #fde68a",
+                      background: "#fffbeb",
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                    }}
+                  >
+                    <div style={{ fontWeight: 1000, marginBottom: 4, color: "#92400e" }}>
+                      Explications paie maladie
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 900, color: "#78350f" }}>
+                      1/20 des 4 dernières semaines travaillé = paie 1 journée de maladie
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      flexWrap: "wrap",
+                      alignItems: "end",
+                    }}
+                  >
                     <div style={{ display: "grid", gap: 6 }}>
-                      <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>Taux ($/h)</div>
-                      <input
-                        value={rateDraftValue(detailEmpId, detailEmp?.tauxHoraire)}
-                        onChange={(e) => setRateDrafts((p) => ({ ...(p || {}), [detailEmpId]: e.target.value }))}
-                        placeholder="0,00"
-                        style={{
-                          border: "1px solid #cbd5e1",
-                          borderRadius: 10,
-                          padding: "10px 12px",
-                          fontWeight: 900,
-                          textAlign: "right",
-                          width: 160,
-                        }}
-                        disabled={!isAdmin}
-                      />
+                      <div style={{ fontWeight: 1000 }}>Paramètres paie</div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                        Taux modifiable par admin. Jours de maladie modifiables par admin ou RH.
+                      </div>
                     </div>
 
-                    <div style={{ display: "grid", gap: 6 }}>
-                      <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>Vacance (%)</div>
-                      <input
-                        value={vacDraftValue(detailEmpId, detailEmp?.vacancePct)}
-                        onChange={(e) => setVacDrafts((p) => ({ ...(p || {}), [detailEmpId]: e.target.value }))}
-                        placeholder="0"
-                        style={{
-                          border: "1px solid #cbd5e1",
-                          borderRadius: 10,
-                          padding: "10px 12px",
-                          fontWeight: 900,
-                          textAlign: "right",
-                          width: 140,
-                        }}
-                        disabled={!isAdmin}
-                      />
-                    </div>
+                    <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>Taux ($/h)</div>
+                        <input
+                          value={rateDraftValue(detailEmpId, detailEmp?.tauxHoraire)}
+                          onChange={(e) =>
+                            setRateDrafts((p) => ({ ...(p || {}), [detailEmpId]: e.target.value }))
+                          }
+                          placeholder="0,00"
+                          style={{
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 10,
+                            padding: "10px 12px",
+                            fontWeight: 900,
+                            textAlign: "right",
+                            width: 160,
+                          }}
+                          disabled={!isAdmin}
+                        />
+                      </div>
 
-                    {isAdmin ? (
-                      <Button variant="primary" onClick={() => saveRateAndVac(detailEmpId)}>
-                        Sauver
-                      </Button>
-                    ) : null}
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>
+                          Jours de maladie restant
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!(isAdmin || isRH)) return;
+                            setSickModal({ open: true, empId: detailEmpId });
+                          }}
+                          disabled={!(isAdmin || isRH)}
+                          style={{
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 10,
+                            padding: "10px 12px",
+                            fontWeight: 1000,
+                            textAlign: "center",
+                            width: 140,
+                            background: isAdmin || isRH ? "#fff" : "#f1f5f9",
+                            cursor: isAdmin || isRH ? "pointer" : "not-allowed",
+                            fontSize: 18,
+                          }}
+                        >
+                          {getSickDaysRemaining(detailEmp)}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -2591,15 +2956,30 @@ export default function HistoriqueEmploye({
                       </div>
                     </div>
 
-                    {String(repliesFS?.[detailEmpId] || "").trim() ? (
+                    {(String(repliesFS?.[detailEmpId] || "").trim() || getAdminReplyLikeText(detailEmpId)) ? (
                       <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
-                        <div style={replyBubbleInline}>{String(repliesFS?.[detailEmpId] || "")}</div>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                          {renderReplyBubbleContent(detailEmpId, 600)}
+
+                          {isAdmin ? (
+                            <button
+                              type="button"
+                              style={plusAdminBtn}
+                              title="Ajouter un message admin dans la case jaune"
+                              onClick={() => openAdminReplyModalForEmp(detailEmpId)}
+                            >
+                              +
+                            </button>
+                          ) : null}
+                        </div>
 
                         {(() => {
-                          const replyAtMs = Number(replyMeta?.[detailEmpId]?.atMs || 0) || 0;
+                          const effectiveYellowAtMs = getEffectiveYellowAtMs(detailEmpId);
                           const replySeenAtMs = Number(replyMeta?.[detailEmpId]?.seenAtMs || 0) || 0;
                           const replySeenAt = replyMeta?.[detailEmpId]?.seenAt || null;
-                          const seen = isReplySeenFS(replyAtMs, replySeenAtMs);
+                          const seen = effectiveYellowAtMs
+                            ? isReplySeenFS(effectiveYellowAtMs, replySeenAtMs)
+                            : true;
 
                           return (
                             <div style={{ display: "grid", gap: 6 }}>
@@ -2637,11 +3017,220 @@ export default function HistoriqueEmploye({
                             </div>
                           );
                         })()}
+
+                        {adminReplyLikeStatusLabel(detailEmpId) ? (
+                          <div
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 900,
+                              color: adminReplyLikeStatus?.[detailEmpId]?.err
+                                ? "#b91c1c"
+                                : adminReplyLikeStatus?.[detailEmpId]?.saving
+                                ? "#7c2d12"
+                                : "#166534",
+                            }}
+                          >
+                            {adminReplyLikeStatusLabel(detailEmpId)}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : isAdmin ? (
+                      <div style={{ marginTop: 14 }}>
+                        <button
+                          type="button"
+                          style={plusAdminBtn}
+                          title="Ajouter un message admin dans la case jaune"
+                          onClick={() => openAdminReplyModalForEmp(detailEmpId)}
+                        >
+                          +
+                        </button>
                       </div>
                     ) : null}
                   </div>
                 </div>
               </Card>
+            </div>
+          </Modal>
+        )}
+
+        {sickModal.open && (
+          <Modal
+            title="Jours de maladie restant"
+            onClose={() => setSickModal({ open: false, empId: "" })}
+            width={420}
+          >
+            {(() => {
+              const emp = employes.find((e) => e.id === sickModal.empId);
+              const restants = getSickDaysRemaining(emp);
+
+              return (
+                <div style={{ display: "grid", gap: 14 }}>
+                  <div>
+                    <div style={{ fontWeight: 1000, fontSize: 16 }}>
+                      {emp?.nom || "Employé"}
+                    </div>
+                    <div style={{ fontSize: 13, color: "#64748b", fontWeight: 800 }}>
+                      Année {getCurrentSickYear()}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      border: "1px solid #fde68a",
+                      background: "#fffbeb",
+                      borderRadius: 12,
+                      padding: "10px 12px",
+                      fontSize: 13,
+                      fontWeight: 900,
+                      color: "#78350f",
+                    }}
+                  >
+                    Explications paie maladie : 1/20 des 4 dernières semaines travaillé = paie 1 journée de maladie
+                  </div>
+
+                  <div
+                    style={{
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 14,
+                      background: "#f8fafc",
+                      padding: "18px 14px",
+                      textAlign: "center",
+                      fontSize: 34,
+                      fontWeight: 1000,
+                      color: "#0f172a",
+                    }}
+                  >
+                    {restants}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <Button
+                      variant="primary"
+                      onClick={async () => {
+                        await adjustSickDays(sickModal.empId, +1);
+                      }}
+                      disabled={restants >= 2}
+                    >
+                      Ajouter une journée
+                    </Button>
+
+                    <Button
+                      variant="danger"
+                      onClick={async () => {
+                        await adjustSickDays(sickModal.empId, -1);
+                      }}
+                      disabled={restants <= 0}
+                    >
+                      Enlever une journée
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
+          </Modal>
+        )}
+
+        {adminReplyModal.open && isAdmin && (
+          <Modal
+            title={`Message admin dans la réponse employé${
+              employes.find((e) => e.id === adminReplyModal.empId)?.nom
+                ? ` — ${employes.find((e) => e.id === adminReplyModal.empId)?.nom}`
+                : ""
+            }`}
+            onClose={() => setAdminReplyModal({ open: false, empId: "", draft: "" })}
+            width={620}
+          >
+            <div style={{ display: "grid", gap: 12 }}>
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 900,
+                  color: "#64748b",
+                }}
+              >
+                Ce message sera affiché dans la case jaune en gras avec la signature :{" "}
+                <span style={{ color: "#92400e" }}>— {actorDisplayName}</span>
+              </div>
+
+              <textarea
+                rows={5}
+                value={adminReplyModal.draft}
+                onChange={(e) =>
+                  setAdminReplyModal((p) => ({ ...(p || {}), draft: e.target.value }))
+                }
+                placeholder="Écrire le message admin…"
+                style={{
+                  width: "100%",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                  resize: "vertical",
+                }}
+              />
+
+              <div
+                style={{
+                  border: "1px solid #eab308",
+                  background: "#fef08a",
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 1000, marginBottom: 6, color: "#92400e" }}>
+                  Aperçu
+                </div>
+
+                {String(adminReplyModal.draft || "").trim() ? (
+                  <div style={{ whiteSpace: "pre-wrap", fontWeight: 1000, lineHeight: 1.25 }}>
+                    {String(adminReplyModal.draft || "").trim()} — {actorDisplayName}
+                  </div>
+                ) : (
+                  <div style={{ color: "#64748b", fontWeight: 900 }}>Aucun message</div>
+                )}
+              </div>
+
+              {adminReplyLikeStatusLabel(adminReplyModal.empId) ? (
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 900,
+                    color: adminReplyLikeStatus?.[adminReplyModal.empId]?.err
+                      ? "#b91c1c"
+                      : adminReplyLikeStatus?.[adminReplyModal.empId]?.saving
+                      ? "#7c2d12"
+                      : "#166534",
+                  }}
+                >
+                  {adminReplyLikeStatusLabel(adminReplyModal.empId)}
+                </div>
+              ) : null}
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Button
+                  variant="primary"
+                  onClick={async () => {
+                    await saveAdminReplyLikeForEmp(adminReplyModal.empId, adminReplyModal.draft);
+                    setAdminReplyModal({ open: false, empId: "", draft: "" });
+                  }}
+                  disabled={!!adminReplyLikeStatus?.[adminReplyModal.empId]?.saving}
+                >
+                  {adminReplyLikeStatus?.[adminReplyModal.empId]?.saving
+                    ? "Sauvegarde…"
+                    : "Sauvegarder"}
+                </Button>
+
+                <Button
+                  variant="danger"
+                  onClick={async () => {
+                    await saveAdminReplyLikeForEmp(adminReplyModal.empId, "");
+                    setAdminReplyModal({ open: false, empId: "", draft: "" });
+                  }}
+                  disabled={!!adminReplyLikeStatus?.[adminReplyModal.empId]?.saving}
+                >
+                  Enlever le message admin
+                </Button>
+              </div>
             </div>
           </Modal>
         )}

@@ -74,6 +74,12 @@
 // - Le popup "Projets fermés" inclut aussi les autres tâches spéciales fermées complètement
 //   avec PDF + email (autresProjets projectLike)
 // - Réouverture / suppression gèrent maintenant projets ET autresProjets
+//
+// ✅ MODIF (2026-03-28):
+// - Création projet: SEUL le nom du client est obligatoire
+// - Validation complète déplacée au moment de fermer le projet
+// - Nouveau champ: "Check Engine allumé ?" (oui/non)
+// - Blocage fermeture si champs obligatoires manquants
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
@@ -178,6 +184,33 @@ function fmtHM(ms) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return `${h}:${m.toString().padStart(2, "0")}`;
+}
+function normalizeOuiNon(v) {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "oui") return "oui";
+  if (s === "non") return "non";
+  return null;
+}
+function getMissingRequiredProjectFields(projet) {
+  const missing = [];
+
+  if (!String(projet?.clientNom || projet?.nom || "").trim()) missing.push("Nom du client");
+  if (!String(projet?.numeroUnite || "").trim()) missing.push("Numéro d’unité");
+
+  const anneeStr = String(projet?.annee ?? "").trim();
+  if (!/^\d{4}$/.test(anneeStr)) missing.push("Année");
+
+  if (!String(projet?.marque || "").trim()) missing.push("Marque");
+  if (!String(projet?.modele || "").trim()) missing.push("Modèle");
+  if (!String(projet?.plaque || "").trim()) missing.push("Plaque");
+  if (!String(projet?.odometre || "").trim()) missing.push("Odomètre / Heures");
+  if (!String(projet?.vin || "").trim()) missing.push("VIN");
+
+  if (!normalizeOuiNon(projet?.checkEngineAllume)) {
+    missing.push("Check Engine allumé?");
+  }
+
+  return missing;
 }
 
 /* ---------------------- ✅ Dossier auto (5000, 5001, ...) ---------------------- */
@@ -1584,8 +1617,12 @@ async function updateProjetPatch(projId, patch) {
   }
 
   if (p.annee != null) {
-    const n = Number(String(p.annee).trim());
-    p.annee = Number.isFinite(n) ? n : null;
+    const raw = String(p.annee).trim();
+    p.annee = /^\d{4}$/.test(raw) ? Number(raw) : null;
+  }
+
+  if (p.checkEngineAllume != null) {
+    p.checkEngineAllume = normalizeOuiNon(p.checkEngineAllume);
   }
 
   await updateDoc(doc(db, "projets", projId), p);
@@ -1655,6 +1692,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
               odometre: obj.odometre ?? "",
               vin: obj.vin ?? "",
               note: obj.note ?? "",
+              checkEngineAllume: obj.checkEngineAllume ?? "",
             };
           }
         },
@@ -1898,6 +1936,23 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
                   style={inputInline}
                 />
               </div>
+
+              <div>
+                <div style={labelMini}>Check Engine allumé ?</div>
+                <select
+                  value={p.checkEngineAllume ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, checkEngineAllume: v } : prev));
+                    commitPatchDebounced({ checkEngineAllume: v });
+                  }}
+                  style={inputInline}
+                >
+                  <option value="">—</option>
+                  <option value="oui">Oui</option>
+                  <option value="non">Non</option>
+                </select>
+              </div>
             </div>
 
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #d1d5db" }}>
@@ -1926,7 +1981,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
                 DOCS
               </DocsButton>
 
-              <button onClick={onCloseBT} style={btnCloseBT}>
+              <button onClick={() => onCloseBT?.(p)} style={btnCloseBT}>
                 Fermer le Bon de Travail
               </button>
             </div>
@@ -2090,6 +2145,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const [vin, setVin] = useState("");
   const [note, setNote] = useState("");
   const [tempsEstimeHeures, setTempsEstimeHeures] = useState("");
+  const [checkEngineAllume, setCheckEngineAllume] = useState("");
   const [nextDossierNo, setNextDossierNo] = useState(null);
   const [msg, setMsg] = useState("");
   const [quickClientOpen, setQuickClientOpen] = useState(false);
@@ -2127,6 +2183,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       setVin(projet.vin ?? "");
       setTempsEstimeHeures(projet.tempsEstimeHeures != null ? String(projet.tempsEstimeHeures) : "");
       setNote(projet.note ?? "");
+      setCheckEngineAllume(projet.checkEngineAllume ?? "");
       setNextDossierNo(null);
       createStartMsRef.current = null;
       prevMarqueIdRef.current = null;
@@ -2141,6 +2198,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       setVin("");
       setTempsEstimeHeures("");
       setNote("");
+      setCheckEngineAllume("");
       setNextDossierNo(null);
 
       let startMs = Date.now();
@@ -2196,6 +2254,7 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
       setVin(draft.vin ?? "");
       setTempsEstimeHeures(draft.tempsEstimeHeures ?? "");
       setNote(draft.note ?? "");
+      setCheckEngineAllume(draft.checkEngineAllume ?? "");
 
       window.sessionStorage?.removeItem("draftProjetFromReglages");
       window.sessionStorage?.removeItem("draftProjetOpen");
@@ -2225,26 +2284,21 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
     try {
       const cleanClientNom = clientNom.trim();
       const cleanNom = cleanClientNom;
-      const cleanUnite = numeroUnite.trim();
+      const cleanUnite = numeroUnite.trim() || null;
+
       const selectedYear = annees.find((a) => String(a.id) === String(annee));
-      const cleanAnnee = annee ? Number(selectedYear?.value ?? annee) : null;
+      const cleanAnneeRaw = annee ? String(selectedYear?.value ?? annee).trim() : "";
+      const cleanAnnee = /^\d{4}$/.test(cleanAnneeRaw) ? Number(cleanAnneeRaw) : null;
+
       const cleanMarque = marque.trim() || null;
       const cleanModele = modele.trim() || null;
-      const cleanPlaque = plaque.trim().toUpperCase();
-      const cleanOdo = odometre.trim();
-      const cleanVin = vin.trim().toUpperCase();
+      const cleanPlaque = plaque.trim().toUpperCase() || null;
+      const cleanOdo = odometre.trim() || null;
+      const cleanVin = vin.trim().toUpperCase() || null;
       const cleanNote = note.trim();
+      const cleanCheckEngineAllume = normalizeOuiNon(checkEngineAllume);
 
       if (!cleanClientNom) return setMsg("Indique le nom du client/entreprise.");
-      if (!cleanUnite) return setMsg("Indique le numéro d’unité.");
-      if (!annee) return setMsg("Sélectionne une année.");
-      if (!cleanMarque) return setMsg("Sélectionne une marque.");
-      if (!cleanModele) return setMsg("Sélectionne un modèle.");
-      if (!cleanPlaque) return setMsg("Indique une plaque.");
-      if (!cleanOdo) return setMsg("Indique un odomètre / Heures.");
-      if (!cleanVin) return setMsg("Indique un VIN.");
-
-      if (!cleanAnnee || !/^\d{4}$/.test(String(cleanAnnee))) return setMsg("Année invalide (format AAAA).");
 
       let teVal = null;
       if (mode === "create") {
@@ -2261,13 +2315,14 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
         nom: cleanNom,
         clientNom: cleanClientNom,
         numeroUnite: cleanUnite,
-        annee: Number(cleanAnnee),
+        annee: cleanAnnee,
         marque: cleanMarque,
         modele: cleanModele,
         plaque: cleanPlaque,
         odometre: cleanOdo,
         vin: cleanVin,
         note: cleanNote ? cleanNote : null,
+        checkEngineAllume: cleanCheckEngineAllume,
       };
 
       if (mode === "edit" && projet?.id) {
@@ -2346,7 +2401,19 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
   const goReglages = () => {
     if (mode === "create") {
       try {
-        const draft = { clientNom, numeroUnite, annee, marque, modele, plaque, odometre, vin, tempsEstimeHeures, note };
+        const draft = {
+          clientNom,
+          numeroUnite,
+          annee,
+          marque,
+          modele,
+          plaque,
+          odometre,
+          vin,
+          tempsEstimeHeures,
+          note,
+          checkEngineAllume,
+        };
         window.sessionStorage?.setItem("draftProjetFromReglages", JSON.stringify(draft));
         window.sessionStorage?.setItem("draftProjetOpen", "1");
       } catch (e) {
@@ -2631,6 +2698,18 @@ function PopupCreateProjet({ open, onClose, onError, mode = "create", projet = n
             <input value={vin} onChange={(e) => setVin(e.target.value.toUpperCase())} style={inputC} />
           </FieldV>
 
+          <FieldV label="Check Engine allumé ?" compact>
+            <select
+              value={checkEngineAllume}
+              onChange={(e) => setCheckEngineAllume(e.target.value)}
+              style={selectC}
+            >
+              <option value="">—</option>
+              <option value="oui">Oui</option>
+              <option value="non">Non</option>
+            </select>
+          </FieldV>
+
           <FieldV label="Note" compact>
             <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Résumé des travaux" style={textareaC} />
           </FieldV>
@@ -2722,7 +2801,19 @@ export default function PageListeProjet({ isAdmin = false }) {
   const openPDF = (p) => setDocsMgr({ open: true, projet: p });
   const closePDF = () => setDocsMgr({ open: false, projet: null });
 
-  const openCloseBT = (p) => setCloseBT({ open: true, projet: p });
+  const openCloseBT = (p) => {
+    const missing = getMissingRequiredProjectFields(p);
+
+    if (missing.length > 0) {
+      window.alert(
+        "Impossible de fermer le projet.\n\nCertains champs ne sont pas remplis :\n- " +
+          missing.join("\n- ")
+      );
+      return;
+    }
+
+    setCloseBT({ open: true, projet: p });
+  };
   const closeCloseBT = () => setCloseBT({ open: false, projet: null });
 
   const openHistorique = (p) => setHist({ open: true, projet: p });
@@ -2919,9 +3010,9 @@ export default function PageListeProjet({ isAdmin = false }) {
           if (!details.projet) return;
           openHistorique(details.projet);
         }}
-        onCloseBT={() => {
-          if (!details.projet) return;
-          openCloseBT(details.projet);
+        onCloseBT={(projLive) => {
+          if (!projLive) return;
+          openCloseBT(projLive);
         }}
       />
 

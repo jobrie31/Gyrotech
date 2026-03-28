@@ -61,6 +61,42 @@
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
 }
 
+.password-wrap {
+  position: relative;
+}
+
+.password-wrap > input {
+  width: 100%;
+  padding: 10px 54px 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  outline: none;
+}
+
+.password-wrap > input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.password-toggle:hover {
+  color: #111827;
+}
+
 .login-alert {
   margin: 8px 0;
   font-size: 14px;
@@ -94,4 +130,35 @@
   color: var(--primary);
   cursor: pointer;
   font-size: 14px;
+}
+
+.password-wrap {
+  position: relative;
+}
+
+.password-wrap > input {
+  width: 100%;
+  padding: 10px 70px 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  outline: none;
+}
+
+.password-wrap > input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+.password-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 4px;
 }

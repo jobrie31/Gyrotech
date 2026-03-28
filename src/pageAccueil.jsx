@@ -51,6 +51,11 @@
 // - Les tâches spéciales sont surlignées en jaune
 // - Le badge "TÂCHE SPÉCIALE" est à droite du titre
 // - Les tâches normales gardent leur bouton "Choisir" bleu
+//
+// ✅ MODIF (2026-03-28):
+// - Le popup de création projet s’ouvre directement dans PageAccueil
+// - Le refresh conserve l’ouverture du questionnaire si openCreateProjet = 1
+// - Le temps de départ du punch reste conservé via pendingNewProjStartMs
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom"; // createPortal
@@ -74,6 +79,7 @@ import PageProjets from "./PageProjets";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
+import { PopupCreateProjet } from "./PageActions";
 
 // ✅ BUILD TAG (debug cache / versions)
 const APP_BUILD = "2.6";
@@ -796,6 +802,17 @@ async function doDepunchWithProject(emp) {
   orphan2ToSchedule.forEach((x) => scheduleOrphanProject2_0(x));
 }
 
+function clearPendingCreateProjectSession() {
+  try {
+    window.sessionStorage?.removeItem("pendingNewProjEmpId");
+    window.sessionStorage?.removeItem("pendingNewProjEmpName");
+    window.sessionStorage?.removeItem("pendingNewProjStartMs");
+    window.sessionStorage?.removeItem("openCreateProjet");
+  } catch (e) {
+    console.error("Erreur clear session projet", e);
+  }
+}
+
 async function createAndPunchNewProject(emp) {
   const startMs = Date.now();
   try {
@@ -803,10 +820,11 @@ async function createAndPunchNewProject(emp) {
     window.sessionStorage?.setItem("pendingNewProjEmpName", emp.nom || "");
     window.sessionStorage?.setItem("pendingNewProjStartMs", String(startMs));
     window.sessionStorage?.setItem("openCreateProjet", "1");
+
+    window.dispatchEvent(new Event("open-create-projet"));
   } catch (e) {
     console.error("Erreur sessionStorage", e);
   }
-  window.location.hash = "#/projets";
 }
 
 /* ---------------------- UI de base ---------------------- */
@@ -1787,10 +1805,8 @@ export default function PageAccueil() {
   const canSeeAdminMenus = isAdmin || isRH;
 
   const visibleEmployes = useMemo(() => {
-    // ✅ On retire seulement les Ressources humaines du tableau punch
     const employesSansRH = employes.filter((e) => e?.isRH !== true);
 
-    // ✅ Admin et RH voient la même chose pour les menus / la vue globale
     if (canSeeAdminMenus) return employesSansRH;
 
     if (!myEmploye || myEmploye?.isRH === true) return [];
@@ -1827,6 +1843,32 @@ export default function PageAccueil() {
   }, []);
 
   const [materialProjId, setMaterialProjId] = useState(null);
+  const [createProjetOpen, setCreateProjetOpen] = useState(false);
+
+  useEffect(() => {
+    const tryOpenFromSession = () => {
+      try {
+        const shouldOpen = window.sessionStorage?.getItem("openCreateProjet") === "1";
+        if (shouldOpen) {
+          setCreateProjetOpen(true);
+        }
+      } catch (e) {
+        console.error("Erreur ouverture projet depuis session", e);
+      }
+    };
+
+    tryOpenFromSession();
+
+    const handleOpenCreateProjet = () => {
+      setCreateProjetOpen(true);
+    };
+
+    window.addEventListener("open-create-projet", handleOpenCreateProjet);
+
+    return () => {
+      window.removeEventListener("open-create-projet", handleOpenCreateProjet);
+    };
+  }, []);
 
   const [pressed, setPressed] = useState(false);
   void pressed;
@@ -1896,7 +1938,26 @@ export default function PageAccueil() {
         </div>
       </PageContainer>
 
-      {materialProjId && <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={setError} />}
+      {materialProjId && (
+        <ProjectMaterielPanel
+          projId={materialProjId}
+          onClose={() => setMaterialProjId(null)}
+          setParentError={setError}
+        />
+      )}
+
+      <PopupCreateProjet
+        open={createProjetOpen}
+        mode="create"
+        onClose={() => {
+          setCreateProjetOpen(false);
+          clearPendingCreateProjectSession();
+        }}
+        onError={(msg) => setError(msg)}
+        onSaved={() => {
+          setCreateProjetOpen(false);
+        }}
+      />
 
       <div style={{ position: "fixed", bottom: 8, right: 12, fontSize: 12, opacity: 0.5, zIndex: 99999 }}>
         Version: {APP_BUILD}

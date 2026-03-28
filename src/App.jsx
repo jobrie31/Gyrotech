@@ -6,7 +6,7 @@ import Login from "./Login";
 
 import BurgerMenu from "./BurgerMenu";
 import PageAccueil from "./pageAccueil";
-import PageListeProjet from "./PageListeProjet";
+import PageProjets from "./PageProjets";
 import PageMateriels from "./PageMateriels";
 import PageReglages from "./PageReglages";
 import PageReglagesAdmin from "./PageReglagesAdmin";
@@ -295,6 +295,9 @@ export default function App() {
 
   // ✅ Notif clignotante (note RH pour le compte connecté) — TOUS BLOCS
   const [noteNotifOn, setNoteNotifOn] = useState(false);
+
+  // ✅ NOUVEAU: notif clignotante RH quand un admin ajoute un message dans la case jaune
+  const [rhAdminReplyLikeNotifOn, setRhAdminReplyLikeNotifOn] = useState(false);
 
   // ✅ meta cache des notes (Firestore)
   const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
@@ -704,15 +707,19 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     if (!me?.id) return;
-    if (isRH) return; // ✅ RH n'a pas de boîte perso RH
+    if (isRH) return;
 
     const empId = me.id;
+    const myUid = String(user?.uid || "").trim();
+    const myEmailLower = String(user?.email || "").trim().toLowerCase();
+
     const colRef = collection(db, "employes", empId, "payBlockNotes");
 
     const unsub = onSnapshot(
       colRef,
       (snap) => {
         const meta = {};
+
         snap.forEach((d) => {
           const data = d.data() || {};
           const blockKey = d.id;
@@ -722,6 +729,20 @@ export default function App() {
 
           const updMs = safeToMs(data.updatedAt);
           const seenMs = safeToMs(data.noteSeenByEmpAt);
+
+          const targetEmpId = String(data.targetEmpId || "").trim();
+          const targetUid = String(data.targetUid || "").trim();
+          const targetEmailLower = String(data.targetEmailLower || "").trim().toLowerCase();
+
+          // ✅ la note doit viser CE compte précis
+          const matchesTarget =
+            (targetEmpId && targetEmpId === me.id) ||
+            (targetUid && targetUid === myUid) ||
+            (targetEmailLower && targetEmailLower === myEmailLower) ||
+            // fallback compat vieux docs sans target
+            (!targetEmpId && !targetUid && !targetEmailLower);
+
+          if (!matchesTarget) return;
 
           meta[blockKey] = { updMs, seenMs, hasText };
         });
@@ -738,6 +759,52 @@ export default function App() {
 
     return () => unsub();
   }, [user, me?.id, isRH]);
+
+  /* ===================== 🔔 NOTIF RH — message admin dans la case jaune ===================== */
+  useEffect(() => {
+    setRhAdminReplyLikeNotifOn(false);
+  }, [user?.uid, me?.id, isRH]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!me?.id) return;
+    if (!isRH) return;
+
+    const qAll = query(collectionGroup(db, "payBlockNotes"));
+
+    const unsub = onSnapshot(
+      qAll,
+      (snap) => {
+        let hasUnseenAdminReplyLike = false;
+
+        snap.forEach((d) => {
+          if (hasUnseenAdminReplyLike) return;
+
+          const data = d.data() || {};
+
+          const adminReplyLikeText = String(data.adminReplyLikeText || "").trim();
+          if (!adminReplyLikeText) return;
+
+          const adminReplyLikeAtMs = safeToMs(data.adminReplyLikeAt);
+          if (!adminReplyLikeAtMs) return;
+
+          const replySeenAtMs = safeToMs(data.replySeenByAdminAt);
+
+          if (adminReplyLikeAtMs > replySeenAtMs) {
+            hasUnseenAdminReplyLike = true;
+          }
+        });
+
+        setRhAdminReplyLikeNotifOn(hasUnseenAdminReplyLike);
+      },
+      (err) => {
+        console.error("RH adminReplyLike notif snapshot error:", err);
+        setRhAdminReplyLikeNotifOn(false);
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid, me?.id, isRH]);
 
   /* ===================== 🧾 NOTIF RH — remboursements approuvés à télécharger ===================== */
 
@@ -890,7 +957,6 @@ export default function App() {
     }
   };
 
-  // ✅ action admin seulement
   const adminSaveBroadcast = async () => {
     if (!isAdmin) return;
     const txt = String(broadcastDraft || "").trim();
@@ -1032,7 +1098,6 @@ export default function App() {
   if (isAdmin) {
     pages = [
       { key: "accueil", label: "Accueil" },
-      { key: "projets", label: "Projets" },
       { key: "materiels", label: "Matériels" },
       { key: "reglages", label: "Réglages" },
       { key: "reglages-admin", label: "Réglages Admin" },
@@ -1048,7 +1113,6 @@ export default function App() {
   } else {
     pages = [
       { key: "accueil", label: "Accueil" },
-      { key: "projets", label: "Projets" },
       { key: "materiels", label: "Matériels" },
       { key: "reglages", label: "Réglages" },
       { key: "historique", label: "Mes heures" },
@@ -1075,28 +1139,33 @@ export default function App() {
     background: "#fff",
   };
 
-  const topBarBlink = noteNotifOn
-    ? {
-        animation: "notifBlinkVIF 0.55s infinite",
-        borderBottom: "2px solid #ff0000",
-        boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
-      }
-    : (remboursementNotifOn || remboursementAdminNotifOn)
-    ? {
-        animation: "notifBlinkORANGE 1.4s infinite",
-        borderBottom: "2px solid #f97316",
-        boxShadow: "0 0 0 2px rgba(249,115,22,0.22) inset, 0 0 24px rgba(249,115,22,0.30)",
-      }
-    : broadcastNotifOn
-    ? {
-        animation: "notifBlinkBLEU 0.70s infinite",
-        borderBottom: "2px solid #2563eb",
-        boxShadow: "0 0 0 2px rgba(37,99,235,0.18) inset, 0 0 22px rgba(37,99,235,0.28)",
-      }
-    : null;
+  const topBarBlink =
+    noteNotifOn || rhAdminReplyLikeNotifOn
+      ? {
+          animation: "notifBlinkVIF 0.55s infinite",
+          borderBottom: "2px solid #ff0000",
+          boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
+        }
+      : remboursementNotifOn || remboursementAdminNotifOn
+      ? {
+          animation: "notifBlinkORANGE 1.4s infinite",
+          borderBottom: "2px solid #f97316",
+          boxShadow: "0 0 0 2px rgba(249,115,22,0.22) inset, 0 0 24px rgba(249,115,22,0.30)",
+        }
+      : broadcastNotifOn
+      ? {
+          animation: "notifBlinkBLEU 0.70s infinite",
+          borderBottom: "2px solid #2563eb",
+          boxShadow: "0 0 0 2px rgba(37,99,235,0.18) inset, 0 0 22px rgba(37,99,235,0.28)",
+        }
+      : null;
 
   const connectedStyle =
-    noteNotifOn || remboursementNotifOn || remboursementAdminNotifOn || broadcastNotifOn
+    noteNotifOn ||
+    rhAdminReplyLikeNotifOn ||
+    remboursementNotifOn ||
+    remboursementAdminNotifOn ||
+    broadcastNotifOn
       ? {
           color: "#ffffff",
           fontWeight: 1000,
@@ -1144,6 +1213,23 @@ export default function App() {
               Connecté: {user.email}
               {isAdmin ? " — Admin" : isRH ? " — RH" : ""}
             </span>
+
+            {isRH && rhAdminReplyLikeNotifOn ? (
+              <span
+                style={{
+                  border: "1px solid rgba(255,255,255,0.75)",
+                  background: "rgba(255,255,255,0.18)",
+                  color: "inherit",
+                  borderRadius: 999,
+                  fontSize: 13,
+                  padding: "4px 10px",
+                  fontWeight: 1000,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Nouveau message admin dans la réponse employé
+              </span>
+            ) : null}
 
             {isAdmin && remboursementAdminNotifOn ? (
               <span
@@ -1269,11 +1355,12 @@ export default function App() {
           <button
             onClick={handleLogout}
             style={{
-              border: noteNotifOn
-                ? "2px solid #ff0000"
-                : (remboursementNotifOn || remboursementAdminNotifOn)
-                ? "2px solid #f97316"
-                : "1px solid #cbd5e1",
+              border:
+                noteNotifOn || rhAdminReplyLikeNotifOn
+                  ? "2px solid #ff0000"
+                  : remboursementNotifOn || remboursementAdminNotifOn
+                  ? "2px solid #f97316"
+                  : "1px solid #cbd5e1",
               background: "#ffffff",
               borderRadius: 7,
               padding: "1px 6px",
@@ -1394,7 +1481,7 @@ export default function App() {
       <BurgerMenu pages={pages} isAdmin={isAdmin} isRH={isRH} />
 
       {route === "accueil" && !isRH && <PageAccueil />}
-      {route === "projets" && !isRH && <PageListeProjet isAdmin={isAdmin} />}
+      {route === "projets" && !isRH && <PageProjets isAdmin={isAdmin} />}
       {route === "materiels" && !isRH && <PageMateriels />}
       {route === "reglages" && !isRH && <PageReglages />}
       {route === "reglages-admin" && isAdmin && <PageReglagesAdmin />}

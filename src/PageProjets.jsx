@@ -1,39 +1,5 @@
-// src/PageProjets.jsx — Tableau Projets (Accueil) + popup Détails etc.
-//
-// ✅ MODIF (2026-03-06):
-// - Suppression complète du orphan project côté client dans PageProjets
-// - PageProjets devient lecture/UI seulement pour les segments projet en cours
-// - La fermeture sync projet/employé doit maintenant être gérée par:
-//   1) le dépunch normal côté PageAccueil
-//   2) la Cloud Function syncProjectSegOnEmpClose
-//
-// ✅ FIX (2026-03-06):
-// - useSessionsP ne se réabonne PLUS aux 15s
-// - le tick 15s de PageProjets reste seulement pour rafraîchir l’affichage UI si besoin
-//
-// ✅ FIX (2026-03-04) CLOSE BT "béton":
-// - depunchWorkersOnProject ferme PROJET + EMPLOYÉ par segId identique (pas de where end==null)
-// - on lit tous les segments et filtre JS (end == null couvre null OU champ absent)
-// - batch + chunk pour éviter dépasser 500 writes
-//
-// ✅ FIX (2026-03-05) auto-save UI:
-// - Le message "Sauvegardé" est directement sous la note
-// - Zone réservée fixe => n'étire plus la carte et ne fait plus bouger la page
-//
-// ✅ FIX (2026-03-05) note:
-// - Minimum 6 lignes visibles
-// - Maximum 15 lignes visibles
-// - Après 15 lignes: scroll vertical interne
-// - Pas de resize manuel
-//
-// ✅ FIX (2026-03-05) popups:
-// - Cliquer à l'extérieur NE ferme PLUS les popups
-// - Fermeture seulement via X / Fermer / Annuler
-//
-// ✅ MODIF (2026-03-05):
-// - Bouton PDF renommé en DOCS
-// - DOCS accepte PDF + JPEG/JPG
-// - Popup DOCS au lieu de PDF
+// src/PageProjets.jsx
+// Tableau Projets (Accueil) + popups + création auto via PageAccueil
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db, storage } from "./firebaseConfig";
@@ -43,20 +9,55 @@ import {
   getDoc,
   setDoc,
   onSnapshot,
-  serverTimestamp,
   query,
   getDocs,
   orderBy,
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
-import { ref as storageRef, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
+import {
+  ref as storageRef,
+  uploadBytes,
+  getDownloadURL,
+  listAll,
+  deleteObject,
+} from "firebase/storage";
+
+import {
+  useAnnees,
+  useMarques,
+  useModeles,
+  useMarqueIdFromName,
+  useClients,
+} from "./refData";
 
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { CloseProjectWizard } from "./PageProjetsFermes";
+import {
+  PopupCreateProjet,
+  ClosedProjectsPopup,
+  normalizeOuiNon,
+  getMissingRequiredProjectFields,
+  deleteProjectDeep,
+  deleteAutreProjetDeep,
+  reopenClosedEntity,
+} from "./PageActions";
 
 /* ---------------------- Utils ---------------------- */
-const MONTHS_FR_ABBR = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
+const MONTHS_FR_ABBR = [
+  "janv",
+  "févr",
+  "mars",
+  "avr",
+  "mai",
+  "juin",
+  "juil",
+  "août",
+  "sept",
+  "oct",
+  "nov",
+  "déc",
+];
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -85,10 +86,7 @@ function toDateSafe(ts) {
 function fmtDate(ts) {
   const d = toDateSafe(ts);
   if (!d || isNaN(d.getTime())) return "—";
-  const day = d.getDate();
-  const mon = MONTHS_FR_ABBR[d.getMonth()] || "";
-  const year = d.getFullYear();
-  return `${day} ${mon} ${year}`;
+  return `${d.getDate()} ${MONTHS_FR_ABBR[d.getMonth()] || ""} ${d.getFullYear()}`;
 }
 function fmtHM(ms) {
   const s = Math.max(0, Math.floor((ms || 0) / 1000));
@@ -118,9 +116,7 @@ function empSegRef(empId, key, segId) {
   return doc(db, "employes", empId, "timecards", key, "segments", segId);
 }
 
-/**
- * ✅ CLOSE BT "BÉTON"
- */
+/* ---------------------- Close BT béton ---------------------- */
 async function depunchWorkersOnProject(projId) {
   if (!projId) return;
 
@@ -145,7 +141,10 @@ async function depunchWorkersOnProject(projId) {
     daysSnap.forEach((d) => dayIds.push(d.id));
 
     for (const day of dayIds) {
-      const segsSnap = await getDocs(query(collection(db, "projets", projId, "timecards", day, "segments"), orderBy("start", "asc")));
+      const segsSnap = await getDocs(
+        query(collection(db, "projets", projId, "timecards", day, "segments"), orderBy("start", "asc"))
+      );
+
       const openSegs = [];
       segsSnap.forEach((sd) => {
         const s = sd.data() || {};
@@ -229,6 +228,7 @@ async function depunchWorkersOnProject(projId) {
 /* ---------------------- Hooks (liste projets + stats) ---------------------- */
 function useProjets(setError) {
   const [rows, setRows] = useState([]);
+
   useEffect(() => {
     const c = collection(db, "projets");
     const unsub = onSnapshot(
@@ -250,12 +250,10 @@ function useProjets(setError) {
 
           const aBT = Number(a.dossierNo ?? 0);
           const bBT = Number(b.dossierNo ?? 0);
-
           if (aBT !== bBT) return bBT - aBT;
 
           const aNom = a.clientNom || a.nom || `${a.marque || ""} ${a.modele || ""}`.trim();
           const bNom = b.clientNom || b.nom || `${b.marque || ""} ${b.modele || ""}`.trim();
-
           return aNom.localeCompare(bNom, "fr-CA");
         });
 
@@ -263,13 +261,16 @@ function useProjets(setError) {
       },
       (err) => setError(err?.message || String(err))
     );
+
     return () => unsub();
   }, [setError]);
+
   return rows;
 }
 
 function useDayP(projId, key, setError) {
   const [card, setCard] = useState(null);
+
   useEffect(() => {
     if (!projId || !key) return;
     const unsub = onSnapshot(
@@ -279,6 +280,7 @@ function useDayP(projId, key, setError) {
     );
     return () => unsub();
   }, [projId, key, setError]);
+
   return card;
 }
 
@@ -319,7 +321,6 @@ function usePresenceTodayP(projId, setError) {
   const sessions = useSessionsP(projId, key, setError);
   const totalMs = useMemo(() => computeTotalMs(sessions), [sessions]);
   const hasOpen = useMemo(() => sessions.some((s) => !s.end), [sessions]);
-
   return { key, card, sessions, totalMs, hasOpen };
 }
 
@@ -336,13 +337,11 @@ function useProjectLifetimeStats(projId, setError) {
       async (daysSnap) => {
         try {
           const today = todayKey();
-
           let first = null;
           let totalClosed = 0;
 
           for (const d of daysSnap.docs) {
             const isToday = d.id === today;
-
             const segSnap = await getDocs(query(collection(d.ref, "segments"), orderBy("start", "asc")));
             segSnap.forEach((seg) => {
               const s = seg.data();
@@ -351,9 +350,7 @@ function useProjectLifetimeStats(projId, setError) {
               if (!st) return;
 
               if (!first || st < first) first = st;
-
-              if (isToday) return;
-              if (!en) return;
+              if (isToday || !en) return;
               totalClosed += Math.max(0, en.getTime() - st.getTime());
             });
           }
@@ -416,7 +413,6 @@ function ErrorBanner({ error, onClose }) {
   );
 }
 
-/* ---------------------- Badge DOCS ---------------------- */
 function DocsButton({ count, onClick, title = "Documents du projet", style, children }) {
   const c = Number(count || 0);
   return (
@@ -454,7 +450,7 @@ function DocsButton({ count, onClick, title = "Documents du projet", style, chil
   );
 }
 
-/* ---------------------- ✅ Popup HISTORIQUE Projet ---------------------- */
+/* ---------------------- Historique ---------------------- */
 function PopupHistoriqueProjet({ open, onClose, projet }) {
   const [error, setError] = useState(null);
   const [histRows, setHistRows] = useState([]);
@@ -529,7 +525,6 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
   if (!open || !projet) return null;
 
   const title = projet.clientNom || projet.nom || "—";
-
   const thH = {
     textAlign: "left",
     padding: 10,
@@ -570,18 +565,14 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>Historique – {title}</div>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose?.();
-            }}
-            title="Fermer"
+            onClick={onClose}
             style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
           >
             ×
           </button>
         </div>
 
-        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
+        {error ? <ErrorBanner error={error} onClose={() => setError(null)} /> : null}
 
         <div
           style={{
@@ -592,17 +583,17 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
             fontSize: 16,
           }}
         >
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
-            <div style={{ color: "#64748b", fontWeight: 900 }}>Client</div>
-            <div style={{ fontWeight: 1000, fontSize: 18 }}>{projet.clientNom || "—"}</div>
+          <div style={infoCard}>
+            <div style={infoCardLabel}>Client</div>
+            <div style={infoCardValue}>{projet.clientNom || "—"}</div>
           </div>
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
-            <div style={{ color: "#64748b", fontWeight: 900 }}># d'Unité</div>
-            <div style={{ fontWeight: 1000, fontSize: 18 }}>{projet.numeroUnite || "—"}</div>
+          <div style={infoCard}>
+            <div style={infoCardLabel}># d'Unité</div>
+            <div style={infoCardValue}>{projet.numeroUnite || "—"}</div>
           </div>
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "#f8fafc" }}>
-            <div style={{ color: "#64748b", fontWeight: 900 }}>Total compilé</div>
-            <div style={{ fontWeight: 1000, fontSize: 18 }}>{fmtHM(totalMsAll)}</div>
+          <div style={infoCard}>
+            <div style={infoCardLabel}>Total compilé</div>
+            <div style={infoCardValue}>{fmtHM(totalMsAll)}</div>
           </div>
         </div>
 
@@ -617,44 +608,35 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
             </tr>
           </thead>
           <tbody>
-            {loading && (
+            {loading ? (
               <tr>
-                <td colSpan={3} style={{ padding: 14, color: "#666" }}>
-                  Chargement…
-                </td>
+                <td colSpan={3} style={{ padding: 14, color: "#666" }}>Chargement…</td>
               </tr>
-            )}
-
-            {!loading &&
+            ) : histRows.length === 0 ? (
+              <tr>
+                <td colSpan={3} style={{ padding: 14, color: "#666", textAlign: "center" }}>Aucun historique.</td>
+              </tr>
+            ) : (
               histRows.map((r, i) => (
                 <tr key={`${r.date}-${r.empId || r.empName}-${i}`}>
                   <td style={tdH}>{fmtDate(r.date)}</td>
                   <td style={tdH}>{fmtHM(r.totalMs)}</td>
                   <td style={tdH}>{r.empName || "—"}</td>
                 </tr>
-              ))}
-
-            {!loading && histRows.length === 0 && (
-              <tr>
-                <td colSpan={3} style={{ padding: 14, color: "#666", textAlign: "center" }}>
-                  Aucun historique.
-                </td>
-              </tr>
+              ))
             )}
           </tbody>
         </table>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onClose} style={btnGhost}>
-            Fermer
-          </button>
+          <button onClick={onClose} style={btnGhost}>Fermer</button>
         </div>
       </div>
     </div>
   );
 }
 
-/* ---------------------- Popup DOCS Manager ---------------------- */
+/* ---------------------- Docs manager ---------------------- */
 function PopupDocsManager({ open, onClose, projet }) {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -681,8 +663,6 @@ function PopupDocsManager({ open, onClose, projet }) {
     }
 
     const myReqId = ++reqIdRef.current;
-
-    // ✅ IMPORTANT: vider immédiatement pour ne jamais voir les docs du projet précédent
     setFiles([]);
     setError(null);
     setLoading(true);
@@ -695,14 +675,10 @@ function PopupDocsManager({ open, onClose, projet }) {
         const entries = await Promise.all(
           (res.items || []).map(async (itemRef) => {
             const url = await getDownloadURL(itemRef);
-            return {
-              name: itemRef.name,
-              url,
-            };
+            return { name: itemRef.name, url };
           })
         );
 
-        // ✅ si entre-temps on a changé de projet, on ignore cette réponse
         if (reqIdRef.current !== myReqId) return;
 
         const sorted = entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -717,9 +693,7 @@ function PopupDocsManager({ open, onClose, projet }) {
         console.error(e);
         setError(e?.message || String(e));
       } finally {
-        if (reqIdRef.current === myReqId) {
-          setLoading(false);
-        }
+        if (reqIdRef.current === myReqId) setLoading(false);
       }
     })();
   }, [open, projet?.id]);
@@ -822,19 +796,10 @@ function PopupDocsManager({ open, onClose, projet }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>DOCS – {title}</div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose?.();
-            }}
-            title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
-          >
-            ×
-          </button>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
 
-        {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
+        {error ? <ErrorBanner error={error} onClose={() => setError(null)} /> : null}
 
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
           <button onClick={pickFile} style={btnPrimary} disabled={busy || loading}>
@@ -852,15 +817,7 @@ function PopupDocsManager({ open, onClose, projet }) {
 
         <div style={{ fontWeight: 900, margin: "6px 0 10px", fontSize: 18 }}>Documents du projet</div>
 
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            border: "1px solid #eee",
-            borderRadius: 14,
-            fontSize: 18,
-          }}
-        >
+        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}>
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={thCenter}>Nom</th>
@@ -887,9 +844,7 @@ function PopupDocsManager({ open, onClose, projet }) {
                   <td style={{ ...tdCenter, wordBreak: "break-word" }}>{f.name}</td>
                   <td style={tdCenter}>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
-                      <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
-                        Ouvrir
-                      </a>
+                      <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>Ouvrir</a>
 
                       <button
                         onClick={() => navigator.clipboard?.writeText(f.url)}
@@ -911,9 +866,7 @@ function PopupDocsManager({ open, onClose, projet }) {
         </table>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onClose} style={btnGhost}>
-            Fermer
-          </button>
+          <button onClick={onClose} style={btnGhost}>Fermer</button>
         </div>
       </div>
     </div>
@@ -956,13 +909,7 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>Fermer le Bon de Travail</div>
-          <button
-            onClick={onClose}
-            title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
-          >
-            ×
-          </button>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
 
         <div style={{ fontSize: 18, color: "#111827", marginBottom: 12 }}>
@@ -1004,7 +951,7 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
   );
 }
 
-/* ---------------------- ✅ helper: patch projet (compat nom=clientNom) ---------------------- */
+/* ---------------------- helper patch projet ---------------------- */
 async function updateProjetPatch(projId, patch) {
   if (!projId) return;
   const p = { ...(patch || {}) };
@@ -1024,15 +971,27 @@ async function updateProjetPatch(projId, patch) {
   }
 
   if (p.annee != null) {
-    const n = Number(String(p.annee).trim());
-    p.annee = Number.isFinite(n) ? n : null;
+    const raw = String(p.annee).trim();
+    p.annee = /^\d{4}$/.test(raw) ? Number(raw) : null;
+  }
+
+  if (p.checkEngineAllume != null) {
+    p.checkEngineAllume = normalizeOuiNon(p.checkEngineAllume);
   }
 
   await updateDoc(doc(db, "projets", projId), p);
 }
 
-/* ---------------------- Popup Détails (édition directe + auto-save) ---------------------- */
-function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMateriel, onCloseBT, onOpenHistorique }) {
+/* ---------------------- Popup détails ---------------------- */
+function PopupDetailsProjetSimple({
+  open,
+  projet,
+  onClose,
+  onOpenPDF,
+  onOpenMateriel,
+  onCloseBT,
+  onOpenHistorique,
+}) {
   const projId = projet?.id || null;
 
   const [live, setLive] = useState(null);
@@ -1050,6 +1009,25 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
 
   const noteRef = useRef(null);
 
+  const annees = useAnnees();
+  const marques = useMarques();
+  const clients = useClients();
+
+  const [showClientSuggestions, setShowClientSuggestions] = useState(false);
+  const [clientHoverIndex, setClientHoverIndex] = useState(-1);
+
+  const marqueId = useMarqueIdFromName(marques, live?.marque || "");
+  const modeles = useModeles(marqueId);
+
+  const clientsFiltered = useMemo(() => {
+    const q = String(live?.clientNom || "").trim().toLowerCase();
+    const base = [...clients].sort((a, b) =>
+      String(a?.name || "").localeCompare(String(b?.name || ""), "fr-CA")
+    );
+    if (!q) return base.slice(0, 8);
+    return base.filter((c) => String(c?.name || "").toLowerCase().includes(q)).slice(0, 8);
+  }, [clients, live?.clientNom]);
+
   const autoSizeNote = () => {
     const el = noteRef.current;
     if (!el) return;
@@ -1061,7 +1039,6 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
 
     const nextH = Math.max(minH, Math.min(el.scrollHeight, maxH));
     el.style.height = `${nextH}px`;
-
     el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
   };
 
@@ -1092,6 +1069,7 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
             odometre: obj.odometre ?? "",
             vin: obj.vin ?? "",
             note: obj.note ?? "",
+            checkEngineAllume: obj.checkEngineAllume ?? "",
           };
         }
       });
@@ -1127,11 +1105,13 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
     if (isFirstLoadRef.current) return;
 
     const next = { ...(lastSentRef.current || {}) };
-    let changed = {};
+    const changed = {};
+
     for (const [k, v] of Object.entries(patch || {})) {
       const prev = next[k];
       if (String(prev ?? "") !== String(v ?? "")) changed[k] = v;
     }
+
     if (Object.keys(changed).length === 0) return;
 
     lastSentRef.current = { ...next, ...changed };
@@ -1160,9 +1140,26 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
   const p = live || projet;
   const title = p.clientNom || p.nom || "—";
 
-  const inputInline = { ...input, fontSize: 16, fontWeight: 900, padding: "9px 10px", borderRadius: 12 };
-  const labelMini = { fontSize: 13, fontWeight: 1000, color: "#334155", marginBottom: 4 };
-  const infoGrid = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 };
+  const inputInline = {
+    ...input,
+    fontSize: 16,
+    fontWeight: 900,
+    padding: "9px 10px",
+    borderRadius: 12,
+  };
+
+  const labelMini = {
+    fontSize: 13,
+    fontWeight: 1000,
+    color: "#334155",
+    marginBottom: 4,
+  };
+
+  const infoGrid = {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  };
 
   return (
     <div
@@ -1214,15 +1211,97 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
             <div style={infoGrid}>
               <div>
                 <div style={labelMini}>Client</div>
-                <input
-                  value={p.clientNom ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setLive((prev) => (prev ? { ...prev, clientNom: v, nom: v } : prev));
-                    commitPatchDebounced({ clientNom: v });
-                  }}
-                  style={inputInline}
-                />
+                <div style={{ position: "relative" }}>
+                  <input
+                    value={p.clientNom ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setLive((prev) => (prev ? { ...prev, clientNom: v, nom: v } : prev));
+                      setShowClientSuggestions(true);
+                      setClientHoverIndex(-1);
+                      commitPatchDebounced({ clientNom: v });
+                    }}
+                    onFocus={() => setShowClientSuggestions(true)}
+                    onBlur={() => {
+                      setTimeout(() => {
+                        setShowClientSuggestions(false);
+                        setClientHoverIndex(-1);
+                      }, 120);
+                    }}
+                    onKeyDown={(e) => {
+                      if (!showClientSuggestions || clientsFiltered.length === 0) return;
+
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setClientHoverIndex((prev) => Math.min(prev + 1, clientsFiltered.length - 1));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setClientHoverIndex((prev) => Math.max(prev - 1, 0));
+                      } else if (e.key === "Enter" && clientHoverIndex >= 0 && clientsFiltered[clientHoverIndex]) {
+                        e.preventDefault();
+                        const v = clientsFiltered[clientHoverIndex].name;
+                        setLive((prev) => (prev ? { ...prev, clientNom: v, nom: v } : prev));
+                        setShowClientSuggestions(false);
+                        setClientHoverIndex(-1);
+                        commitPatchDebounced({ clientNom: v });
+                      } else if (e.key === "Escape") {
+                        setShowClientSuggestions(false);
+                        setClientHoverIndex(-1);
+                      }
+                    }}
+                    style={inputInline}
+                  />
+
+                  {showClientSuggestions && clientsFiltered.length > 0 ? (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "calc(100% + 4px)",
+                        left: 0,
+                        right: 0,
+                        zIndex: 30,
+                        background: "#fef9c3",
+                        border: "1px solid #d1d5db",
+                        borderRadius: 12,
+                        boxShadow: "0 14px 28px rgba(0,0,0,0.12)",
+                        maxHeight: 260,
+                        overflowY: "auto",
+                      }}
+                    >
+                      {clientsFiltered.map((c, idx) => {
+                        const active = idx === clientHoverIndex;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              const v = c.name;
+                              setLive((prev) => (prev ? { ...prev, clientNom: v, nom: v } : prev));
+                              setShowClientSuggestions(false);
+                              setClientHoverIndex(-1);
+                              commitPatchDebounced({ clientNom: v });
+                            }}
+                            onMouseEnter={() => setClientHoverIndex(idx)}
+                            style={{
+                              width: "100%",
+                              textAlign: "left",
+                              border: "none",
+                              background: active ? "#fde68a" : "#fef9c3",
+                              padding: "10px 12px",
+                              cursor: "pointer",
+                              fontSize: 15,
+                              fontWeight: 800,
+                              borderBottom: idx !== clientsFiltered.length - 1 ? "1px solid #f1f5f9" : "none",
+                            }}
+                          >
+                            {c.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div>
@@ -1239,8 +1318,48 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
               </div>
 
               <div>
+                <div style={labelMini}>Année</div>
+                <select
+                  value={p.annee ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, annee: v } : prev));
+                    commitPatchDebounced({ annee: v });
+                  }}
+                  style={inputInline}
+                >
+                  <option value="">—</option>
+                  {annees.map((a) => (
+                    <option key={a.id} value={a.value}>
+                      {a.value}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <div style={labelMini}>Marque</div>
+                <select
+                  value={p.marque ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, marque: v, modele: "" } : prev));
+                    commitPatchDebounced({ marque: v, modele: "" });
+                  }}
+                  style={inputInline}
+                >
+                  <option value="">—</option>
+                  {marques.map((m) => (
+                    <option key={m.id} value={m.name}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <div style={labelMini}>Modèle</div>
-                <input
+                <select
                   value={p.modele ?? ""}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -1248,34 +1367,21 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
                     commitPatchDebounced({ modele: v });
                   }}
                   style={inputInline}
-                />
-              </div>
+                  disabled={!marqueId}
+                >
+                  <option value="">—</option>
 
-              <div>
-                <div style={labelMini}>Année</div>
-                <input
-                  value={p.annee ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setLive((prev) => (prev ? { ...prev, annee: v } : prev));
-                    commitPatchDebounced({ annee: v });
-                  }}
-                  inputMode="numeric"
-                  style={inputInline}
-                />
-              </div>
+                  {p.modele &&
+                    !modeles.some((mo) => String(mo.name || "") === String(p.modele || "")) && (
+                      <option value={p.modele}>{p.modele}</option>
+                    )}
 
-              <div>
-                <div style={labelMini}>Marque</div>
-                <input
-                  value={p.marque ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setLive((prev) => (prev ? { ...prev, marque: v } : prev));
-                    commitPatchDebounced({ marque: v });
-                  }}
-                  style={inputInline}
-                />
+                  {modeles.map((mo) => (
+                    <option key={mo.id} value={mo.name}>
+                      {mo.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1316,12 +1422,31 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
                   style={inputInline}
                 />
               </div>
+
+              <div>
+                <div style={labelMini}>Check Engine allumé ?</div>
+                <select
+                  value={p.checkEngineAllume ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLive((prev) => (prev ? { ...prev, checkEngineAllume: v } : prev));
+                    commitPatchDebounced({ checkEngineAllume: v });
+                  }}
+                  style={inputInline}
+                >
+                  <option value="">—</option>
+                  <option value="oui">Oui</option>
+                  <option value="non">Non</option>
+                </select>
+              </div>
             </div>
 
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #d1d5db" }}>
               <div style={{ fontWeight: 1000 }}>
                 Temps estimé:{" "}
-                <span style={{ fontWeight: 900 }}>{p.tempsEstimeHeures != null ? `${fmtHours(p.tempsEstimeHeures)} h` : "—"}</span>
+                <span style={{ fontWeight: 900 }}>
+                  {p.tempsEstimeHeures != null ? `${fmtHours(p.tempsEstimeHeures)} h` : "—"}
+                </span>
               </div>
             </div>
           </div>
@@ -1342,7 +1467,10 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
                 DOCS
               </DocsButton>
 
-              <button onClick={onCloseBT} style={btnCloseBT}>
+              <button
+                onClick={() => onCloseBT?.(p)}
+                style={btnCloseBT}
+              >
                 Fermer le BT
               </button>
             </div>
@@ -1413,8 +1541,17 @@ function PopupDetailsProjetSimple({ open, projet, onClose, onOpenPDF, onOpenMate
   );
 }
 
-/* ---------------------- Ligne / Tableau (avec mêmes Actions) ---------------------- */
-function LigneProjet({ proj, idx = 0, tick, onOpenDetails, onOpenMaterial, onOpenPDF, onCloseBT, setError }) {
+/* ---------------------- Ligne / Tableau ---------------------- */
+function LigneProjet({
+  proj,
+  idx = 0,
+  tick,
+  onOpenDetails,
+  onOpenMaterial,
+  onOpenPDF,
+  onCloseBT,
+  setError,
+}) {
   const { hasOpen, totalMs: todayTotalMs } = usePresenceTodayP(proj.id, setError);
   const { firstEverStart, totalClosedMs } = useProjectLifetimeStats(proj.id, setError);
 
@@ -1431,14 +1568,17 @@ function LigneProjet({ proj, idx = 0, tick, onOpenDetails, onOpenMaterial, onOpe
     <tr
       style={{ cursor: "pointer", background: rowBg, transition: "background 120ms ease" }}
       onClick={() => onOpenDetails?.(proj)}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = rowBg)}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "#eef2ff";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = rowBg;
+      }}
     >
       <td style={tdCenter}>{proj.dossierNo != null ? proj.dossierNo : "—"}</td>
       <td style={tdCenter}>{proj.clientNom || proj.nom || "—"}</td>
       <td style={tdCenter}>{proj.numeroUnite || "—"}</td>
       <td style={tdCenter}>{proj.modele || "—"}</td>
-
       <td style={tdCenter}>
         <span style={statutStyle}>{statutLabel}</span>
       </td>
@@ -1448,19 +1588,16 @@ function LigneProjet({ proj, idx = 0, tick, onOpenDetails, onOpenMaterial, onOpe
 
       <td style={tdCenter} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={() => onOpenDetails?.(proj)} style={btnSecondary} title="Ouvrir les détails">
+          <button onClick={() => onOpenDetails?.(proj)} style={btnSecondary} type="button">
             Détails
           </button>
-
-          <button onClick={() => onOpenMaterial?.(proj)} style={btnBlue} title="Voir le matériel">
+          <button onClick={() => onOpenMaterial?.(proj)} style={btnBlue} type="button">
             Matériel
           </button>
-
-          <DocsButton count={proj.pdfCount} onClick={() => onOpenPDF?.(proj)} style={btnDocs} title="Documents du projet">
+          <DocsButton count={proj.pdfCount} onClick={() => onOpenPDF?.(proj)} style={btnDocs}>
             DOCS
           </DocsButton>
-
-          <button onClick={() => onCloseBT?.(proj)} style={btnCloseBT} title="Fermer le BT">
+          <button onClick={() => onCloseBT?.(proj)} style={btnCloseBT} type="button">
             Fermer le BT
           </button>
         </div>
@@ -1470,7 +1607,7 @@ function LigneProjet({ proj, idx = 0, tick, onOpenDetails, onOpenMaterial, onOpe
 }
 
 /* ---------------------- Page ---------------------- */
-export default function PageProjets({ onOpenMaterial }) {
+export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
   const [error, setError] = useState(null);
   const projets = useProjets(setError);
 
@@ -1487,6 +1624,33 @@ export default function PageProjets({ onOpenMaterial }) {
   const [closeWizard, setCloseWizard] = useState({ open: false, projet: null, startAtSummary: false });
   const [materialProjId, setMaterialProjId] = useState(null);
 
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createProjet, setCreateProjet] = useState(null);
+  const [closedPopupOpen, setClosedPopupOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      const flag = window.sessionStorage?.getItem("openCreateProjet");
+      if (flag) {
+        window.sessionStorage?.removeItem("openCreateProjet");
+        setCreateProjet(null);
+        setCreateOpen(true);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const flag = window.sessionStorage?.getItem("draftProjetOpen");
+      if (flag === "1") {
+        setCreateProjet(null);
+        setCreateOpen(true);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const openDetails = (p) => setDetails({ open: true, projet: p });
   const closeDetails = () => setDetails({ open: false, projet: null });
 
@@ -1496,7 +1660,17 @@ export default function PageProjets({ onOpenMaterial }) {
   const openHistorique = (p) => setHist({ open: true, projet: p });
   const closeHistorique = () => setHist({ open: false, projet: null });
 
-  const openCloseBT = (p) => setCloseBT({ open: true, projet: p });
+  const openCloseBT = (p) => {
+    const missing = getMissingRequiredProjectFields(p);
+    if (missing.length > 0) {
+      window.alert(
+        "Impossible de fermer le projet.\n\nCertains champs ne sont pas remplis :\n- " +
+          missing.join("\n- ")
+      );
+      return;
+    }
+    setCloseBT({ open: true, projet: p });
+  };
   const closeCloseBT = () => setCloseBT({ open: false, projet: null });
 
   const handleCreateInvoiceAndClose = (proj) => {
@@ -1530,9 +1704,48 @@ export default function PageProjets({ onOpenMaterial }) {
     setMaterialProjId(id);
   };
 
+  const handleDeleteClosed = async (item) => {
+    const isAutre = item?.entityType === "autre";
+    const label = isAutre ? "cette tâche spéciale" : "ce projet";
+
+    const ok = window.confirm(`Supprimer ${label} définitivement ?`);
+    if (!ok) return;
+
+    try {
+      if (isAutre) await deleteAutreProjetDeep(item.id);
+      else await deleteProjectDeep(item.id);
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    }
+  };
+
+  const handleReopenClosed = async (item) => {
+    const isAutre = item?.entityType === "autre";
+    const ok = window.confirm(
+      isAutre
+        ? "Voulez-vous réouvrir cette tâche spéciale ?"
+        : "Voulez-vous réouvrir ce projet ?"
+    );
+    if (!ok) return;
+
+    try {
+      await reopenClosedEntity(item);
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    }
+  };
+
   return (
     <div style={{ padding: 0, width: "100%" }}>
       <ErrorBanner error={error} onClose={() => setError(null)} />
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+        <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
+          Projets fermés
+        </button>
+      </div>
 
       <div style={{ width: "100%", overflowX: "auto" }}>
         <table
@@ -1576,16 +1789,28 @@ export default function PageProjets({ onOpenMaterial }) {
               />
             ))}
 
-            {projets.length === 0 && (
+            {projets.length === 0 ? (
               <tr>
                 <td colSpan={9} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16, fontWeight: 800 }}>
                   Aucun projet pour l’instant.
                 </td>
               </tr>
-            )}
+            ) : null}
           </tbody>
         </table>
       </div>
+
+      <PopupCreateProjet
+        open={createOpen}
+        onClose={() => {
+          setCreateOpen(false);
+          setCreateProjet(null);
+        }}
+        onError={setError}
+        mode={createProjet ? "edit" : "create"}
+        projet={createProjet}
+        onSaved={() => {}}
+      />
 
       <PopupDetailsProjetSimple
         open={details.open}
@@ -1605,9 +1830,9 @@ export default function PageProjets({ onOpenMaterial }) {
           if (!details.projet) return;
           openHistorique(details.projet);
         }}
-        onCloseBT={() => {
-          if (!details.projet) return;
-          openCloseBT(details.projet);
+        onCloseBT={(projLive) => {
+          if (!projLive) return;
+          openCloseBT(projLive);
         }}
       />
 
@@ -1618,7 +1843,13 @@ export default function PageProjets({ onOpenMaterial }) {
         projet={pdfMgr.projet}
       />
 
-      {materialProjId && <ProjectMaterielPanel projId={materialProjId} onClose={() => setMaterialProjId(null)} setParentError={() => {}} />}
+      {materialProjId ? (
+        <ProjectMaterielPanel
+          projId={materialProjId}
+          onClose={() => setMaterialProjId(null)}
+          setParentError={() => {}}
+        />
+      ) : null}
 
       <PopupHistoriqueProjet open={hist.open} onClose={closeHistorique} projet={hist.projet} />
 
@@ -1640,11 +1871,27 @@ export default function PageProjets({ onOpenMaterial }) {
         onClosed={handleWizardClosed}
         startAtSummary={!!closeWizard.startAtSummary}
       />
+
+      <ClosedProjectsPopup
+        open={closedPopupOpen}
+        onClose={() => setClosedPopupOpen(false)}
+        onReopen={handleReopenClosed}
+        onDelete={handleDeleteClosed}
+      />
     </div>
   );
 }
 
 /* ---------------------- Styles ---------------------- */
+const infoCard = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
+  padding: 12,
+  background: "#f8fafc",
+};
+const infoCardLabel = { color: "#64748b", fontWeight: 900 };
+const infoCardValue = { fontWeight: 1000, fontSize: 18 };
+
 const thCenter = {
   textAlign: "center",
   padding: "6px 8px",

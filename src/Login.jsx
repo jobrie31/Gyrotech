@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import {
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+} from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { auth, functions } from "./firebaseConfig";
 import "./Login.css";
@@ -13,6 +16,10 @@ export default function Login() {
   const [code, setCode] = useState("");
   const [newPass, setNewPass] = useState("");
   const [newPass2, setNewPass2] = useState("");
+
+  const [showPassword, setShowPassword] = useState(false);
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showNewPass2, setShowNewPass2] = useState(false);
 
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -39,6 +46,29 @@ export default function Login() {
     try {
       const cred = await signInWithEmailAndPassword(auth, emailClean, password);
       await cred.user.getIdToken(true);
+    } catch (err) {
+      setError(mapError(err?.code, err?.message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleForgotPassword() {
+    setBusy(true);
+    setError("");
+    setInfo("");
+
+    const emailClean = (email || "").trim().toLowerCase();
+
+    if (!emailClean || !emailClean.includes("@")) {
+      setBusy(false);
+      setError("Entre ton courriel pour réinitialiser le mot de passe.");
+      return;
+    }
+
+    try {
+      await sendPasswordResetEmail(auth, emailClean);
+      setInfo("Courriel de réinitialisation envoyé. Vérifie ta boîte courriel et tes courriels indésirables");
     } catch (err) {
       setError(mapError(err?.code, err?.message));
     } finally {
@@ -86,7 +116,7 @@ export default function Login() {
         password: p1,
       });
 
-      setInfo("Compte activé ✅ Tu peux maintenant te connecter.");
+      setInfo("Compte activé. Tu peux maintenant te connecter.");
       setMode("login");
       setPassword("");
       setNewPass("");
@@ -131,17 +161,41 @@ export default function Login() {
         </label>
 
         {mode === "login" ? (
-          <label className="login-field">
-            <span>Mot de passe</span>
-            <input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-            />
-          </label>
+          <>
+            <label className="login-field">
+              <span>Mot de passe</span>
+
+              <div className="password-wrap">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                />
+
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? "Masquer" : "Voir"}
+                </button>
+              </div>
+            </label>
+
+            <button
+              type="button"
+              className="btn-link"
+              disabled={busy}
+              onClick={handleForgotPassword}
+              style={{ marginTop: -2, marginBottom: 6 }}
+            >
+              Mot de passe oublié ?
+            </button>
+          </>
         ) : (
           <>
             <label className="login-field">
@@ -158,26 +212,50 @@ export default function Login() {
 
             <label className="login-field">
               <span>Nouveau mot de passe</span>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={newPass}
-                onChange={(e) => setNewPass(e.target.value)}
-                required
-                autoComplete="new-password"
-              />
+
+              <div className="password-wrap">
+                <input
+                  type={showNewPass ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={newPass}
+                  onChange={(e) => setNewPass(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                />
+
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowNewPass((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {showNewPass ? "Masquer" : "Voir"}
+                </button>
+              </div>
             </label>
 
             <label className="login-field">
               <span>Confirmer le mot de passe</span>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={newPass2}
-                onChange={(e) => setNewPass2(e.target.value)}
-                required
-                autoComplete="new-password"
-              />
+
+              <div className="password-wrap">
+                <input
+                  type={showNewPass2 ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={newPass2}
+                  onChange={(e) => setNewPass2(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                />
+
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowNewPass2((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {showNewPass2 ? "Masquer" : "Voir"}
+                </button>
+              </div>
             </label>
           </>
         )}
@@ -224,6 +302,7 @@ function mapError(code, message) {
     "auth/missing-password": "Mot de passe manquant.",
     "auth/user-not-found": "Utilisateur introuvable.",
     "auth/wrong-password": "Mot de passe incorrect.",
+    "auth/invalid-credential": "Courriel ou mot de passe incorrect.",
     "auth/too-many-requests": "Trop d’essais. Réessaie plus tard.",
 
     "functions/invalid-argument": "Infos invalides.",

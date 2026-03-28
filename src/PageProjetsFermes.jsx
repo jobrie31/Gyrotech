@@ -1,5 +1,5 @@
 // src/PageProjetsFermes.jsx
-// Wizard de fermeture complète (PDF + email) — utilisé par PageListeProjet
+// Wizard de fermeture complète (PDF + email)
 
 import React, { useEffect, useRef, useState } from "react";
 import { pdf, Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer";
@@ -128,6 +128,35 @@ function dayKey(d) {
   return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
 }
 
+function normalizeOuiNon(v) {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "oui") return "oui";
+  if (s === "non") return "non";
+  return null;
+}
+
+function getMissingRequiredProjectFields(projet) {
+  const missing = [];
+
+  if (!String(projet?.clientNom || projet?.nom || "").trim()) missing.push("Nom du client");
+  if (!String(projet?.numeroUnite || "").trim()) missing.push("Numéro d’unité");
+
+  const anneeStr = String(projet?.annee ?? "").trim();
+  if (!/^\d{4}$/.test(anneeStr)) missing.push("Année");
+
+  if (!String(projet?.marque || "").trim()) missing.push("Marque");
+  if (!String(projet?.modele || "").trim()) missing.push("Modèle");
+  if (!String(projet?.plaque || "").trim()) missing.push("Plaque");
+  if (!String(projet?.odometre || "").trim()) missing.push("Odomètre / Heures");
+  if (!String(projet?.vin || "").trim()) missing.push("VIN");
+
+  if (!normalizeOuiNon(projet?.checkEngineAllume)) {
+    missing.push("Check Engine allumé?");
+  }
+
+  return missing;
+}
+
 // Employé
 function empDayRef(empId, key) {
   return doc(db, "employes", empId, "timecards", key);
@@ -210,7 +239,6 @@ async function depunchWorkersOnProject(projId) {
   if (!projId) return;
   const now = new Date();
 
-  // 1) fermer segments ouverts côté PROJET
   try {
     const daysSnap = await getDocs(collection(db, "projets", projId, "timecards"));
     const dayIds = [];
@@ -228,7 +256,6 @@ async function depunchWorkersOnProject(projId) {
     console.error("depunch project segments error", e);
   }
 
-  // 2) fermer segments ouverts côté EMPLOYÉS (sans collectionGroup)
   try {
     const qEmp = query(collection(db, "employes"), where("lastProjectId", "==", projId), limit(300));
     const empSnap = await getDocs(qEmp);
@@ -386,51 +413,39 @@ async function recordCloseBTTime({ projet, startMs, endDate }) {
   const key = dayKey(startDate);
   const now = new Date();
 
-  // ✅ employé lié au user (si dispo)
-  const emp = await getEmpFromAuth(); // { empId, empName } | null
+  const emp = await getEmpFromAuth();
 
-  // ensure day docs
   await ensureProjDay(projet.id, key);
   if (emp?.empId) await ensureEmpDay(emp.empId, key);
 
-  // ✅ 1 seul segId pour les 2 côtés
   const segId = doc(empSegCol(emp?.empId || "_dummy_", key)).id;
 
   const projSegRef = doc(db, "projets", projet.id, "timecards", key, "segments", segId);
-
-  // ⚠️ seulement si on a un empId réel
   const empSegRef = emp?.empId ? doc(db, "employes", emp.empId, "timecards", key, "segments", segId) : null;
 
   const projName = projet.nom || projet.clientNom || null;
 
   const batch = writeBatch(db);
 
-  // ✅ Segment PROJET (fermé)
   batch.set(projSegRef, {
     empId: emp?.empId || null,
     empName: emp?.empName || null,
-
     start: startDate,
     end: end,
-
     createdAt: now,
     updatedAt: now,
     source: "close_bt_wizard",
     phase: "close_bt",
-
     jobId: `proj:${projet.id}`,
     jobName: projName,
   });
 
-  // ✅ Segment EMPLOYÉ (fermé) — même segId
   if (empSegRef) {
     batch.set(empSegRef, {
       jobId: `proj:${projet.id}`,
       jobName: projName,
-
       start: startDate,
       end: end,
-
       createdAt: now,
       updatedAt: now,
       source: "close_bt_wizard",
@@ -679,6 +694,9 @@ function InvoiceDocument({
       <Text style={pdfStyles.confirmItem}>
         {bracketCheck(!!cx.remisMaterielVehicule)} J’ai remis le matériel au client dans le véhicule.
       </Text>
+      <Text style={pdfStyles.confirmItem}>
+        Check Engine allumé à la fin  ? {safeTxt(cx.checkEngineFin)}
+      </Text>
 
       <View style={{ marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: "#e5e7eb" }}>
         <Text style={{ fontSize: 11.2, fontWeight: "bold" }}>Fermé par : {safeTxt(closedByName)}</Text>
@@ -714,6 +732,7 @@ function InvoiceDocument({
                 <PdfField label="Plaque" value={projet?.plaque} />
                 <PdfField label="Odomètre" value={fmtOdometer(projet?.odometre)} />
                 <PdfField label="VIN" value={projet?.vin} />
+                <PdfField label="Check Engine allumé ?" value={projet?.checkEngineAllume || "—"} />
               </View>
             </View>
           </View>
@@ -872,14 +891,20 @@ function normalizeEmailList(v) {
 
 /* ---------------------- Wizard fermeture complète ---------------------- */
 export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSummary = false }) {
-  const [step, setStep] = useState("ask"); // "ask" | "summary"
+  const [step, setStep] = useState("ask");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const [totalMs, setTotalMs] = useState(0);
   const [hoursByEmployee, setHoursByEmployee] = useState([]);
   const [usages, setUsages] = useState([]);
-  const [checks, setChecks] = useState({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
+  const [checks, setChecks] = useState({
+    infos: false,
+    materiel: false,
+    temps: false,
+    remisMaterielVehicule: false,
+  });
+  const [checkEngineFin, setCheckEngineFin] = useState("");
   const [materielOpen, setMaterielOpen] = useState(false);
 
   const closeStartMsRef = useRef(null);
@@ -906,7 +931,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     closeStartMsRef.current = Date.now();
 
     setError(null);
-    setChecks({ infos: false, materiel: false, temps: false, remisMaterielVehicule: false });
+    setChecks({
+      infos: false,
+      materiel: false,
+      temps: false,
+      remisMaterielVehicule: false,
+    });
+    setCheckEngineFin("");
     setTotalMs(0);
     setHoursByEmployee([]);
     setUsages([]);
@@ -965,7 +996,6 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         noteSaveTimerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, projet?.id, startAtSummary]);
 
   useEffect(() => {
@@ -1045,9 +1075,30 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
     return () => unsub();
   }, [open, step, projet?.id]);
 
-  const canConfirm = checks.infos && checks.materiel && checks.temps && checks.remisMaterielVehicule && !loading;
+  const checkEngineInitial = String(projet?.checkEngineAllume || "").trim().toLowerCase();
+  const checkEngineFinNorm = String(checkEngineFin || "").trim().toLowerCase();
+
+  const checkEngineQuestionAnswered =
+    checkEngineFinNorm === "oui" || checkEngineFinNorm === "non";
+
+  const checkEngineConflict =
+    checkEngineInitial === "non" && checkEngineFinNorm === "oui";
+
+  const canConfirm =
+    checks.infos &&
+    checks.materiel &&
+    checks.temps &&
+    checks.remisMaterielVehicule &&
+    checkEngineQuestionAnswered &&
+    !checkEngineConflict &&
+    !loading;
 
   const goSummary = async () => {
+    const missing = getMissingRequiredProjectFields(projet);
+    if (missing.length > 0) {
+      setError("Impossible de fermer le projet. Champs manquants : " + missing.join(", "));
+      return;
+    }
     if (!projet?.id) return;
     try {
       setLoading(true);
@@ -1091,6 +1142,9 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         fermeComplet: false,
         fermeCompletAt: null,
         deleteAt: null,
+
+        checkEngineFinAllume: checkEngineFinNorm || null,
+        checkEngineFinReponduAt: serverTimestamp(),
 
         note: noteClean ? noteClean : null,
         noteUpdatedAt: serverTimestamp(),
@@ -1157,6 +1211,11 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
   const hoursByEmployeeUI = mergeHoursWithOpening(hoursByEmployee, projet, openedByNameUI);
 
   const handleFinalClose = async () => {
+    const missing = getMissingRequiredProjectFields(projet);
+    if (missing.length > 0) {
+      setError("Impossible de fermer le projet. Champs manquants : " + missing.join(", "));
+      return;
+    }
     if (!projet?.id || !canConfirm) return;
 
     try {
@@ -1240,11 +1299,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         openedByName,
         closedByName,
         noteText: noteClean ? noteClean : null,
-        checksSummary: { ...checks },
+        checksSummary: {
+          ...checks,
+          checkEngineFin: checkEngineFinNorm || null,
+        },
       });
 
       const sendInvoiceEmail = httpsCallable(functions, "sendInvoiceEmail");
-
       const toEmail = Array.isArray(invoiceToEmails) && invoiceToEmails.length ? invoiceToEmails : ["jlabrie@styro.ca"];
 
       await sendInvoiceEmail({
@@ -1261,6 +1322,9 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
         fermeCompletAt: serverTimestamp(),
         deleteAt: Timestamp.fromDate(plusDays(new Date(), 60)),
         factureEnvoyeeA: Array.isArray(toEmail) ? toEmail.join(", ") : String(toEmail || "").trim(),
+
+        checkEngineFinAllume: checkEngineFinNorm || null,
+        checkEngineFinReponduAt: serverTimestamp(),
 
         note: noteClean ? noteClean : null,
         noteUpdatedAt: serverTimestamp(),
@@ -1339,7 +1403,9 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       >
         <div style={{ padding: 16, paddingBottom: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 900, fontSize: 18 }}>Fermeture du projet — {projet.nom || projet.clientNom || "Sans nom"}</div>
+            <div style={{ fontWeight: 900, fontSize: 18 }}>
+              Fermeture du projet — {projet.nom || projet.clientNom || "Sans nom"}
+            </div>
             <button
               onClick={onCancel}
               style={{ border: "none", background: "transparent", fontSize: 24, cursor: "pointer", lineHeight: 1 }}
@@ -1430,13 +1496,17 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                     marginBottom: 6,
                   }}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>Bon de Travail : {dossierNoUI}</div>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>
+                    Bon de Travail : {dossierNoUI}
+                  </div>
 
                   <div style={{ textAlign: "center", fontSize: 13.5, fontWeight: 900, color: "#0f172a" }}>
                     Détails véhicule / projet
                   </div>
 
-                  <div style={{ visibility: "hidden", fontSize: 14, fontWeight: 900 }}>Bon de Travail : {dossierNoUI}</div>
+                  <div style={{ visibility: "hidden", fontSize: 14, fontWeight: 900 }}>
+                    Bon de Travail : {dossierNoUI}
+                  </div>
                 </div>
 
                 <div style={{ marginBottom: 12 }}>
@@ -1465,6 +1535,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                       <DetailKV k="Odomètre" v={fmtOdometer(projet.odometre)} />
                       <DetailKV k="Marque" v={projet.marque || "—"} />
                       <DetailKV k="VIN" v={projet.vin || "—"} />
+                      <DetailKV k="Check Engine" v={projet.checkEngineAllume || "—"} />
 
                       <DetailKV k="Ouvert le" v={openedDateStrUI} />
                       <DetailKV k="Ouvert par" v={openedByNameUI} />
@@ -1473,7 +1544,9 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                 </div>
 
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 900, color: "#0f172a", marginBottom: 6 }}>Note (incluse dans le PDF)</div>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "#0f172a", marginBottom: 6 }}>
+                    Note (incluse dans le PDF)
+                  </div>
                   <textarea
                     value={noteDraft}
                     onChange={(e) => setNoteDraft(e.target.value)}
@@ -1609,7 +1682,11 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                 <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Confirmer avant de fermer</div>
 
                 <label style={{ display: "block", marginBottom: 4 }}>
-                  <input type="checkbox" checked={checks.infos} onChange={(e) => setChecks((s) => ({ ...s, infos: e.target.checked }))} />{" "}
+                  <input
+                    type="checkbox"
+                    checked={checks.infos}
+                    onChange={(e) => setChecks((s) => ({ ...s, infos: e.target.checked }))}
+                  />{" "}
                   J’ai vérifié le matériel utilisé
                 </label>
 
@@ -1623,7 +1700,11 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                 </label>
 
                 <label style={{ display: "block", marginBottom: 4 }}>
-                  <input type="checkbox" checked={checks.temps} onChange={(e) => setChecks((s) => ({ ...s, temps: e.target.checked }))} />{" "}
+                  <input
+                    type="checkbox"
+                    checked={checks.temps}
+                    onChange={(e) => setChecks((s) => ({ ...s, temps: e.target.checked }))}
+                  />{" "}
                   J’ai vérifié les fonctionnalités des équipements installés.
                 </label>
 
@@ -1636,7 +1717,65 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                   J’ai remis le matériel au client dans le véhicule.
                 </label>
 
-                <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #e5e7eb", fontWeight: 900, color: "#0f172a" }}>
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 10,
+                    borderTop: "1px solid #e5e7eb",
+                  }}
+                >
+                  <div style={{ fontWeight: 900, marginBottom: 6, color: "#0f172a" }}>
+                    Check Engine allumé à la fin ?
+                  </div>
+
+                  <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="radio"
+                        name="check-engine-fin"
+                        checked={checkEngineFin === "oui"}
+                        onChange={() => setCheckEngineFin("oui")}
+                      />
+                      Oui
+                    </label>
+
+                    <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="radio"
+                        name="check-engine-fin"
+                        checked={checkEngineFin === "non"}
+                        onChange={() => setCheckEngineFin("non")}
+                      />
+                      Non
+                    </label>
+                  </div>
+
+                  {checkEngineConflict && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        background: "#fee2e2",
+                        color: "#b91c1c",
+                        border: "1px solid #fecaca",
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        fontWeight: 900,
+                      }}
+                    >
+                      Attention, en arrivant le check engine n'était pas allumé.
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 10,
+                    paddingTop: 8,
+                    borderTop: "1px solid #e5e7eb",
+                    fontWeight: 900,
+                    color: "#0f172a",
+                  }}
+                >
                   Fermé par : {closedByNameUI}
                 </div>
 
@@ -1679,7 +1818,13 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
           )}
         </div>
 
-        {materielOpen && <ProjectMaterielPanel projId={projet.id} onClose={() => setMaterielOpen(false)} setParentError={setError} />}
+        {materielOpen && (
+          <ProjectMaterielPanel
+            projId={projet.id}
+            onClose={() => setMaterielOpen(false)}
+            setParentError={setError}
+          />
+        )}
       </div>
     </div>
   );
@@ -1705,7 +1850,9 @@ function DetailKV({ k, v }) {
         lineHeight: 1.1,
       }}
     >
-      <span style={{ color: "#475569", fontWeight: 900, whiteSpace: "nowrap", textAlign: "right" }}>{k} :</span>
+      <span style={{ color: "#475569", fontWeight: 900, whiteSpace: "nowrap", textAlign: "right" }}>
+        {k} :
+      </span>
 
       <span
         style={{
@@ -1724,11 +1871,6 @@ function DetailKV({ k, v }) {
   );
 }
 
-/**
- * IMPORTANT:
- * - Il n’y a PAS de "PageProjetsFermes" ici.
- * - Ce fichier sert uniquement à exporter CloseProjectWizard.
- */
 export default function PageProjetsFermes() {
   return null;
 }
