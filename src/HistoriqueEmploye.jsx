@@ -22,6 +22,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "./firebaseConfig";
 import { Card, Button, PageContainer } from "./UIPro";
+import PPDownloadButton from "./PPDownloadButton";
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -496,6 +497,13 @@ const plusAdminBtn = {
   flex: "0 0 auto",
 };
 
+const saveHintRow = {
+  minHeight: 18,
+  marginTop: 6,
+  fontSize: 12,
+  fontWeight: 900,
+};
+
 /* ---------------------- Top bar ---------------------- */
 function TopBar({ title, rightSlot = null, flashTitle = false }) {
   const titleStyle = flashTitle
@@ -826,24 +834,25 @@ export default function HistoriqueEmploye({
     });
   };
 
-  const scheduleAutoSave = (empId) => {
+  const scheduleAutoSave = (empId, value) => {
     if (!empId) return;
     const timers = saveTimersRef.current || {};
     if (timers[empId]) clearTimeout(timers[empId]);
-    timers[empId] = setTimeout(() => saveNoteForEmp(empId), 700);
+    timers[empId] = setTimeout(() => saveNoteForEmp(empId, value), 700);
     saveTimersRef.current = timers;
   };
-  const scheduleAutoSaveReply = (empId) => {
+
+  const scheduleAutoSaveReply = (empId, value) => {
     if (!empId) return;
     const timers = replyTimersRef.current || {};
     if (timers[empId]) clearTimeout(timers[empId]);
-    timers[empId] = setTimeout(() => saveReplyForEmp(empId), 700);
+    timers[empId] = setTimeout(() => saveReplyForEmp(empId, value), 700);
     replyTimersRef.current = timers;
   };
 
-  const saveNoteForEmp = async (empId) => {
+  const saveNoteForEmp = async (empId, forcedValue = null) => {
     if (!empId || !canWriteNotes) return;
-    const note = String(getDraft(empId) || "");
+    const note = String(forcedValue != null ? forcedValue : getDraft(empId) || "");
 
     setNoteStatus((p) => ({
       ...(p || {}),
@@ -872,7 +881,11 @@ export default function HistoriqueEmploye({
       );
 
       setNotesFS((p) => ({ ...(p || {}), [empId]: note }));
-      setNoteStatus((p) => ({ ...(p || {}), [empId]: { saving: false, savedAt: Date.now(), err: "" } }));
+      setNoteDrafts((p) => ({ ...(p || {}), [empId]: note }));
+      setNoteStatus((p) => ({
+        ...(p || {}),
+        [empId]: { saving: false, savedAt: Date.now(), err: "" },
+      }));
     } catch (e) {
       const msg =
         e?.code === "permission-denied"
@@ -886,9 +899,9 @@ export default function HistoriqueEmploye({
     }
   };
 
-  const saveReplyForEmp = async (empId) => {
+  const saveReplyForEmp = async (empId, forcedValue = null) => {
     if (!empId) return;
-    const reply = String(getReplyDraft(empId) || "");
+    const reply = String(forcedValue != null ? forcedValue : getReplyDraft(empId) || "");
 
     setReplyStatus((p) => ({
       ...(p || {}),
@@ -903,7 +916,11 @@ export default function HistoriqueEmploye({
       );
 
       setRepliesFS((p) => ({ ...(p || {}), [empId]: reply }));
-      setReplyStatus((p) => ({ ...(p || {}), [empId]: { saving: false, savedAt: Date.now(), err: "" } }));
+      setReplyDrafts((p) => ({ ...(p || {}), [empId]: reply }));
+      setReplyStatus((p) => ({
+        ...(p || {}),
+        [empId]: { saving: false, savedAt: Date.now(), err: "" },
+      }));
     } catch (e) {
       const msg =
         e?.code === "permission-denied"
@@ -1664,6 +1681,8 @@ export default function HistoriqueEmploye({
     ? isReplySeenFS(myEffectiveYellowAtMs, myReplySeenAtMs)
     : true;
   const myReplySeenAt = replyMeta?.[derivedMeEmpId]?.seenAt || null;
+  const hasMyYellowContent =
+    !!String(myReply || "").trim() || !!String(myAdminReplyLikeText || "").trim();
 
   const renderReplyBubbleContent = (empId, maxWidth = 320) => {
     const employeeReply = String(repliesFS?.[empId] || "").trim();
@@ -1858,6 +1877,17 @@ export default function HistoriqueEmploye({
 
   const rightSlot = (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      {(isAdmin || isRH) ? (
+        <PPDownloadButton
+          isAdmin={isAdmin}
+          isRH={isRH}
+          payBlockKey={payBlockKey}
+          ppCode={currentPPInfo?.pp || "PP?"}
+          payBlockLabel={payBlockLabel}
+          userEmail={user?.email || ""}
+        />
+      ) : null}
+
       <button
         type="button"
         style={btnFeuilleDepenses}
@@ -2124,10 +2154,11 @@ export default function HistoriqueEmploye({
                         rows={3}
                         value={myReply}
                         onChange={(e) => {
-                          setReplyDraft(derivedMeEmpId, e.target.value);
-                          scheduleAutoSaveReply(derivedMeEmpId);
+                          const v = e.target.value;
+                          setReplyDraft(derivedMeEmpId, v);
+                          scheduleAutoSaveReply(derivedMeEmpId, v);
                         }}
-                        onBlur={() => saveReplyForEmp(derivedMeEmpId)}
+                        onBlur={(e) => saveReplyForEmp(derivedMeEmpId, e.target.value)}
                         placeholder="Écrire ta réponse…"
                         style={{
                           width: "100%",
@@ -2159,29 +2190,22 @@ export default function HistoriqueEmploye({
                     </div>
 
                     <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                      {myEffectiveYellowAtMs ? (
+                      {hasMyYellowContent ? (
                         <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
                           {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
                         </span>
-                      ) : (
-                        <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
-                          (Aucune réponse envoyée pour ce bloc)
-                        </span>
-                      )}
+                      ) : null}
                     </div>
 
-                    {rs ? (
-                      <div
-                        style={{
-                          marginTop: 6,
-                          fontSize: 12,
-                          fontWeight: 900,
-                          color: rst.err ? "#b91c1c" : rst.saving ? "#7c2d12" : "#166534",
-                        }}
-                      >
-                        {rs}
-                      </div>
-                    ) : null}
+                    <div
+                      style={{
+                        ...saveHintRow,
+                        color: rst.err ? "#b91c1c" : rst.saving ? "#7c2d12" : "#166534",
+                        opacity: rs ? 1 : 0.55,
+                      }}
+                    >
+                      {rs || " "}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2347,10 +2371,11 @@ export default function HistoriqueEmploye({
                       rows={3}
                       value={myReply}
                       onChange={(e) => {
-                        setReplyDraft(derivedMeEmpId, e.target.value);
-                        scheduleAutoSaveReply(derivedMeEmpId);
+                        const v = e.target.value;
+                        setReplyDraft(derivedMeEmpId, v);
+                        scheduleAutoSaveReply(derivedMeEmpId, v);
                       }}
-                      onBlur={() => saveReplyForEmp(derivedMeEmpId)}
+                      onBlur={(e) => saveReplyForEmp(derivedMeEmpId, e.target.value)}
                       placeholder="Écrire ma réponse…"
                       style={{
                         width: "100%",
@@ -2382,27 +2407,21 @@ export default function HistoriqueEmploye({
                   </div>
 
                   <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    {myEffectiveYellowAtMs ? (
+                    {hasMyYellowContent ? (
                       <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
                         {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
                       </span>
-                    ) : (
-                      <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
-                        (Aucune réponse envoyée pour ce bloc)
-                      </span>
-                    )}
-
-                    {myReplyStatusText ? (
-                      <span
-                        style={{
-                          fontSize: 12,
-                          fontWeight: 900,
-                          color: myReplyStatusObj.err ? "#b91c1c" : myReplyStatusObj.saving ? "#7c2d12" : "#166534",
-                        }}
-                      >
-                        {myReplyStatusText}
-                      </span>
                     ) : null}
+
+                    <div
+                      style={{
+                        ...saveHintRow,
+                        color: myReplyStatusObj.err ? "#b91c1c" : myReplyStatusObj.saving ? "#7c2d12" : "#166534",
+                        opacity: myReplyStatusText ? 1 : 0.55,
+                      }}
+                    >
+                      {myReplyStatusText || " "}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2574,10 +2593,11 @@ export default function HistoriqueEmploye({
                                       rows={2}
                                       value={getDraft(r.id)}
                                       onChange={(e) => {
-                                        setDraft(r.id, e.target.value);
-                                        scheduleAutoSave(r.id);
+                                        const v = e.target.value;
+                                        setDraft(r.id, v);
+                                        scheduleAutoSave(r.id, v);
                                       }}
-                                      onBlur={() => saveNoteForEmp(r.id)}
+                                      onBlur={(e) => saveNoteForEmp(r.id, e.target.value)}
                                       placeholder="Écrire une note…"
                                       style={{
                                         width: "100%",
@@ -2588,18 +2608,15 @@ export default function HistoriqueEmploye({
                                         resize: "vertical",
                                       }}
                                     />
-                                    {status ? (
-                                      <div
-                                        style={{
-                                          marginTop: 6,
-                                          fontSize: 12,
-                                          fontWeight: 900,
-                                          color: st.err ? "#b91c1c" : st.saving ? "#7c2d12" : "#166534",
-                                        }}
-                                      >
-                                        {status}
-                                      </div>
-                                    ) : null}
+                                    <div
+                                      style={{
+                                        ...saveHintRow,
+                                        color: st.err ? "#b91c1c" : st.saving ? "#7c2d12" : "#166534",
+                                        opacity: status ? 1 : 0.55,
+                                      }}
+                                    >
+                                      {status || " "}
+                                    </div>
                                   </>
                                 ) : (
                                   <div
@@ -2888,9 +2905,11 @@ export default function HistoriqueEmploye({
                         rows={5}
                         value={getDraft(detailEmpId)}
                         onChange={(e) => {
-                          setDraft(detailEmpId, e.target.value);
-                          scheduleAutoSave(detailEmpId);
+                          const v = e.target.value;
+                          setDraft(detailEmpId, v);
+                          scheduleAutoSave(detailEmpId, v);
                         }}
+                        onBlur={(e) => saveNoteForEmp(detailEmpId, e.target.value)}
                         placeholder="Écrire une note…"
                         style={{
                           width: "100%",
@@ -2938,11 +2957,19 @@ export default function HistoriqueEmploye({
                       </div>
 
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        {canWriteNotes && statusLabel(detailEmpId) ? (
-                          <span style={{ fontSize: 12, fontWeight: 900, color: noteStatus?.[detailEmpId]?.err ? "#b91c1c" : "#166534" }}>
-                            {statusLabel(detailEmpId)}
-                          </span>
-                        ) : null}
+                        <div
+                          style={{
+                            ...saveHintRow,
+                            color: noteStatus?.[detailEmpId]?.err
+                              ? "#b91c1c"
+                              : noteStatus?.[detailEmpId]?.saving
+                              ? "#7c2d12"
+                              : "#166534",
+                            opacity: statusLabel(detailEmpId) ? 1 : 0.55,
+                          }}
+                        >
+                          {statusLabel(detailEmpId) || " "}
+                        </div>
 
                         {canWriteNotes ? (
                           <Button

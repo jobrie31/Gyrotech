@@ -1,64 +1,7 @@
 // src/PageAccueil.jsx — Punch employé synchronisé au projet sélectionné (UI pro, SANS bannière Horloge)
-//
-// ✅ FIX "temps mismatch":
-// - Punch Projet / Autre tâche = écritures ATOMIQUES (writeBatch)
-// - Segment employé n'est JAMAIS créé avec jobId=null pour proj/other
-// - Dépunch: fallback si jobId manquant (lastProjectId / lastOtherId)
-//
-// ✅ FIX (repunch après dépunch auto midi):
-// - Quand on REPUNCH, on remet timecards/{day}.end = null (doc day redevient "ouvert")
-//   La présence reste basée sur segments (end:null), mais le doc day ne reste plus figé à midi.
-//
-// ✅ FIX (2026-02-28) IDs segments projet = IDs segments employé:
-// - Pour que l’auto-close "béton" par segId marche vraiment, on force le segment PROJET
-//   à utiliser le même docId que le segment EMPLOYÉ (empSegRef.id)
-//
-// ✅ NOUVEAU (2026-03-02):
-// - En cliquant sur une personne (ligne), on voit sur quoi elle s'est punch aujourd'hui (modal)
-//
-// ✅ AJOUT (2026-03-02):
-// - appBuild écrit dans les segments (debug cache / version). Si quelqu’un crée IDs différents,
-//   c’est qu’il roule un vieux build (cache/PWA).
-//
-// ✅ AJOUT (2026-03-04):
-// - Affichage dropdown projet = "BT {dossierNo} — Client — Unité" (si dispo)
-//
-// ✅ OPTI (2026-03-04):
-// - ✅ useSessions ne se réabonne PLUS toutes les 15s (plus de tick dans deps)
-// - ✅ 1 seul timer global (15s) dans PageAccueil pour rafraîchir totalMs (UI only)
-//
-// ✅ AJOUT (2026-03-04) Orphan Project 2.0:
-// - Se déclenche SEULEMENT au dépunch
-// - Attend 20s, puis vérifie: si le segment EMPLOYÉ (segId) est fermé (ou absent) MAIS le segment PROJET (même segId) est encore open
-//   => on ferme le segment PROJET avec autoClosedReason: "orphan_project_segment_2_0"
-// - Ne ferme QUE le bon travailleur (même segId). Si 2 employés sont punchés, ça n’affecte pas l’autre.
-//
-// ✅ AJOUT (2026-03-05) ALIGNEMENT "AUTRES TÂCHES":
-// - Segment AUTRE TÂCHE = même docId que segment EMPLOYÉ
-// - Dépunch ferme aussi AUTRE TÂCHE par segId identique
-// - L’historique autres tâches fitte maintenant exactement avec l’employé
-//
-// ✅ MODIF (2026-03-14):
-// - Les comptes Ressource humaine (isRH === true) sont exclus du tableau punch
-// - Admin ET RH voient la même chose pour les menus / vue globale de la page
-//
-// ✅ MODIF (2026-03-15):
-// - Les autres tâches limitées à des employés précis sont filtrées dans la page punch
-// - Un employé ne peut plus puncher une autre tâche s’il n’est pas autorisé
-//
-// ✅ MODIF (2026-03-15):
-// - Les tâches spéciales apparaissent en haut dans la modale "Autre tâche"
-// - Les tâches spéciales sont surlignées en jaune
-// - Le badge "TÂCHE SPÉCIALE" est à droite du titre
-// - Les tâches normales gardent leur bouton "Choisir" bleu
-//
-// ✅ MODIF (2026-03-28):
-// - Le popup de création projet s’ouvre directement dans PageAccueil
-// - Le refresh conserve l’ouverture du questionnaire si openCreateProjet = 1
-// - Le temps de départ du punch reste conservé via pendingNewProjStartMs
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import ReactDOM from "react-dom"; // createPortal
+import ReactDOM from "react-dom";
 import {
   collection,
   doc,
@@ -74,15 +17,22 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "./firebaseConfig";
-import logoGyrotech from "./assets/logo-gyrotech.png";
 import PageProjets from "./PageProjets";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
 import { PopupCreateProjet } from "./PageActions";
+import TableauEmployesTV from "./TableauEmployesTV";
 
-// ✅ BUILD TAG (debug cache / versions)
 const APP_BUILD = "2.6";
+const LEFT_RAIL_W = 270;
+const TV_VERSION_RESERVED_H = 34;
+
+const TV_NEWS_TOP = "8vh";
+const TV_NEWS_LEFT = "2px";
+
+const TV_TABLE_WIDTH = `min(1200px, calc(100vw - 24px))`;
+const TV_NEWS_WIDTH = `calc((100vw - ${TV_TABLE_WIDTH}) / 2)`;
 
 /* ---------------------- Utils ---------------------- */
 function pad2(n) {
@@ -104,10 +54,24 @@ function fmtHM(ms) {
 function fmtHMFromDate(d) {
   if (!d) return "—";
   const dt = d instanceof Date ? d : new Date(d);
-  return dt.toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return dt.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
+function normalizeRoleFromDoc(emp) {
+  const roleRaw = String(emp?.role || "").trim().toLowerCase();
+  if (roleRaw === "admin") return "admin";
+  if (roleRaw === "rh") return "rh";
+  if (roleRaw === "tv") return "tv";
+  if (roleRaw === "user") return "user";
 
-/* ✅ NOUVEAU: fallback nom projet = nom || clientNom */
+  if (emp?.isAdmin === true) return "admin";
+  if (emp?.isRH === true) return "rh";
+  if (emp?.isTV === true) return "tv";
+  return "user";
+}
 function getProjetNom(data) {
   const n = String(data?.nom || "").trim();
   if (n) return n;
@@ -115,14 +79,18 @@ function getProjetNom(data) {
   if (cn) return cn;
   return "";
 }
-
-/* ✅ AJOUT: BT helper (le BT = dossierNo dans tes projets) */
 function getProjetBT(p) {
-  const bt = p?.dossierNo ?? p?.numeroBT ?? p?.noBT ?? p?.bt ?? p?.btNumero ?? p?.numeroBt ?? p?.numBT ?? "";
+  const bt =
+    p?.dossierNo ??
+    p?.numeroBT ??
+    p?.noBT ??
+    p?.bt ??
+    p?.btNumero ??
+    p?.numeroBt ??
+    p?.numBT ??
+    "";
   return String(bt ?? "").trim();
 }
-
-/* ✅ MODIF: libellé projet pour la dropdown = "BT xxx — Nom — Unité" */
 function getProjetLabel(p) {
   const nom = String(p?.nom || p?.clientNom || "(sans nom)").trim() || "(sans nom)";
   const unite = String(p?.numeroUnite ?? p?.unite ?? "").trim();
@@ -144,7 +112,7 @@ function segCol(empId, key) {
   return collection(db, "employes", empId, "timecards", key, "segments");
 }
 function newEmpSegRef(empId, key) {
-  return doc(segCol(empId, key)); // auto id
+  return doc(segCol(empId, key));
 }
 
 async function ensureDay(empId, key = todayKey()) {
@@ -184,9 +152,8 @@ function projDayRef(projId, key) {
 function projSegCol(projId, key) {
   return collection(db, "projets", projId, "timecards", key, "segments");
 }
-// ⚠️ on garde la fonction, mais on ne l'utilise plus pour le punch (on veut même id)
 function newProjSegRef(projId, key) {
-  return doc(projSegCol(projId, key)); // auto id
+  return doc(projSegCol(projId, key));
 }
 
 async function ensureProjDay(projId, key = todayKey()) {
@@ -218,9 +185,8 @@ function otherDayRef(otherId, key) {
 function otherSegCol(otherId, key) {
   return collection(db, "autresProjets", otherId, "timecards", key, "segments");
 }
-// ⚠️ gardé pour compat, mais on aligne maintenant sur le seg employé
 function newOtherSegRef(otherId, key) {
-  return doc(otherSegCol(otherId, key)); // auto id
+  return doc(otherSegCol(otherId, key));
 }
 
 async function ensureOtherDay(otherId, key = todayKey()) {
@@ -334,10 +300,6 @@ function useAutresProjets(setError) {
   return rows;
 }
 
-/**
- * ✅ OPTI: useSessions ne se réabonne plus sur un tick.
- * - 1 seul onSnapshot stable par (empId, dayKey)
- */
 function useSessions(empId, key, setError) {
   const [list, setList] = useState([]);
 
@@ -369,9 +331,6 @@ function computeTotalMs(sessions) {
   }, 0);
 }
 
-/**
- * ✅ OPTI: totalMs se recalcule sur nowTick (UI only), sans toucher Firestore.
- */
 function usePresenceToday(empId, setError, nowTick = 0) {
   const key = todayKey();
   const sessions = useSessions(empId, key, setError);
@@ -438,9 +397,6 @@ function scheduleOrphanProject2_0({ projId, day, segId, empId }) {
 }
 
 /* ---------------------- Punch / Dépunch ---------------------- */
-/**
- * ✅ Punch PROJET atomique
- */
 async function doPunchWithProject(emp, proj) {
   const key = todayKey();
   if (proj && proj.ouvert === false) throw new Error("Ce projet est fermé. Impossible de puncher dessus.");
@@ -574,11 +530,6 @@ async function doPunchWithProject(emp, proj) {
   }
 }
 
-/**
- * ✅ Punch AUTRE TÂCHE atomique
- * ✅ FIX 2026-03-05:
- * - segment autresProjets = même docId que segment employé
- */
 async function doPunchWithOther(emp, other) {
   const key = todayKey();
   const now = new Date();
@@ -698,11 +649,6 @@ async function doPunchWithOther(emp, other) {
   });
 }
 
-/**
- * ✅ Dépunch béton
- * ✅ FIX 2026-03-05:
- * - ferme aussi AUTRE TÂCHE par segId identique
- */
 async function doDepunchWithProject(emp) {
   const key = todayKey();
   const now = new Date();
@@ -860,7 +806,9 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
   const hasInitialProj = !!initialProj;
   if (!open) return null;
 
-  const confirmText = hasInitialProj ? `Continuer projet : ${initialProj.nom || "(sans nom)"} ?` : "Vous n'avez pas choisi de projet.";
+  const confirmText = hasInitialProj
+    ? `Continuer projet : ${initialProj.nom || "(sans nom)"} ?`
+    : "Vous n'avez pas choisi de projet.";
 
   const modal = (
     <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
@@ -1163,7 +1111,6 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ✅ modal détails punch aujourd'hui */
 function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autresProjets, onClose }) {
   const [extraProjLabels, setExtraProjLabels] = useState({});
   const key = todayKey();
@@ -1207,8 +1154,7 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, sessions, projets]);
+  }, [open, sessions, projets, extraProjLabels]);
 
   const resolveJobLabel = (s) => {
     const jid = String(s?.jobId || "");
@@ -1243,7 +1189,6 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
         open: !en,
       };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, projets, autresProjets, extraProjLabels]);
 
   if (!open) return null;
@@ -1314,7 +1259,11 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
             </div>
           ))}
 
-          {rows.length === 0 && <div style={{ padding: 12, color: "#64748b" }}>Aucun segment aujourd’hui (pas punché / pas de données).</div>}
+          {rows.length === 0 && (
+            <div style={{ padding: 12, color: "#64748b" }}>
+              Aucun segment aujourd’hui (pas punché / pas de données).
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
@@ -1329,91 +1278,17 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
   return ReactDOM.createPortal(modal, document.body);
 }
 
-/* ✅ UI flottante */
-const APP_TOP = 38;
-const LEFT_RAIL_W = 270;
-
-function LogoRail() {
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: APP_TOP + 10,
-        left: 14,
-        zIndex: 50,
-        pointerEvents: "none",
-      }}
-    >
-      <img
-        src={logoGyrotech}
-        alt="GyroTech"
-        style={{
-          height: 220,
-          width: "auto",
-          display: "block",
-          filter: "drop-shadow(0 6px 18px rgba(0,0,0,0.18))",
-          opacity: 0.98,
-        }}
-      />
-    </div>
-  );
-}
-
-function ClockBadge({ now }) {
-  const heure = now.toLocaleTimeString("fr-CA", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-  const dateStr = now.toLocaleDateString("fr-CA", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "2-digit",
-  });
-  return (
-    <div
-      style={{
-        background: "rgba(255,255,255,0.9)",
-        backdropFilter: "blur(4px)",
-        border: "1px solid #e5e7eb",
-        borderRadius: 14,
-        padding: "10px 14px",
-        boxShadow: "0 10px 24px rgba(0,0,0,0.15)",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-        color: "#111827",
-        textAlign: "center",
-        minWidth: 220,
-        lineHeight: 1.15,
-      }}
-    >
-      <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 0.3, textTransform: "capitalize", marginBottom: 2 }}>
-        {dateStr}
-      </div>
-      <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 1 }}>{heure}</div>
-    </div>
-  );
-}
-
-function ClockFloat({ now }) {
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: APP_TOP + 10,
-        right: 14,
-        zIndex: 60,
-        pointerEvents: "none",
-      }}
-    >
-      <ClockBadge now={now} />
-    </div>
-  );
-}
-
-/* ---------------------- Lignes / Tableau ---------------------- */
-function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
+function LigneEmploye({
+  emp,
+  setError,
+  projets,
+  autresProjets,
+  nowTick15s,
+  readOnly = false,
+  compactTV = false,
+  tvRowHeight = null,
+  tvMode = false,
+}) {
   const { sessions, totalMs, hasOpen } = usePresenceToday(emp.id, setError, nowTick15s);
   const present = hasOpen;
 
@@ -1454,6 +1329,26 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
     return jid.startsWith("proj:") ? jid.slice(5) : "";
   }, [currentOpen?.jobId]);
 
+  const currentDisplayLabel = useMemo(() => {
+    if (!present) return "Non punché";
+
+    const jid = String(currentOpen?.jobId || "");
+
+    if (jid.startsWith("proj:")) {
+      const pid = jid.slice(5);
+      const p = projets.find((x) => x.id === pid);
+      return currentJobName || (p ? getProjetLabel(p) : "Projet");
+    }
+
+    if (jid.startsWith("other:")) {
+      const oid = jid.slice(6);
+      const o = autresProjets.find((x) => x.id === oid);
+      return currentJobName || o?.nom || "Autre tâche";
+    }
+
+    return currentJobName || "Aucun projet";
+  }, [present, currentOpen, currentJobName, projets, autresProjets]);
+
   useEffect(() => {
     setProjSel(emp?.lastProjectId || "");
   }, [emp?.lastProjectId]);
@@ -1468,6 +1363,7 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
 
   const autoDepunchRef = useRef(false);
   useEffect(() => {
+    if (readOnly) return;
     if (!present || !currentIsProj || !currentProjId) {
       autoDepunchRef.current = false;
       return;
@@ -1499,10 +1395,12 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
         autoDepunchRef.current = false;
       }
     })();
-  }, [present, currentIsProj, currentProjId, projets, emp, setError]);
+  }, [present, currentIsProj, currentProjId, projets, emp, setError, readOnly]);
 
   const handlePunchClick = async (e) => {
     e.stopPropagation();
+    if (readOnly) return;
+
     if (present) {
       togglePunch();
       return;
@@ -1553,8 +1451,22 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
   const ROW_YELLOW_BASE = "#facc15";
   const ROW_YELLOW_HOVER = "#eab308";
 
-  const baseBg = !present ? ROW_RED_BASE : currentIsOther ? ROW_YELLOW_BASE : currentIsProj ? ROW_GREEN_BASE : ROW_RED_BASE;
-  const hoverBg = !present ? ROW_RED_HOVER : currentIsOther ? ROW_YELLOW_HOVER : currentIsProj ? ROW_GREEN_HOVER : ROW_RED_HOVER;
+  const baseBg = !present
+    ? ROW_RED_BASE
+    : currentIsOther
+    ? ROW_YELLOW_BASE
+    : currentIsProj
+    ? ROW_GREEN_BASE
+    : ROW_RED_BASE;
+
+  const hoverBg = !present
+    ? ROW_RED_HOVER
+    : currentIsOther
+    ? ROW_YELLOW_HOVER
+    : currentIsProj
+    ? ROW_GREEN_HOVER
+    : ROW_RED_HOVER;
+
   const rowBg = isHovered ? hoverBg : baseBg;
 
   const proceedPunchOther = async (ap) => {
@@ -1571,6 +1483,122 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
   const punchBtnBg = present ? "#dc2626" : "#16a34a";
   const punchBtnHover = present ? "#b91c1c" : "#15803d";
 
+  const compactCellPadding = compactTV ? "4px 10px" : undefined;
+  const compactFontSize = compactTV ? "clamp(16px, 1.35vw, 22px)" : undefined;
+  const compactProjectFontSize = compactTV ? "clamp(18px, 1.7vw, 30px)" : 15;
+  const compactProjectRadius = compactTV ? 10 : 10;
+  const compactProjectPadding = compactTV ? "0 12px" : "0 12px";
+  const compactProjectMinHeight = compactTV ? 0 : 44;
+
+  if (tvMode) {
+    return (
+      <>
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            minHeight: 0,
+            boxSizing: "border-box",
+            display: "grid",
+            gridTemplateColumns: "28% 14% 58%",
+            alignItems: "stretch",
+            background: rowBg,
+            transition: "background 0.25s ease-out",
+            cursor: "pointer",
+          }}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          onClick={() => setDetailsOpen(true)}
+          title="Clique pour voir les détails des heures"
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              minWidth: 0,
+              padding: compactCellPadding || "2px 8px",
+              fontSize: compactFontSize || 14,
+              fontWeight: 1000,
+              color: "#111827",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              borderTop: "1px solid rgba(255,255,255,0.35)",
+            }}
+            title={emp.nom || "—"}
+          >
+            {emp.nom || "—"}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              minWidth: 0,
+              padding: compactCellPadding || "2px 8px",
+              fontSize: compactFontSize || 14,
+              fontWeight: 900,
+              color: "#111827",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              borderTop: "1px solid rgba(255,255,255,0.35)",
+            }}
+          >
+            {fmtHM(totalMs)}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              minWidth: 0,
+              padding: compactCellPadding || "2px 8px",
+              borderTop: "1px solid rgba(255,255,255,0.35)",
+            }}
+          >
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                minHeight: compactProjectMinHeight,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                padding: compactProjectPadding,
+                borderRadius: compactProjectRadius,
+                background: "rgba(255,255,255,0.82)",
+                border: "1px solid rgba(255,255,255,0.55)",
+                fontWeight: 1000,
+                fontSize: compactProjectFontSize,
+                color: "#111827",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                lineHeight: 1.1,
+                minWidth: 0,
+              }}
+              title={currentDisplayLabel}
+            >
+              {currentDisplayLabel}
+            </div>
+          </div>
+        </div>
+
+        <EmployePunchDetailsModal
+          open={detailsOpen}
+          emp={emp}
+          sessions={sessions}
+          totalMs={totalMs}
+          projets={projets}
+          autresProjets={autresProjets}
+          onClose={() => setDetailsOpen(false)}
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <tr
@@ -1579,118 +1607,176 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
           background: rowBg,
           transition: "background 0.25s ease-out",
           cursor: "pointer",
+          height: tvRowHeight || undefined,
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         onClick={() => setDetailsOpen(true)}
         title="Clique pour voir les détails des heures"
       >
-        <td style={{ ...styles.td, whiteSpace: "nowrap", fontWeight: 900 }}>{emp.nom || "—"}</td>
-        <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{fmtHM(totalMs)}</td>
+        <td
+          style={{
+            ...styles.td,
+            whiteSpace: "nowrap",
+            fontWeight: 900,
+            padding: compactCellPadding || styles.td?.padding,
+            fontSize: compactFontSize || styles.td?.fontSize,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={emp.nom || "—"}
+        >
+          {emp.nom || "—"}
+        </td>
 
-        <td style={{ ...styles.td }} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", minWidth: 0 }}>
-            <div style={{ flex: "1 1 200px", minWidth: 120, maxWidth: "100%" }}>
-              {present && currentIsOther ? (
-                <div
-                  aria-live="polite"
-                  style={{
-                    height: 44,
-                    display: "flex",
-                    alignItems: "center",
-                    fontWeight: 900,
-                    fontSize: 16,
-                    color: "#111827",
-                    padding: "0 12px",
-                    borderRadius: 12,
-                    background: "#eef2ff",
-                    border: "1px solid #c7d2fe",
-                    minWidth: 0,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                  title="Travail en cours (Autre tâche)"
-                >
-                  Actuellement: {currentJobName || "—"}
-                </div>
-              ) : (
-                <select
-                  value={projSel}
-                  onChange={(e) => setProjSel(e.target.value)}
-                  aria-label="Projet pour ce punch"
-                  style={{
-                    ...styles.input,
-                    height: 44,
-                    fontSize: present && currentIsProj ? 15 : 14,
-                    fontWeight: present && currentIsProj ? 800 : 750,
-                    cursor: present ? "not-allowed" : "pointer",
-                    opacity: present ? 0.85 : 1,
-                    width: "100%",
-                    minWidth: 0,
-                  }}
-                  disabled={present}
-                >
-                  <option value="">— Projet —</option>
-                  {projets.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {getProjetLabel(p)}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
+        <td
+          style={{
+            ...styles.td,
+            whiteSpace: "nowrap",
+            padding: compactCellPadding || styles.td?.padding,
+            fontSize: compactFontSize || styles.td?.fontSize,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {fmtHM(totalMs)}
+        </td>
 
-            <Button
-              type="button"
-              variant="neutral"
-              onClick={() => setAutresOpen(true)}
-              disabled={present}
-              style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
-            >
-              Autre tâche
-            </Button>
-
-            <Button
-              type="button"
-              variant="neutral"
-              onClick={() => setNewProjModalOpen(true)}
-              disabled={present}
-              style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
-            >
-              Nouveau projet
-            </Button>
-
-            <Button
-              type="button"
-              onClick={handlePunchClick}
-              disabled={pending}
-              variant="neutral"
+        <td
+          style={{
+            ...styles.td,
+            padding: compactCellPadding || styles.td?.padding,
+            fontSize: compactFontSize || styles.td?.fontSize,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {readOnly ? (
+            <div
               style={{
-                width: 220,
-                height: 52,
-                background: punchBtnBg,
-                color: "#fff",
-                fontSize: 24,
-                fontWeight: 900,
-                lineHeight: 1.05,
-                letterSpacing: 0.3,
+                height: compactTV ? "100%" : undefined,
+                minHeight: compactProjectMinHeight,
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center",
-                textShadow: "0 1px 0 rgba(0,0,0,0.15)",
-                flex: "0 0 auto",
+                padding: compactProjectPadding,
+                borderRadius: compactProjectRadius,
+                background: "rgba(255,255,255,0.82)",
+                border: "1px solid rgba(255,255,255,0.55)",
+                fontWeight: 900,
+                fontSize: compactProjectFontSize,
+                color: "#111827",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                lineHeight: 1.1,
               }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = punchBtnHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = punchBtnBg;
-              }}
+              title={currentDisplayLabel}
             >
-              {present ? "ARRÊT" : "DÉPART"}
-            </Button>
-          </div>
+              {currentDisplayLabel}
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", minWidth: 0 }}>
+              <div style={{ flex: "1 1 200px", minWidth: 120, maxWidth: "100%" }}>
+                {present && currentIsOther ? (
+                  <div
+                    aria-live="polite"
+                    style={{
+                      height: 44,
+                      display: "flex",
+                      alignItems: "center",
+                      fontWeight: 900,
+                      fontSize: 16,
+                      color: "#111827",
+                      padding: "0 12px",
+                      borderRadius: 12,
+                      background: "#eef2ff",
+                      border: "1px solid #c7d2fe",
+                      minWidth: 0,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title="Travail en cours (Autre tâche)"
+                  >
+                    Actuellement: {currentJobName || "—"}
+                  </div>
+                ) : (
+                  <select
+                    value={projSel}
+                    onChange={(e) => setProjSel(e.target.value)}
+                    aria-label="Projet pour ce punch"
+                    style={{
+                      ...styles.input,
+                      height: 44,
+                      fontSize: present && currentIsProj ? 15 : 14,
+                      fontWeight: present && currentIsProj ? 800 : 750,
+                      cursor: present ? "not-allowed" : "pointer",
+                      opacity: present ? 0.85 : 1,
+                      width: "100%",
+                      minWidth: 0,
+                    }}
+                    disabled={present}
+                  >
+                    <option value="">— Projet —</option>
+                    {projets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {getProjetLabel(p)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <Button
+                type="button"
+                variant="neutral"
+                onClick={() => setAutresOpen(true)}
+                disabled={present}
+                style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
+              >
+                Autre tâche
+              </Button>
+
+              <Button
+                type="button"
+                variant="neutral"
+                onClick={() => setNewProjModalOpen(true)}
+                disabled={present}
+                style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
+              >
+                Nouveau projet
+              </Button>
+
+              <Button
+                type="button"
+                onClick={handlePunchClick}
+                disabled={pending}
+                variant="neutral"
+                style={{
+                  width: 220,
+                  height: 52,
+                  background: punchBtnBg,
+                  color: "#fff",
+                  fontSize: 24,
+                  fontWeight: 900,
+                  lineHeight: 1.05,
+                  letterSpacing: 0.3,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  textShadow: "0 1px 0 rgba(0,0,0,0.15)",
+                  flex: "0 0 auto",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = punchBtnHover;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = punchBtnBg;
+                }}
+              >
+                {present ? "ARRÊT" : "DÉPART"}
+              </Button>
+            </div>
+          )}
         </td>
       </tr>
 
@@ -1704,83 +1790,86 @@ function LigneEmploye({ emp, setError, projets, autresProjets, nowTick15s }) {
         onClose={() => setDetailsOpen(false)}
       />
 
-      <MiniConfirm
-        open={confirmOpen}
-        initialProj={confirmProj}
-        projets={projets}
-        onConfirm={handleConfirm}
-        onCancel={(action) => {
-          setConfirmOpen(false);
-          if (action === "clearProject") setProjSel("");
-        }}
-      />
+      {!readOnly && (
+        <>
+          <MiniConfirm
+            open={confirmOpen}
+            initialProj={confirmProj}
+            projets={projets}
+            onConfirm={handleConfirm}
+            onCancel={(action) => {
+              setConfirmOpen(false);
+              if (action === "clearProject") setProjSel("");
+            }}
+          />
 
-      <NewProjectConfirmModal
-        open={newProjModalOpen}
-        empName={emp.nom}
-        onConfirm={async () => {
-          try {
-            setPending(true);
-            await createAndPunchNewProject(emp);
-          } catch (e) {
-            console.error(e);
-            setError?.(e?.message || String(e));
-          } finally {
-            setPending(false);
-            setNewProjModalOpen(false);
-          }
-        }}
-        onCancel={() => setNewProjModalOpen(false)}
-      />
+          <NewProjectConfirmModal
+            open={newProjModalOpen}
+            empName={emp.nom}
+            onConfirm={async () => {
+              try {
+                setPending(true);
+                await createAndPunchNewProject(emp);
+              } catch (e) {
+                console.error(e);
+                setError?.(e?.message || String(e));
+              } finally {
+                setPending(false);
+                setNewProjModalOpen(false);
+              }
+            }}
+            onCancel={() => setNewProjModalOpen(false)}
+          />
 
-      <AutresProjetsModal
-        open={autresOpen}
-        autresProjets={autresProjetsPourEmp}
-        onChoose={async (ap) => {
-          try {
-            const taskCode = String(ap?.code || "").trim();
-            if (taskCode) {
-              setPendingOther(ap);
-              setCodeOpen(true);
-              return;
-            }
-            await proceedPunchOther(ap);
-          } catch (e) {
-            alert(e?.message || String(e));
-          } finally {
-            setAutresOpen(false);
-          }
-        }}
-        onClose={() => setAutresOpen(false)}
-      />
+          <AutresProjetsModal
+            open={autresOpen}
+            autresProjets={autresProjetsPourEmp}
+            onChoose={async (ap) => {
+              try {
+                const taskCode = String(ap?.code || "").trim();
+                if (taskCode) {
+                  setPendingOther(ap);
+                  setCodeOpen(true);
+                  return;
+                }
+                await proceedPunchOther(ap);
+              } catch (e) {
+                alert(e?.message || String(e));
+              } finally {
+                setAutresOpen(false);
+              }
+            }}
+            onClose={() => setAutresOpen(false)}
+          />
 
-      <CodeAutresProjetsModal
-        open={codeOpen}
-        requiredCode={pendingOther?.code || ""}
-        projetNom={pendingOther?.nom || "Autres tâches"}
-        onConfirm={async () => {
-          try {
-            if (!pendingOther) return;
-            await proceedPunchOther(pendingOther);
-          } catch (e) {
-            console.error(e);
-            setError?.(e?.message || String(e));
-          } finally {
-            setCodeOpen(false);
-            setPendingOther(null);
-          }
-        }}
-        onCancel={() => {
-          setCodeOpen(false);
-          setPendingOther(null);
-        }}
-      />
+          <CodeAutresProjetsModal
+            open={codeOpen}
+            requiredCode={pendingOther?.code || ""}
+            projetNom={pendingOther?.nom || "Autres tâches"}
+            onConfirm={async () => {
+              try {
+                if (!pendingOther) return;
+                await proceedPunchOther(pendingOther);
+              } catch (e) {
+                console.error(e);
+                setError?.(e?.message || String(e));
+              } finally {
+                setCodeOpen(false);
+                setPendingOther(null);
+              }
+            }}
+            onCancel={() => {
+              setCodeOpen(false);
+              setPendingOther(null);
+            }}
+          />
+        </>
+      )}
     </>
   );
 }
 
-/* ---------------------- Page ---------------------- */
-export default function PageAccueil() {
+export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash = false }) {
   const [error, setError] = useState(null);
 
   const [user, setUser] = useState(null);
@@ -1800,21 +1889,27 @@ export default function PageAccueil() {
     return employes.find((e) => e.uid === uid) || employes.find((e) => (e.emailLower || "") === emailLower) || null;
   }, [user, employes]);
 
-  const isAdmin = !!myEmploye?.isAdmin;
-  const isRH = !!myEmploye?.isRH;
+  const myRole = normalizeRoleFromDoc(myEmploye);
+  const isAdmin = myRole === "admin";
+  const isRH = myRole === "rh";
   const canSeeAdminMenus = isAdmin || isRH;
 
   const visibleEmployes = useMemo(() => {
-    const employesSansRH = employes.filter((e) => e?.isRH !== true);
+    const employesSansRH = employes.filter((e) => normalizeRoleFromDoc(e) !== "rh");
+    const employesSansRHetTV = employesSansRH.filter((e) => normalizeRoleFromDoc(e) !== "tv");
+
+    if (isTV) return employesSansRHetTV;
 
     if (canSeeAdminMenus) return employesSansRH;
 
-    if (!myEmploye || myEmploye?.isRH === true) return [];
+    if (!myEmploye || normalizeRoleFromDoc(myEmploye) === "rh") return [];
 
     return employesSansRH.filter((e) => e.id === myEmploye.id);
-  }, [employes, canSeeAdminMenus, myEmploye]);
+  }, [employes, canSeeAdminMenus, myEmploye, isTV]);
 
   const autresProjets = useMemo(() => {
+    if (isTV) return [];
+
     if (canSeeAdminMenus) {
       return autresProjetsRaw.filter((t) => t.ouvert !== false);
     }
@@ -1828,13 +1923,7 @@ export default function PageAccueil() {
       const ids = Array.isArray(t.visibleToEmpIds) ? t.visibleToEmpIds : [];
       return ids.includes(myEmploye.id);
     });
-  }, [autresProjetsRaw, canSeeAdminMenus, myEmploye]);
-
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
+  }, [autresProjetsRaw, canSeeAdminMenus, myEmploye, isTV]);
 
   const [nowTick15s, setNowTick15s] = useState(0);
   useEffect(() => {
@@ -1846,6 +1935,8 @@ export default function PageAccueil() {
   const [createProjetOpen, setCreateProjetOpen] = useState(false);
 
   useEffect(() => {
+    if (isTV) return;
+
     const tryOpenFromSession = () => {
       try {
         const shouldOpen = window.sessionStorage?.getItem("openCreateProjet") === "1";
@@ -1868,7 +1959,7 @@ export default function PageAccueil() {
     return () => {
       window.removeEventListener("open-create-projet", handleOpenCreateProjet);
     };
-  }, []);
+  }, [isTV]);
 
   const [pressed, setPressed] = useState(false);
   void pressed;
@@ -1876,69 +1967,134 @@ export default function PageAccueil() {
 
   return (
     <>
-      {/* <LogoRail /> */}
-      <ClockFloat now={now} />
-
+      <style>{`
+        @keyframes tvNewsBlinkBlue {
+          0%   { box-shadow: 0 0 0 0 rgba(37,99,235,0.00); }
+          50%  { box-shadow: 0 0 0 3px rgba(37,99,235,0.28), 0 0 26px rgba(37,99,235,0.35); }
+          100% { box-shadow: 0 0 0 0 rgba(37,99,235,0.00); }
+        }
+      `}</style>
       <PageContainer
-        style={{
-          paddingTop: 8,
-          marginLeft: LEFT_RAIL_W,
-          marginRight: 10,
+        containerStyle={{
+          paddingTop: isTV ? 2 : 8,
+          paddingBottom: isTV ? 2 : 0,
+
+          ...(isTV
+            ? {
+                marginLeft: "auto",
+                marginRight: "auto",
+                width: TV_TABLE_WIDTH,
+                maxWidth: TV_TABLE_WIDTH,
+                height: `calc(100vh - 42px - ${TV_VERSION_RESERVED_H}px)`,
+              }
+            : {
+                marginLeft: LEFT_RAIL_W,
+                marginRight: 10,
+              }),
+
+          boxSizing: "border-box",
+          overflow: "hidden",
+          minHeight: 0,
         }}
       >
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-          <Card title="👥 Employé(e)" right={<div style={{ display: "flex", gap: 22, alignItems: "center" }} />}>
-            <div style={styles.tableWrap}>
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    {["Nom", "Jour", "Projet"].map((h, i) => (
-                      <th key={i} style={{ ...styles.th, background: "#e5e7eb", color: "#111827" }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {visibleEmployes.map((e) => (
-                    <LigneEmploye
-                      key={e.id}
-                      emp={e}
-                      setError={setError}
-                      projets={projetsOuverts}
-                      autresProjets={autresProjets}
-                      nowTick15s={nowTick15s}
-                    />
-                  ))}
-
-                  {visibleEmployes.length === 0 && (
-                    <tr>
-                      <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
-                        {canSeeAdminMenus
-                          ? "Aucun employé(e) pour l’instant."
-                          : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: isTV ? 0 : 26,
+            height: isTV ? "100%" : undefined,
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          {isTV ? (
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                minHeight: 0,
+                overflow: "hidden",
+              }}
+            >
+              <TableauEmployesTV
+                employes={visibleEmployes}
+                maxParTableau={20}
+                renderRow={(e, key, opts) => (
+                  <LigneEmploye
+                    key={key}
+                    emp={e}
+                    setError={setError}
+                    projets={projetsOuverts}
+                    autresProjets={autresProjets}
+                    nowTick15s={nowTick15s}
+                    readOnly={true}
+                    compactTV={opts?.compactTV}
+                    tvRowHeight={opts?.tvRowHeight}
+                    tvMode={opts?.tvMode}
+                  />
+                )}
+              />
             </div>
-          </Card>
+          ) : (
+            <>
+              <Card
+                title="👥 Employé(e)"
+                right={<div style={{ display: "flex", gap: 22, alignItems: "center" }} />}
+              >
+                <div style={styles.tableWrap}>
+                  <table style={styles.table}>
+                    <thead>
+                      <tr>
+                        {["Nom", "Jour", "Projet"].map((h, i) => (
+                          <th key={i} style={{ ...styles.th, background: "#e5e7eb", color: "#111827" }}>
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
 
-          <Card title="📁 Projets">
-            <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
-          </Card>
+                    <tbody>
+                      {visibleEmployes.map((e) => (
+                        <LigneEmploye
+                          key={e.id}
+                          emp={e}
+                          setError={setError}
+                          projets={projetsOuverts}
+                          autresProjets={autresProjets}
+                          nowTick15s={nowTick15s}
+                          readOnly={false}
+                        />
+                      ))}
 
-          <Card title="📁 Autres tâches">
-            <AutresProjetsSection allowEdit={false} showHeader={false} />
-          </Card>
+                      {visibleEmployes.length === 0 && (
+                        <tr>
+                          <td colSpan={3} style={{ ...styles.td, color: "#64748b" }}>
+                            {canSeeAdminMenus
+                              ? "Aucun employé(e) pour l’instant."
+                              : "Aucun employé(e) visible (compte non lié ou pas d’employé(e))."}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              <Card title="📁 Projets">
+                <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
+              </Card>
+
+              <Card title="📁 Autres tâches">
+                <AutresProjetsSection allowEdit={false} showHeader={false} />
+              </Card>
+            </>
+          )}
         </div>
       </PageContainer>
 
-      {materialProjId && (
+      {!isTV && materialProjId && (
         <ProjectMaterielPanel
           projId={materialProjId}
           onClose={() => setMaterialProjId(null)}
@@ -1946,22 +2102,78 @@ export default function PageAccueil() {
         />
       )}
 
-      <PopupCreateProjet
-        open={createProjetOpen}
-        mode="create"
-        onClose={() => {
-          setCreateProjetOpen(false);
-          clearPendingCreateProjectSession();
-        }}
-        onError={(msg) => setError(msg)}
-        onSaved={() => {
-          setCreateProjetOpen(false);
-        }}
-      />
+      {!isTV && (
+        <PopupCreateProjet
+          open={createProjetOpen}
+          mode="create"
+          onClose={() => {
+            setCreateProjetOpen(false);
+            clearPendingCreateProjectSession();
+          }}
+          onError={(msg) => setError(msg)}
+          onSaved={() => {
+            setCreateProjetOpen(false);
+          }}
+        />
+      )}
+
+      {isTV && String(tvNewsText || "").trim() && (
+        <div
+          style={{
+            position: "fixed",
+            left: TV_NEWS_LEFT,
+            top: TV_NEWS_TOP,
+            width: TV_NEWS_WIDTH,
+            maxWidth: "calc(100vw - 8px)",
+            maxHeight: "calc(100vh - 150px)",
+            overflowY: "auto",
+            overflowX: "hidden",
+            background: "#eff6ff",
+            border: "1px solid #93c5fd",
+            borderRadius: "0.6vw",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
+            zIndex: 9000,
+            boxSizing: "border-box",
+            animation: tvNewsFlash ? "tvNewsBlinkBlue 1.2s infinite" : "none",
+          }}
+        >
+          <div
+            style={{
+              padding: "0.45vw 0.55vw",
+              borderBottom: "1px solid #bfdbfe",
+              fontSize: "1.25vw",
+              fontWeight: 1000,
+              textAlign: "center",
+              color: "#1d4ed8",
+              background: "#dbeafe",
+            }}
+          >
+            📣 Nouvelle
+          </div>
+
+          <div
+            style={{
+              padding: "0.55vw 0.55vw 0.7vw",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              overflowWrap: "anywhere",
+              fontSize: "clamp(16px, 1.35vw, 22px)",
+              lineHeight: 1.15,
+              fontWeight: 1000,
+              color: "#111827",
+              textAlign: "center",
+              boxSizing: "border-box",
+            }}
+          >
+            {String(tvNewsText || "").trim()}
+          </div>
+        </div>
+      )}
 
       <div style={{ position: "fixed", bottom: 8, right: 12, fontSize: 12, opacity: 0.5, zIndex: 99999 }}>
         Version: {APP_BUILD}
       </div>
     </>
   );
+
 }

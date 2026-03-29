@@ -1,11 +1,13 @@
 /**
  * Cloud Functions v2 – Gyrotech
  * - Activation de compte (email + code + mot de passe)
+ * - Gestion compte TV (mot de passe direct admin)
  * - Envoi de facture par courriel avec Brevo (SMTP)
- * - ✅ Auto-dépunch de TOUS les employés à 17h (America/Toronto)
- * - ✅ SHUTDOWN GLOBAL: kickAllUsers (revokeRefreshTokens) + sessionVersion++
- * - ✅ DEBUG (2026-03-06): logs détaillés pour syncProjectSegOnEmpClose
+ * - Auto-dépunch de TOUS les employés à 17h (America/Toronto)
+ * - SHUTDOWN GLOBAL: kickAllUsers (revokeRefreshTokens) + sessionVersion++
+ * - DEBUG: logs détaillés pour syncProjectSegOnEmpClose
  */
+
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
@@ -15,7 +17,6 @@ const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 
-// Options globales
 setGlobalOptions({
   region: "us-central1",
   maxInstances: 10,
@@ -24,15 +25,52 @@ setGlobalOptions({
 admin.initializeApp();
 
 /* =========================
-   ✅ BÉTON + DEBUG:
-   si segment EMPLOYÉ (segId) ferme => segment PROJET (même segId) ferme aussi
+   Helpers rôles
+   ========================= */
+function normalizeRoleFromEmpData(empData = {}) {
+  const roleRaw = String(empData.role || "").trim().toLowerCase();
 
-   Trigger:
-   employes/{empId}/timecards/{day}/segments/{segId}
+  if (roleRaw === "admin") return "admin";
+  if (roleRaw === "rh") return "rh";
+  if (roleRaw === "tv") return "tv";
+  if (roleRaw === "user") return "user";
 
-   ✅ IMPORTANT:
-   - région du trigger = région Firestore
-   - logs détaillés pour voir exactement où ça entre/sort
+  if (empData.isAdmin === true) return "admin";
+  if (empData.isRH === true) return "rh";
+  if (empData.isTV === true) return "tv";
+
+  return "user";
+}
+
+function roleToClaims(role) {
+  return {
+    role,
+    isAdmin: role === "admin",
+    isRH: role === "rh",
+    isTV: role === "tv",
+  };
+}
+
+async function getAdminEmployeDocOrThrow(uid) {
+  const db = admin.firestore();
+
+  const q = await db.collection("employes").where("uid", "==", uid).limit(1).get();
+  if (q.empty) {
+    throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
+  }
+
+  const me = q.docs[0].data() || {};
+  const role = normalizeRoleFromEmpData(me);
+
+  if (role !== "admin") {
+    throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
+  }
+
+  return q.docs[0];
+}
+
+/* =========================
+   si segment EMPLOYÉ ferme => segment PROJET ferme aussi
    ========================= */
 exports.syncProjectSegOnEmpClose = onDocumentUpdated(
   {
@@ -73,8 +111,6 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
         empId,
         day,
         segId,
-        beforeEnd: beforeEnd ? String(beforeEnd) : null,
-        afterEnd: afterEnd ? String(afterEnd) : null,
       });
       return;
     }
@@ -84,8 +120,6 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
         empId,
         day,
         segId,
-        beforeEnd: String(beforeEnd),
-        afterEnd: String(afterEnd),
       });
       return;
     }
@@ -136,22 +170,12 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
 
       const p = pSnap.data() || {};
 
-      logger.info("syncProjectSegOnEmpClose project-seg-read", {
-        projId,
-        day,
-        segId,
-        empId,
-        projectSegEnd: p.end ? String(p.end) : null,
-      });
-
       if (p.end != null) {
         logger.info("syncProjectSegOnEmpClose EXIT project-already-closed", {
           projId,
           day,
           segId,
           empId,
-          projectSegEnd: String(p.end),
-          empSegEnd: afterEnd ? String(afterEnd) : null,
         });
         return;
       }
@@ -168,7 +192,6 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
         day,
         segId,
         empId,
-        syncedEnd: afterEnd ? String(afterEnd) : null,
       });
     } catch (e) {
       logger.error("syncProjectSegOnEmpClose FAILED", {
@@ -184,7 +207,7 @@ exports.syncProjectSegOnEmpClose = onDocumentUpdated(
 );
 
 /* =========================
-   ✅ SHUTDOWN GLOBAL (Admin) — Kick ALL users
+   SHUTDOWN GLOBAL (Admin)
    ========================= */
 exports.kickAllUsers = onCall(async (request) => {
   try {
@@ -195,14 +218,7 @@ exports.kickAllUsers = onCall(async (request) => {
     const uid = request.auth.uid;
     const db = admin.firestore();
 
-    const q = await db.collection("employes").where("uid", "==", uid).limit(1).get();
-    if (q.empty) {
-      throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
-    }
-    const me = q.docs[0].data() || {};
-    if (me.isAdmin !== true) {
-      throw new HttpsError("permission-denied", "Accès refusé (admin requis).");
-    }
+    await getAdminEmployeDocOrThrow(uid);
 
     let pageToken = undefined;
     let total = 0;
@@ -239,23 +255,17 @@ exports.kickAllUsers = onCall(async (request) => {
 });
 
 /* =========================
-   ✅ Secrets Brevo (SMTP)
+   Secrets Brevo (SMTP)
    ========================= */
 const BREVO_SMTP_USER = defineSecret("BREVO_SMTP_USER");
 const BREVO_SMTP_PASS = defineSecret("BREVO_SMTP_PASS");
 const MAIL_FROM = defineSecret("MAIL_FROM");
 
 /* =========================
-   ✅ Activate Account (email + code + password)
-   =========================
-   - PAS besoin d’être connecté
-   - Vérifie que l’email existe dans "employes"
-   - Vérifie le code d’activation
-   - Crée ou met à jour l’utilisateur Auth
-   - Marque le doc employé comme activé
-   - ✅ crée aussi users/{uid} pour les règles Storage
-   - ✅ ajoute custom claims
-*/
+   Activate Account (email + code + password)
+   - réservé aux users normaux / admin / RH
+   - PAS pour compte TV
+   ========================= */
 exports.activateAccount = onCall(async (request) => {
   try {
     const data = request.data || {};
@@ -283,6 +293,14 @@ exports.activateAccount = onCall(async (request) => {
     const empDoc = q.docs[0];
     const empRef = empDoc.ref;
     const empData = empDoc.data() || {};
+    const role = normalizeRoleFromEmpData(empData);
+
+    if (role === "tv") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Le Compte TV ne s’active pas avec un code. L’admin doit définir son mot de passe directement."
+      );
+    }
 
     if (empData.uid || empData.activatedAt) {
       throw new HttpsError("already-exists", "Compte déjà activé.");
@@ -296,6 +314,7 @@ exports.activateAccount = onCall(async (request) => {
         "Aucun code d’activation n’est défini pour ce travailleur. L’admin doit en générer un."
       );
     }
+
     if (code !== expectedCode) {
       throw new HttpsError("permission-denied", "Code d’activation invalide.");
     }
@@ -321,18 +340,17 @@ exports.activateAccount = onCall(async (request) => {
     }
 
     const now = admin.firestore.Timestamp.now();
-    const role =
-      empData.isAdmin === true
-        ? "admin"
-        : empData.isRH === true
-        ? "rh"
-        : "user";
+    const claims = roleToClaims(role);
 
     await empRef.set(
       {
         uid: userRecord.uid,
         activatedAt: now,
         activationCode: null,
+        role,
+        isAdmin: claims.isAdmin,
+        isRH: claims.isRH,
+        isTV: claims.isTV,
         updatedAt: now,
       },
       { merge: true }
@@ -343,11 +361,12 @@ exports.activateAccount = onCall(async (request) => {
         uid: userRecord.uid,
         empId: empDoc.id,
         nom: empData.nom || "",
-        email: email,
+        email,
         emailLower: email,
         role,
-        isAdmin: empData.isAdmin === true,
-        isRH: empData.isRH === true,
+        isAdmin: claims.isAdmin,
+        isRH: claims.isRH,
+        isTV: claims.isTV,
         active: true,
         activatedAt: now,
         updatedAt: now,
@@ -355,10 +374,7 @@ exports.activateAccount = onCall(async (request) => {
       { merge: true }
     );
 
-    await admin.auth().setCustomUserClaims(userRecord.uid, {
-      role,
-      isAdmin: empData.isAdmin === true,
-    });
+    await admin.auth().setCustomUserClaims(userRecord.uid, claims);
 
     return { ok: true, uid: userRecord.uid };
   } catch (err) {
@@ -369,7 +385,278 @@ exports.activateAccount = onCall(async (request) => {
 });
 
 /* =========================
-   ✅ Send Invoice Email (Brevo SMTP)
+   createOrUpdateTvAccount
+   - lié directement à PageReglagesAdmin.jsx
+   - modes:
+     1) create
+     2) update_password
+   ========================= */
+exports.createOrUpdateTvAccount = onCall(async (request) => {
+  try {
+    if (!request.auth || !request.auth.uid) {
+      throw new HttpsError("unauthenticated", "Vous devez être connecté.");
+    }
+
+    const adminDoc = await getAdminEmployeDocOrThrow(request.auth.uid);
+    const adminData = adminDoc.data() || {};
+    const db = admin.firestore();
+
+    const data = request.data || {};
+    const mode = String(data.mode || "").trim();
+
+    if (!mode) {
+      throw new HttpsError("invalid-argument", "mode requis.");
+    }
+
+    if (mode === "create") {
+      const nom = String(data.nom || "").trim();
+      const email = String(data.email || "").trim().toLowerCase();
+      const password = String(data.password || "").trim();
+
+      if (!nom) {
+        throw new HttpsError("invalid-argument", "Nom requis.");
+      }
+      if (!email || !email.includes("@")) {
+        throw new HttpsError("invalid-argument", "Email invalide.");
+      }
+      if (!password || password.length < 6) {
+        throw new HttpsError("invalid-argument", "Mot de passe trop faible (6 caractères minimum).");
+      }
+
+      const existingEmp = await db
+        .collection("employes")
+        .where("emailLower", "==", email)
+        .limit(1)
+        .get();
+
+      if (!existingEmp.empty) {
+        throw new HttpsError("already-exists", "Un employé avec cet email existe déjà.");
+      }
+
+      let userRecord;
+      try {
+        userRecord = await admin.auth().getUserByEmail(email);
+        throw new HttpsError("already-exists", "Un compte Auth avec cet email existe déjà.");
+      } catch (e) {
+        if (e instanceof HttpsError) throw e;
+
+        if (e?.code === "auth/user-not-found") {
+          userRecord = await admin.auth().createUser({
+            email,
+            password,
+            displayName: nom || "CompteTV",
+          });
+        } else {
+          logger.error("createOrUpdateTvAccount create auth error:", e);
+          throw new HttpsError("internal", "Erreur Auth lors de la création du Compte TV.");
+        }
+      }
+
+      const now = admin.firestore.Timestamp.now();
+      const claims = roleToClaims("tv");
+
+      const empRef = await db.collection("employes").add({
+        nom,
+        email,
+        emailLower: email,
+        role: "tv",
+        isAdmin: false,
+        isRH: false,
+        isTV: true,
+        activationCode: null,
+        activatedAt: now,
+        uid: userRecord.uid,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await db.collection("users").doc(userRecord.uid).set(
+        {
+          uid: userRecord.uid,
+          empId: empRef.id,
+          nom,
+          email,
+          emailLower: email,
+          role: "tv",
+          isAdmin: false,
+          isRH: false,
+          isTV: true,
+          active: true,
+          activatedAt: now,
+          createdAt: now,
+          updatedAt: now,
+          updatedBy: request.auth.token?.email || null,
+          updatedByEmpId: adminDoc.id,
+          updatedByName: adminData.nom || null,
+        },
+        { merge: true }
+      );
+
+      await admin.auth().setCustomUserClaims(userRecord.uid, claims);
+
+      logger.info("createOrUpdateTvAccount CREATE OK", {
+        empId: empRef.id,
+        uid: userRecord.uid,
+        email,
+        updatedBy: request.auth.token?.email || null,
+      });
+
+      return {
+        ok: true,
+        mode: "create",
+        empId: empRef.id,
+        uid: userRecord.uid,
+        email,
+      };
+    }
+
+    if (mode === "update_password") {
+      const empId = String(data.empId || "").trim();
+      const emailRaw = String(data.email || "").trim().toLowerCase();
+      const password = String(data.password || "").trim();
+
+      if (!empId) {
+        throw new HttpsError("invalid-argument", "empId requis.");
+      }
+      if (!password || password.length < 6) {
+        throw new HttpsError("invalid-argument", "Mot de passe trop faible (6 caractères minimum).");
+      }
+
+      const empRef = db.collection("employes").doc(empId);
+      const empSnap = await empRef.get();
+
+      if (!empSnap.exists) {
+        throw new HttpsError("not-found", "Employé introuvable.");
+      }
+
+      const empData = empSnap.data() || {};
+      const role = normalizeRoleFromEmpData(empData);
+
+      if (role !== "tv") {
+        throw new HttpsError("failed-precondition", "Ce compte n’est pas un Compte TV.");
+      }
+
+      const email = String(empData.emailLower || empData.email || emailRaw || "").trim().toLowerCase();
+      if (!email || !email.includes("@")) {
+        throw new HttpsError("failed-precondition", "Le Compte TV doit avoir un email valide.");
+      }
+
+      let userRecord;
+      try {
+        userRecord = await admin.auth().getUserByEmail(email);
+        await admin.auth().updateUser(userRecord.uid, {
+          password,
+          displayName: empData.nom || "CompteTV",
+        });
+      } catch (e) {
+        if (e?.code === "auth/user-not-found") {
+          userRecord = await admin.auth().createUser({
+            email,
+            password,
+            displayName: empData.nom || "CompteTV",
+          });
+        } else {
+          logger.error("createOrUpdateTvAccount update_password auth error:", e);
+          throw new HttpsError("internal", "Erreur Auth lors de la mise à jour du Compte TV.");
+        }
+      }
+
+      const now = admin.firestore.Timestamp.now();
+      const claims = roleToClaims("tv");
+
+      await empRef.set(
+        {
+          uid: userRecord.uid,
+          activatedAt: now,
+          activationCode: null,
+          role: "tv",
+          isAdmin: false,
+          isRH: false,
+          isTV: true,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+      await db.collection("users").doc(userRecord.uid).set(
+        {
+          uid: userRecord.uid,
+          empId: empSnap.id,
+          nom: empData.nom || "CompteTV",
+          email,
+          emailLower: email,
+          role: "tv",
+          isAdmin: false,
+          isRH: false,
+          isTV: true,
+          active: true,
+          activatedAt: now,
+          updatedAt: now,
+          updatedBy: request.auth.token?.email || null,
+          updatedByEmpId: adminDoc.id,
+          updatedByName: adminData.nom || null,
+        },
+        { merge: true }
+      );
+
+      await admin.auth().setCustomUserClaims(userRecord.uid, claims);
+
+      logger.info("createOrUpdateTvAccount UPDATE_PASSWORD OK", {
+        empId,
+        uid: userRecord.uid,
+        email,
+        updatedBy: request.auth.token?.email || null,
+      });
+
+      return {
+        ok: true,
+        mode: "update_password",
+        empId,
+        uid: userRecord.uid,
+        email,
+      };
+    }
+
+    throw new HttpsError("invalid-argument", "Mode invalide.");
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    logger.error("createOrUpdateTvAccount error:", err);
+    throw new HttpsError("internal", "Erreur lors de la gestion du Compte TV.");
+  }
+});
+
+/* =========================
+   Compatibilité ancienne fonction
+   ========================= */
+exports.setCompteTvPassword = onCall(async (request) => {
+  try {
+    const data = request.data || {};
+    const employeId = String(data.employeId || "").trim();
+    const password = String(data.password || "").trim();
+
+    if (!employeId) {
+      throw new HttpsError("invalid-argument", "employeId requis.");
+    }
+
+    const callableRequest = {
+      ...request,
+      data: {
+        mode: "update_password",
+        empId: employeId,
+        password,
+      },
+    };
+
+    return await exports.createOrUpdateTvAccount.run(callableRequest);
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    logger.error("setCompteTvPassword error:", err);
+    throw new HttpsError("internal", "Erreur lors de la mise à jour du mot de passe du Compte TV.");
+  }
+});
+
+/* =========================
+   Send Invoice Email (Brevo SMTP)
    ========================= */
 exports.sendInvoiceEmail = onCall(
   { secrets: [BREVO_SMTP_USER, BREVO_SMTP_PASS, MAIL_FROM] },
@@ -464,7 +751,7 @@ exports.sendInvoiceEmail = onCall(
 );
 
 /* =========================
-   ✅ Send Other Task Close Email (Brevo SMTP)
+   Send Other Task Close Email (Brevo SMTP)
    ========================= */
 exports.sendOtherTaskCloseEmail = onCall(
   { secrets: [BREVO_SMTP_USER, BREVO_SMTP_PASS, MAIL_FROM] },
@@ -570,9 +857,8 @@ exports.sendOtherTaskCloseEmail = onCall(
 );
 
 /* =========================
-   ✅ Auto-dépunch de tous les employés à 17h (America/Toronto)
+   Auto-dépunch de tous les employés à 17h
    ========================= */
-
 function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -598,8 +884,6 @@ function getTorontoCutoff17Timestamp(baseDate = new Date()) {
     throw new Error("Impossible de calculer la date Toronto pour le cutoff 17h.");
   }
 
-  // On prend midi UTC ce jour-là pour lire proprement l'offset réel de Toronto
-  // (gère automatiquement heure avancée / heure normale)
   const probe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12, 0, 0));
 
   const tzParts = new Intl.DateTimeFormat("en-US", {

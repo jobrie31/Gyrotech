@@ -146,6 +146,140 @@ function MultiSelectEmployesDropdown({
   );
 }
 
+function normalizeRoleFromDoc(emp) {
+  const roleRaw = String(emp?.role || "").trim().toLowerCase();
+  if (roleRaw === "admin") return "admin";
+  if (roleRaw === "rh") return "rh";
+  if (roleRaw === "tv") return "tv";
+  if (roleRaw === "user") return "user";
+
+  if (emp?.isAdmin === true) return "admin";
+  if (emp?.isRH === true) return "rh";
+  if (emp?.isTV === true) return "tv";
+  return "user";
+}
+
+function roleToFlags(role) {
+  const r = String(role || "user").trim().toLowerCase();
+  return {
+    role: r === "admin" || r === "rh" || r === "tv" ? r : "user",
+    isAdmin: r === "admin",
+    isRH: r === "rh",
+    isTV: r === "tv",
+  };
+}
+
+function roleLabel(roleOrEmp) {
+  const role =
+    typeof roleOrEmp === "string"
+      ? roleOrEmp
+      : normalizeRoleFromDoc(roleOrEmp);
+
+  if (role === "admin") return "ADMIN";
+  if (role === "rh") return "RH";
+  if (role === "tv") return "COMPTE TV";
+  return "USER";
+}
+
+function TvPasswordModal({
+  open,
+  targetEmp,
+  pwd1,
+  pwd2,
+  setPwd1,
+  setPwd2,
+  onClose,
+  onSave,
+  busy,
+  error,
+}) {
+  if (!open) return null;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.35)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999,
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(560px, 96vw)",
+          background: "#fff",
+          borderRadius: 14,
+          padding: 16,
+          border: "2px solid #111",
+          boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontWeight: 900 }}>Mot de passe Compte TV</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 28,
+              cursor: "pointer",
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
+          Compte : <strong>{targetEmp?.nom || "—"}</strong> — {targetEmp?.email || "—"}
+        </div>
+
+        {error && <div style={alertErr}>{error}</div>}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <label style={label}>Nouveau mot de passe</label>
+            <input
+              type="password"
+              value={pwd1}
+              onChange={(e) => setPwd1(e.target.value)}
+              style={{ ...input, width: "100%" }}
+              placeholder="Minimum 6 caractères"
+            />
+          </div>
+
+          <div>
+            <label style={label}>Confirmer le mot de passe</label>
+            <input
+              type="password"
+              value={pwd2}
+              onChange={(e) => setPwd2(e.target.value)}
+              style={{ ...input, width: "100%" }}
+              placeholder="Retape le mot de passe"
+            />
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+          <button type="button" onClick={onClose} style={btnSecondary} disabled={busy}>
+            Annuler
+          </button>
+          <button type="button" onClick={onSave} style={btnPrimary} disabled={busy}>
+            {busy ? "..." : "Enregistrer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PageReglagesAdmin() {
   /* ============================================================
      ✅ Détection utilisateur courant + admin
@@ -208,8 +342,9 @@ export default function PageReglagesAdmin() {
     };
   }, [authUser?.uid, authUser?.email]);
 
-  const isAdmin = me?.isAdmin === true;
-  const isRH = me?.isRH === true;
+  const myRole = normalizeRoleFromDoc(me);
+  const isAdmin = myRole === "admin";
+  const isRH = myRole === "rh";
   const canShowAdmin = isAdmin === true;
 
   const [hasDraftProjet, setHasDraftProjet] = useState(false);
@@ -472,8 +607,18 @@ export default function PageReglagesAdmin() {
   const [employeNomInput, setEmployeNomInput] = useState("");
   const [employeEmailInput, setEmployeEmailInput] = useState("");
   const [employeCodeInput, setEmployeCodeInput] = useState("");
-  const [employeIsAdminInput, setEmployeIsAdminInput] = useState(false);
-  const [employeIsRHInput, setEmployeIsRHInput] = useState(false);
+  const [employeRoleInput, setEmployeRoleInput] = useState("user");
+  const [employeTvPasswordInput, setEmployeTvPasswordInput] = useState("");
+  const [employeTvPassword2Input, setEmployeTvPassword2Input] = useState("");
+  const [tvCreateBusy, setTvCreateBusy] = useState(false);
+  const [tvCreateMsg, setTvCreateMsg] = useState("");
+
+  const [tvPwdModalOpen, setTvPwdModalOpen] = useState(false);
+  const [tvPwdTargetEmp, setTvPwdTargetEmp] = useState(null);
+  const [tvPwd1, setTvPwd1] = useState("");
+  const [tvPwd2, setTvPwd2] = useState("");
+  const [tvPwdBusy, setTvPwdBusy] = useState(false);
+  const [tvPwdError, setTvPwdError] = useState("");
 
   useEffect(() => {
     if (!canUseAdminPage) {
@@ -508,9 +653,7 @@ export default function PageReglagesAdmin() {
   }
 
   function getRoleLabel(emp) {
-    if (emp?.isAdmin) return "ADMIN";
-    if (emp?.isRH) return "RH";
-    return "USER";
+    return roleLabel(emp);
   }
 
   const onAddEmploye = async () => {
@@ -519,7 +662,12 @@ export default function PageReglagesAdmin() {
     const nom = (employeNomInput || "").trim();
     const email = (employeEmailInput || "").trim();
     const emailLower = email.toLowerCase();
-    const code = (employeCodeInput || "").trim() || genCode4();
+    const role = String(employeRoleInput || "user").trim().toLowerCase();
+    const flags = roleToFlags(role);
+    const isTVRole = flags.role === "tv";
+    const code = isTVRole ? null : (employeCodeInput || "").trim() || genCode4();
+
+    setTvCreateMsg("");
 
     if (!nom) return alert("Nom requis.");
     if (!isValidEmail(emailLower)) return alert("Email invalide.");
@@ -528,7 +676,42 @@ export default function PageReglagesAdmin() {
       return alert("Cet email existe déjà dans la liste des employés.");
     }
 
-    if (code.length < 4) {
+    if (isTVRole) {
+      const p1 = String(employeTvPasswordInput || "").trim();
+      const p2 = String(employeTvPassword2Input || "").trim();
+
+      if (p1.length < 6) return alert("Mot de passe CompteTV trop faible (6 caractères minimum).");
+      if (p1 !== p2) return alert("Les mots de passe CompteTV ne matchent pas.");
+
+      try {
+        setTvCreateBusy(true);
+
+        const fn = httpsCallable(functions, "createOrUpdateTvAccount");
+        await fn({
+          mode: "create",
+          nom,
+          email: emailLower,
+          password: p1,
+        });
+
+        setEmployeNomInput("");
+        setEmployeEmailInput("");
+        setEmployeCodeInput("");
+        setEmployeRoleInput("user");
+        setEmployeTvPasswordInput("");
+        setEmployeTvPassword2Input("");
+        setTvCreateMsg("✅ Compte TV créé avec succès.");
+      } catch (e) {
+        console.error(e);
+        alert(e?.message || String(e));
+      } finally {
+        setTvCreateBusy(false);
+      }
+
+      return;
+    }
+
+    if (String(code || "").length < 4) {
       return alert("Code d’activation trop court (min 4 caractères).");
     }
 
@@ -537,8 +720,10 @@ export default function PageReglagesAdmin() {
         nom,
         email,
         emailLower,
-        isAdmin: !!employeIsAdminInput,
-        isRH: !!employeIsRHInput,
+        role: flags.role,
+        isAdmin: flags.isAdmin,
+        isRH: flags.isRH,
+        isTV: flags.isTV,
         activationCode: code,
         activatedAt: null,
         uid: null,
@@ -548,8 +733,9 @@ export default function PageReglagesAdmin() {
       setEmployeNomInput("");
       setEmployeEmailInput("");
       setEmployeCodeInput("");
-      setEmployeIsAdminInput(false);
-      setEmployeIsRHInput(false);
+      setEmployeRoleInput("user");
+      setEmployeTvPasswordInput("");
+      setEmployeTvPassword2Input("");
     } catch (e) {
       console.error(e);
       alert(e?.message || String(e));
@@ -559,8 +745,14 @@ export default function PageReglagesAdmin() {
   const onDelEmploye = async (id, nom) => {
     if (!canUseAdminPage) return;
 
-    const labelX = nom || "cet employé ";
-    if (!window.confirm(`Supprimer définitivement ${labelX} ? (Le punch / historique lié ne sera plus visible dans l'application.)`)) return;
+    const labelX = nom || "cet employé";
+    if (
+      !window.confirm(
+        `Supprimer définitivement ${labelX} ? (Le punch / historique lié ne sera plus visible dans l'application.)`
+      )
+    )
+      return;
+
     try {
       await deleteDoc(doc(db, "employes", id));
     } catch (e) {
@@ -571,6 +763,13 @@ export default function PageReglagesAdmin() {
 
   const onResetActivationCode = async (id) => {
     if (!canUseAdminPage) return;
+
+    const target = employes.find((e) => e.id === id);
+    const role = normalizeRoleFromDoc(target);
+    if (role === "tv") {
+      alert("Le Compte TV n’utilise pas de code d’activation.");
+      return;
+    }
 
     const newCode = genCode4();
     if (!window.confirm(`Générer un nouveau code (${newCode}) ?`)) return;
@@ -585,6 +784,57 @@ export default function PageReglagesAdmin() {
     } catch (e) {
       console.error(e);
       alert(e?.message || String(e));
+    }
+  };
+
+  const openTvPasswordModal = (emp) => {
+    setTvPwdTargetEmp(emp || null);
+    setTvPwd1("");
+    setTvPwd2("");
+    setTvPwdError("");
+    setTvPwdModalOpen(true);
+  };
+
+  const saveTvPassword = async () => {
+    if (!canUseAdminPage || !tvPwdTargetEmp) return;
+
+    const p1 = String(tvPwd1 || "").trim();
+    const p2 = String(tvPwd2 || "").trim();
+
+    setTvPwdError("");
+
+    if (p1.length < 6) {
+      setTvPwdError("Mot de passe trop faible (6 caractères minimum).");
+      return;
+    }
+
+    if (p1 !== p2) {
+      setTvPwdError("Les mots de passe ne matchent pas.");
+      return;
+    }
+
+    try {
+      setTvPwdBusy(true);
+
+      const fn = httpsCallable(functions, "createOrUpdateTvAccount");
+      await fn({
+        mode: "update_password",
+        empId: tvPwdTargetEmp.id,
+        email: String(tvPwdTargetEmp.email || "").trim().toLowerCase(),
+        password: p1,
+      });
+
+      setTvPwdModalOpen(false);
+      setTvPwdTargetEmp(null);
+      setTvPwd1("");
+      setTvPwd2("");
+      setTvPwdError("");
+      alert("Mot de passe Compte TV mis à jour.");
+    } catch (e) {
+      console.error(e);
+      setTvPwdError(e?.message || String(e));
+    } finally {
+      setTvPwdBusy(false);
     }
   };
 
@@ -1041,7 +1291,6 @@ export default function PageReglagesAdmin() {
     });
   };
 
-
   useEffect(() => {
     if (!canUseAdminPage) {
       setAutresAdminRows([]);
@@ -1254,7 +1503,9 @@ export default function PageReglagesAdmin() {
         </a>
       </div>
 
-      <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.15, fontWeight: 900, textAlign: "center", whiteSpace: "nowrap" }}>{title}</h1>
+      <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.15, fontWeight: 900, textAlign: "center", whiteSpace: "nowrap" }}>
+        {title}
+      </h1>
 
       <div />
     </div>
@@ -1318,6 +1569,26 @@ export default function PageReglagesAdmin() {
   return (
     <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       <HeaderRow title="🛠️ Réglages Admin" />
+
+      <TvPasswordModal
+        open={tvPwdModalOpen}
+        targetEmp={tvPwdTargetEmp}
+        pwd1={tvPwd1}
+        pwd2={tvPwd2}
+        setPwd1={setTvPwd1}
+        setPwd2={setTvPwd2}
+        onClose={() => {
+          if (tvPwdBusy) return;
+          setTvPwdModalOpen(false);
+          setTvPwdTargetEmp(null);
+          setTvPwd1("");
+          setTvPwd2("");
+          setTvPwdError("");
+        }}
+        onSave={saveTvPassword}
+        busy={tvPwdBusy}
+        error={tvPwdError}
+      />
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginBottom: 16 }}>
         {hasDraftProjet && (
@@ -1458,7 +1729,9 @@ export default function PageReglagesAdmin() {
 
         {(() => {
           const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
-          if (!timeDate || !jobId) return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre tâche.</div>;
+          if (!timeDate || !jobId) {
+            return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre tâche.</div>;
+          }
 
           return (
             <div style={{ marginTop: 8 }}>
@@ -1634,6 +1907,25 @@ export default function PageReglagesAdmin() {
       {/* ===================== 3) TRAVAILLEURS ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Employés</h3>
+
+        <div
+          style={{
+            marginBottom: 10,
+            padding: 10,
+            borderRadius: 10,
+            background: "#f8fafc",
+            border: "1px solid #cbd5e1",
+            fontSize: 12,
+            color: "#334155",
+            fontWeight: 700,
+          }}
+        >
+          Le rôle <b>CompteTV</b> crée maintenant un vrai compte Auth avec mot de passe direct.  
+          Il n’utilise pas de code d’activation.
+        </div>
+
+        {tvCreateMsg && <div style={alertOk}>{tvCreateMsg}</div>}
+
         <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "end" }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <label style={label}>Nom</label>
@@ -1647,48 +1939,68 @@ export default function PageReglagesAdmin() {
 
           <div style={{ flex: 1, minWidth: 260 }}>
             <label style={label}>Email</label>
-            <input value={employeEmailInput} onChange={(e) => setEmployeEmailInput(e.target.value)} placeholder="Email" style={{ ...input, width: "100%" }} />
-          </div>
-
-          <div style={{ flex: 1, minWidth: 240 }}>
-            <label style={label}>Code activation</label>
-            <input value={employeCodeInput} onChange={(e) => setEmployeCodeInput(e.target.value)} style={{ ...input, width: "100%" }} />
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
-              id="empIsAdmin"
-              type="checkbox"
-              checked={!!employeIsAdminInput}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setEmployeIsAdminInput(checked);
-                if (checked) setEmployeIsRHInput(false);
-              }}
+              value={employeEmailInput}
+              onChange={(e) => setEmployeEmailInput(e.target.value)}
+              placeholder="Email"
+              style={{ ...input, width: "100%" }}
             />
-            <label htmlFor="empIsAdmin" style={{ fontWeight: 900 }}>
-              Admin
-            </label>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input
-              id="empIsRH"
-              type="checkbox"
-              checked={!!employeIsRHInput}
+          <div style={{ width: 220 }}>
+            <label style={label}>Rôle</label>
+            <select
+              value={employeRoleInput}
               onChange={(e) => {
-                const checked = e.target.checked;
-                setEmployeIsRHInput(checked);
-                if (checked) setEmployeIsAdminInput(false);
+                setEmployeRoleInput(e.target.value);
+                setTvCreateMsg("");
               }}
-            />
-            <label htmlFor="empIsRH" style={{ fontWeight: 900 }}>
-              Ressource humaine
-            </label>
+              style={{ ...input, width: "100%" }}
+            >
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+              <option value="rh">Ressource humaine</option>
+              <option value="tv">CompteTV</option>
+            </select>
           </div>
 
-          <button onClick={onAddEmploye} style={btnPrimary}>
-            Ajouter
+          {employeRoleInput === "tv" ? (
+            <>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <label style={label}>Mot de passe CompteTV</label>
+                <input
+                  type="password"
+                  value={employeTvPasswordInput}
+                  onChange={(e) => setEmployeTvPasswordInput(e.target.value)}
+                  style={{ ...input, width: "100%" }}
+                  placeholder="Minimum 6 caractères"
+                />
+              </div>
+
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <label style={label}>Confirmer mot de passe</label>
+                <input
+                  type="password"
+                  value={employeTvPassword2Input}
+                  onChange={(e) => setEmployeTvPassword2Input(e.target.value)}
+                  style={{ ...input, width: "100%" }}
+                  placeholder="Retape le mot de passe"
+                />
+              </div>
+            </>
+          ) : (
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <label style={label}>Code activation</label>
+              <input
+                value={employeCodeInput}
+                onChange={(e) => setEmployeCodeInput(e.target.value)}
+                style={{ ...input, width: "100%" }}
+              />
+            </div>
+          )}
+
+          <button onClick={onAddEmploye} style={btnPrimary} disabled={tvCreateBusy}>
+            {tvCreateBusy ? "..." : "Ajouter"}
           </button>
         </div>
 
@@ -1705,28 +2017,67 @@ export default function PageReglagesAdmin() {
             </thead>
             <tbody>
               {employes.map((emp) => {
+                const role = normalizeRoleFromDoc(emp);
                 const activated = !!emp.activatedAt || !!emp.uid;
+                const isTV = role === "tv";
+
                 return (
                   <tr key={emp.id}>
                     <td style={tdTime}>
                       <strong>{emp.nom || "—"}</strong>
                     </td>
+
                     <td style={tdTime}>{emp.email || "—"}</td>
+
                     <td style={tdTime}>
-                      <span style={{ fontWeight: 900, color: activated ? "#166534" : "#b45309" }}>{activated ? "ACTIVÉ" : "NON ACTIVÉ"}</span>
-                      {!activated && <span style={{ color: "#6b7280" }}> — Code: {emp.activationCode || "—"}</span>}
+                      {isTV ? (
+                        <>
+                          <span style={{ fontWeight: 900, color: activated ? "#166534" : "#1d4ed8" }}>
+                            {activated ? "COMPTE TV ACTIF" : "COMPTE TV"}
+                          </span>
+                          <span style={{ color: "#6b7280" }}> — Mot de passe direct</span>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ fontWeight: 900, color: activated ? "#166534" : "#b45309" }}>
+                            {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
+                          </span>
+                          {!activated && <span style={{ color: "#6b7280" }}> — Code: {emp.activationCode || "—"}</span>}
+                        </>
+                      )}
                     </td>
+
                     <td style={tdTime}>
                       <span style={{ fontWeight: 900 }}>{getRoleLabel(emp)}</span>
                     </td>
+
                     <td style={tdTime}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {!activated && (
-                          <button onClick={() => onResetActivationCode(emp.id)} style={btnSecondarySmall} title="Générer un nouveau code">
+                        {!activated && !isTV && (
+                          <button
+                            onClick={() => onResetActivationCode(emp.id)}
+                            style={btnSecondarySmall}
+                            title="Générer un nouveau code"
+                          >
                             Nouveau code
                           </button>
                         )}
-                        <button onClick={() => onDelEmploye(emp.id, emp.nom)} style={btnDangerSmall} title="Supprimer cet employé ">
+
+                        {isTV && (
+                          <button
+                            onClick={() => openTvPasswordModal(emp)}
+                            style={btnSecondarySmall}
+                            title="Modifier le mot de passe du Compte TV"
+                          >
+                            Mot de passe
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => onDelEmploye(emp.id, emp.nom)}
+                          style={btnDangerSmall}
+                          title="Supprimer cet employé"
+                        >
                           Supprimer
                         </button>
                       </div>
@@ -1734,6 +2085,7 @@ export default function PageReglagesAdmin() {
                   </tr>
                 );
               })}
+
               {employes.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
@@ -2009,15 +2361,41 @@ const btnDangerSmall = {
   fontSize: 12,
 };
 
-const btnSecondary = { border: "1px solid #111", background: "#fff", color: "#111", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontWeight: 900 };
+const btnSecondary = {
+  border: "1px solid #111",
+  background: "#fff",
+  color: "#111",
+  borderRadius: 10,
+  padding: "6px 12px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
 const btnSecondarySmall = { ...btnSecondary, padding: "4px 10px", fontSize: 12 };
 
 const tableBlack = { width: "100%", borderCollapse: "collapse", fontSize: 12, border: "2px solid #111", borderRadius: 8 };
 const thTimeBold = { textAlign: "left", padding: 8, borderBottom: "2px solid #111", fontWeight: 900 };
 const tdTime = { padding: 8, borderBottom: "1px solid #111", verticalAlign: "top" };
 
-const alertErr = { background: "#fee2e2", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };
-const alertOk = { background: "#dcfce7", color: "#111", border: "2px solid #111", padding: "6px 8px", borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 900 };
+const alertErr = {
+  background: "#fee2e2",
+  color: "#111",
+  border: "2px solid #111",
+  padding: "6px 8px",
+  borderRadius: 8,
+  fontSize: 12,
+  marginBottom: 8,
+  fontWeight: 900,
+};
+const alertOk = {
+  background: "#dcfce7",
+  color: "#111",
+  border: "2px solid #111",
+  padding: "6px 8px",
+  borderRadius: 8,
+  fontSize: 12,
+  marginBottom: 8,
+  fontWeight: 900,
+};
 
 const btnAccueil = {
   display: "inline-flex",

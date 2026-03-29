@@ -1009,11 +1009,13 @@ export function PopupCreateProjet({ open, onClose, onError, mode = "create", pro
               <div style={{ display: "flex", gap: 8 }}>
                 <select value={annee} onChange={(e) => setAnnee(e.target.value)} style={selectCompact}>
                   <option value="">—</option>
-                  {annees.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.value}
-                    </option>
-                  ))}
+                  {[...annees]
+                    .sort((a, b) => Number(b.value) - Number(a.value))
+                    .map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.value}
+                      </option>
+                    ))}
                 </select>
                 <button type="button" onClick={goReglages} style={btnSecondarySmall}>Réglages</button>
               </div>

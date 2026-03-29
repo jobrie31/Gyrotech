@@ -26,11 +26,8 @@ export const styles = {
     paddingLeft: 20,
     paddingRight: 20,
     paddingBottom: 20,
-
-    // ✅ IMPORTANT: par défaut, PAS de padding en haut
-    // (comme ça la 1ère card monte tout de suite sous ton FullWidthTopBar)
     paddingTop: 0,
-
+    boxSizing: "border-box",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial",
     color: palette.text,
   },

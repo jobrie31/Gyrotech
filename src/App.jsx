@@ -12,6 +12,7 @@ import PageReglages from "./PageReglages";
 import PageReglagesAdmin from "./PageReglagesAdmin";
 import HistoriqueEmploye from "./HistoriqueEmploye";
 import FeuilleDepensesExcel from "./FeuilleDepensesExcel";
+import MessagesPage from "./MessagesPage";
 
 // ✅ AJOUT: page test OCR
 import Test from "./Test";
@@ -47,6 +48,21 @@ function safeToMs(ts) {
   const d = new Date(ts);
   const ms = d.getTime();
   return Number.isFinite(ms) ? ms : 0;
+}
+
+function normalizeRoleFromDoc(emp) {
+  const roleRaw = String(emp?.role || "").trim().toLowerCase();
+
+  if (roleRaw === "admin") return "admin";
+  if (roleRaw === "rh") return "rh";
+  if (roleRaw === "tv") return "tv";
+  if (roleRaw === "user") return "user";
+
+  if (emp?.isAdmin === true) return "admin";
+  if (emp?.isRH === true) return "rh";
+  if (emp?.isTV === true) return "tv";
+
+  return "user";
 }
 
 /* ---------------------- popup message global ---------------------- */
@@ -177,7 +193,18 @@ function BroadcastPopup({ open, text, isAuthor, onSeen, onCloseAdminEdit, onClos
   );
 }
 
-function AlarmPopup({ open, text, onClose }) {
+function AlarmPopup({ open, text, onClose, autoClose = false, autoCloseMs = 120000 }) {
+  useEffect(() => {
+    if (!open) return;
+    if (!autoClose) return;
+
+    const t = setTimeout(() => {
+      onClose?.();
+    }, autoCloseMs);
+
+    return () => clearTimeout(t);
+  }, [open, autoClose, autoCloseMs, onClose]);
+
   if (!open) return null;
 
   return (
@@ -289,7 +316,7 @@ export default function App() {
   // 🔐 état d’auth
   const [user, setUser] = useState(undefined);
 
-  // ✅ Profil employé (pour savoir admin / RH)
+  // ✅ Profil employé
   const [me, setMe] = useState(null);
   const [meLoading, setMeLoading] = useState(true);
 
@@ -299,10 +326,14 @@ export default function App() {
   // ✅ NOUVEAU: notif clignotante RH quand un admin ajoute un message dans la case jaune
   const [rhAdminReplyLikeNotifOn, setRhAdminReplyLikeNotifOn] = useState(false);
 
+  // ✅ NOUVEAU: notif messages mini messenger
+  const [messageNotifOn, setMessageNotifOn] = useState(false);
+  const [messageNotifFromName, setMessageNotifFromName] = useState("");
+
   // ✅ meta cache des notes (Firestore)
   const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
 
-  /* ===================== 📣 BROADCAST GLOBAL (message admin + "VU") ===================== */
+  /* ===================== 📣 BROADCAST GLOBAL ===================== */
 
   const [broadcastText, setBroadcastText] = useState("");
   const [broadcastUpdMs, setBroadcastUpdMs] = useState(0);
@@ -310,7 +341,6 @@ export default function App() {
   const [broadcastNotifOn, setBroadcastNotifOn] = useState(false);
   const [broadcastUpdatedBy, setBroadcastUpdatedBy] = useState("");
 
-  // ✅ ouverture manuelle du gros popup
   const [broadcastPopupOpen, setBroadcastPopupOpen] = useState(false);
 
   // UI admin/RH
@@ -441,7 +471,7 @@ export default function App() {
     }
   }
 
-  // ✅ Débloquer l'audio au premier geste utilisateur (important iPhone Safari)
+  // ✅ Débloquer l'audio au premier geste utilisateur
   useEffect(() => {
     const tryUnlock = async () => {
       await unlockAudio();
@@ -521,8 +551,10 @@ export default function App() {
     };
   }, [user?.uid, user?.email]);
 
-  const isAdmin = me?.isAdmin === true;
-  const isRH = me?.isRH === true;
+  const myRole = normalizeRoleFromDoc(me);
+  const isAdmin = myRole === "admin";
+  const isRH = myRole === "rh";
+  const isTV = myRole === "tv";
 
   const hasBroadcastText = !!String(broadcastText || "").trim();
   const broadcastNonVu = hasBroadcastText && (broadcastUpdMs || 0) > (broadcastSeenMs || 0);
@@ -659,16 +691,24 @@ export default function App() {
   useEffect(() => {
     if (meLoading) return;
 
-    // RH: seulement historique + feuille de dépenses
+    // TV: seulement accueil
+    if (isTV) {
+      if (route !== "accueil") {
+        window.location.hash = "#/accueil";
+        return;
+      }
+    }
+
+    // RH: seulement historique + feuille de dépenses + messages
     if (isRH) {
-      const allowedRHRoutes = ["historique", "feuille-depenses"];
+      const allowedRHRoutes = ["historique", "feuille-depenses", "messages"];
       if (!allowedRHRoutes.includes(route)) {
         window.location.hash = "#/historique";
         return;
       }
     }
 
-    // Non admin et non RH
+    // Non admin et non RH et non TV
     if (route === "reglages-admin" && !isAdmin) {
       window.location.hash = "#/reglages";
     }
@@ -676,14 +716,18 @@ export default function App() {
     if (route === "test-ocr" && !isAdmin) {
       window.location.hash = "#/accueil";
     }
-  }, [route, meLoading, isAdmin, isRH]);
+
+    if (route === "messages" && !isAdmin && !isRH) {
+      window.location.hash = "#/accueil";
+    }
+  }, [route, meLoading, isAdmin, isRH, isTV]);
 
   const handleLogout = async () => {
     await signOut(auth);
     window.location.hash = "#/accueil";
   };
 
-  /* ===================== 🔔 NOTIF NOTE RH (ADMIN + EMPLOYÉ NORMAL) — TOUS BLOCS ===================== */
+  /* ===================== 🔔 NOTIF NOTE RH ===================== */
 
   useEffect(() => {
     setNoteNotifOn(false);
@@ -707,7 +751,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     if (!me?.id) return;
-    if (isRH) return;
+    if (isRH || isTV) return;
 
     const empId = me.id;
     const myUid = String(user?.uid || "").trim();
@@ -734,12 +778,10 @@ export default function App() {
           const targetUid = String(data.targetUid || "").trim();
           const targetEmailLower = String(data.targetEmailLower || "").trim().toLowerCase();
 
-          // ✅ la note doit viser CE compte précis
           const matchesTarget =
             (targetEmpId && targetEmpId === me.id) ||
             (targetUid && targetUid === myUid) ||
             (targetEmailLower && targetEmailLower === myEmailLower) ||
-            // fallback compat vieux docs sans target
             (!targetEmpId && !targetUid && !targetEmailLower);
 
           if (!matchesTarget) return;
@@ -758,9 +800,9 @@ export default function App() {
     );
 
     return () => unsub();
-  }, [user, me?.id, isRH]);
+  }, [user, me?.id, isRH, isTV]);
 
-  /* ===================== 🔔 NOTIF RH — message admin dans la case jaune ===================== */
+  /* ===================== 🔔 NOTIF RH ===================== */
   useEffect(() => {
     setRhAdminReplyLikeNotifOn(false);
   }, [user?.uid, me?.id, isRH]);
@@ -806,7 +848,7 @@ export default function App() {
     return () => unsub();
   }, [user?.uid, me?.id, isRH]);
 
-  /* ===================== 🧾 NOTIF RH — remboursements approuvés à télécharger ===================== */
+  /* ===================== 🧾 NOTIF RH ===================== */
 
   useEffect(() => {
     setRemboursementNotifOn(false);
@@ -1084,6 +1126,62 @@ export default function App() {
     return () => window.clearInterval(timerId);
   }, [user?.uid, alarmItems]);
 
+  /* ===================== 💬 NOTIF MESSAGES GLOBALE ===================== */
+  useEffect(() => {
+    setMessageNotifOn(false);
+    setMessageNotifFromName("");
+  }, [user?.uid, me?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!me?.id) return;
+    if (!isAdmin && !isRH) return;
+
+    const qMessages = query(
+      collection(db, "messagesRHAdmin"),
+      where("participants", "array-contains", me.id)
+    );
+
+    const unsub = onSnapshot(
+      qMessages,
+      (snap) => {
+        let hasUnread = false;
+        let fromName = "";
+
+        snap.forEach((d) => {
+          if (hasUnread) return;
+
+          const data = d.data() || {};
+
+          const lastAtMs = safeToMs(data.lastMessageAt);
+          const lastByEmpId = String(data.lastMessageByEmpId || "").trim();
+          const seenBy = data.seenBy || {};
+          const mySeenAtMs = safeToMs(seenBy?.[me.id]);
+
+          if (lastAtMs && lastByEmpId && lastByEmpId !== me.id && lastAtMs > mySeenAtMs) {
+            hasUnread = true;
+
+            const participantNames = data.participantNames || {};
+            fromName =
+              String(data.lastMessageBy || "").trim() ||
+              Object.entries(participantNames).find(([empId]) => empId !== me.id)?.[1] ||
+              "Quelqu’un";
+          }
+        });
+
+        setMessageNotifOn(hasUnread);
+        setMessageNotifFromName(fromName);
+      },
+      (err) => {
+        console.error("global messages notif snapshot error:", err);
+        setMessageNotifOn(false);
+        setMessageNotifFromName("");
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid, me?.id, isAdmin, isRH]);
+
   /* ===================== UI ===================== */
   if (user === undefined) {
     return <div style={{ padding: 24 }}>Chargement...</div>;
@@ -1101,6 +1199,7 @@ export default function App() {
       { key: "materiels", label: "Matériels" },
       { key: "reglages", label: "Réglages" },
       { key: "reglages-admin", label: "Réglages Admin" },
+      { key: "messages", label: "Messages" },
       { key: "historique", label: "Heures de travail" },
       { key: "feuille-depenses", label: "Feuille dépenses" },
       { key: "test-ocr", label: "Test OCR" },
@@ -1109,7 +1208,10 @@ export default function App() {
     pages = [
       { key: "historique", label: "Heures de travail" },
       { key: "feuille-depenses", label: "Feuille dépenses" },
+      { key: "messages", label: "Messages" },
     ];
+  } else if (isTV) {
+    pages = [{ key: "accueil", label: "Accueil" }];
   } else {
     pages = [
       { key: "accueil", label: "Accueil" },
@@ -1124,6 +1226,7 @@ export default function App() {
     "projets",
     "materiels",
     "reglages",
+    "messages",
     "historique",
     "feuille-depenses",
     "reglages-admin",
@@ -1146,32 +1249,39 @@ export default function App() {
           borderBottom: "2px solid #ff0000",
           boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
         }
+      : messageNotifOn
+      ? {
+          animation: "notifBlinkVERT 0.70s infinite",
+          borderBottom: "2px solid #16a34a",
+          boxShadow: "0 0 0 2px rgba(22,163,74,0.20) inset, 0 0 26px rgba(22,163,74,0.30)",
+        }
       : remboursementNotifOn || remboursementAdminNotifOn
       ? {
           animation: "notifBlinkORANGE 1.4s infinite",
           borderBottom: "2px solid #f97316",
           boxShadow: "0 0 0 2px rgba(249,115,22,0.22) inset, 0 0 24px rgba(249,115,22,0.30)",
         }
-      : broadcastNotifOn
-      ? {
-          animation: "notifBlinkBLEU 0.70s infinite",
-          borderBottom: "2px solid #2563eb",
-          boxShadow: "0 0 0 2px rgba(37,99,235,0.18) inset, 0 0 22px rgba(37,99,235,0.28)",
-        }
-      : null;
+      : broadcastNotifOn && !isTV
+        ? {
+            animation: "notifBlinkBLEU 0.70s infinite",
+            borderBottom: "2px solid #2563eb",
+            boxShadow: "0 0 0 2px rgba(37,99,235,0.18) inset, 0 0 22px rgba(37,99,235,0.28)",
+          }
+        : null;
 
   const connectedStyle =
     noteNotifOn ||
     rhAdminReplyLikeNotifOn ||
+    messageNotifOn ||
     remboursementNotifOn ||
     remboursementAdminNotifOn ||
-    broadcastNotifOn
+    (broadcastNotifOn && !isTV)
       ? {
           color: "#ffffff",
           fontWeight: 1000,
           textShadow: "0 2px 10px rgba(0,0,0,0.25)",
         }
-      : { color: "#64748b", fontWeight: 700 };
+      : { color: "#111827", fontWeight: 700 };
 
   return (
     <div>
@@ -1179,6 +1289,11 @@ export default function App() {
         @keyframes notifBlinkVIF {
           0%   { background: #ffffff; }
           50%  { background: #ff0000; }
+          100% { background: #ffffff; }
+        }
+        @keyframes notifBlinkVERT {
+          0%   { background: #ffffff; }
+          50%  { background: #16a34a; }
           100% { background: #ffffff; }
         }
         @keyframes notifBlinkORANGE {
@@ -1211,8 +1326,25 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span>
               Connecté: {user.email}
-              {isAdmin ? " — Admin" : isRH ? " — RH" : ""}
+              {isAdmin ? " — Admin" : isRH ? " — RH" : isTV ? " — Compte TV" : ""}
             </span>
+
+            {messageNotifOn ? (
+              <span
+                style={{
+                  border: "1px solid rgba(255,255,255,0.75)",
+                  background: "rgba(255,255,255,0.18)",
+                  color: "inherit",
+                  borderRadius: 999,
+                  fontSize: 13,
+                  padding: "4px 10px",
+                  fontWeight: 1000,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Message de: {messageNotifFromName || "Quelqu’un"}
+              </span>
+            ) : null}
 
             {isRH && rhAdminReplyLikeNotifOn ? (
               <span
@@ -1266,7 +1398,7 @@ export default function App() {
             ) : null}
           </div>
 
-          {hasBroadcastText ? (
+          {!isTV && hasBroadcastText ? (
             <button
               type="button"
               onClick={() => setBroadcastPopupOpen(true)}
@@ -1358,6 +1490,8 @@ export default function App() {
               border:
                 noteNotifOn || rhAdminReplyLikeNotifOn
                   ? "2px solid #ff0000"
+                  : messageNotifOn
+                  ? "2px solid #16a34a"
                   : remboursementNotifOn || remboursementAdminNotifOn
                   ? "2px solid #f97316"
                   : "1px solid #cbd5e1",
@@ -1375,24 +1509,30 @@ export default function App() {
         </div>
       </div>
 
-      <AlarmPopup
-        open={alarmPopupOpen}
-        text={alarmPopupText}
-        onClose={() => setAlarmPopupOpen(false)}
-      />
+      <>
+        <AlarmPopup
+          open={alarmPopupOpen}
+          text={alarmPopupText}
+          onClose={() => setAlarmPopupOpen(false)}
+          autoClose={isTV}
+          autoCloseMs={120000}
+        />
 
-      <BroadcastPopup
-        open={showBroadcastPopup}
-        text={broadcastText}
-        isAuthor={isBroadcastAuthor}
-        onSeen={markBroadcastSeen}
-        onClose={() => setBroadcastPopupOpen(false)}
-        onCloseAdminEdit={() => {
-          setBroadcastPopupOpen(false);
-          setBroadcastDraft(String(broadcastText || ""));
-          setBroadcastEditOpen(true);
-        }}
-      />
+        {!isTV && (
+          <BroadcastPopup
+            open={showBroadcastPopup}
+            text={broadcastText}
+            isAuthor={isBroadcastAuthor}
+            onSeen={markBroadcastSeen}
+            onClose={() => setBroadcastPopupOpen(false)}
+            onCloseAdminEdit={() => {
+              setBroadcastPopupOpen(false);
+              setBroadcastDraft(String(broadcastText || ""));
+              setBroadcastEditOpen(true);
+            }}
+          />
+        )}
+      </>
 
       {isAdmin && broadcastEditOpen ? (
         <div
@@ -1471,37 +1611,63 @@ export default function App() {
         </div>
       ) : null}
 
-      <StartDayGate
-        userKey={(user?.uid || user?.email || "").toLowerCase()}
-        enabled={!meLoading}
-        title="Commencer la journée"
-        subtitle="Clique ici pour actualiser l’application et repartir propre."
-      />
+      {!isTV && (
+        <StartDayGate
+          userKey={(user?.uid || user?.email || "").toLowerCase()}
+          enabled={!meLoading}
+          title="Commencer la journée"
+          subtitle="Clique ici pour actualiser l’application et repartir propre."
+        />
+      )}
 
       <BurgerMenu pages={pages} isAdmin={isAdmin} isRH={isRH} />
 
-      {route === "accueil" && !isRH && <PageAccueil />}
-      {route === "projets" && !isRH && <PageProjets isAdmin={isAdmin} />}
-      {route === "materiels" && !isRH && <PageMateriels />}
-      {route === "reglages" && !isRH && <PageReglages />}
+      {route === "accueil" && !isRH && (
+        <PageAccueil
+          isTV={isTV}
+          tvNewsText={broadcastText}
+          tvNewsFlash={isTV && broadcastNotifOn}
+        />
+      )}
+
+      {route === "projets" && !isRH && !isTV && <PageProjets isAdmin={isAdmin} />}
+      {route === "materiels" && !isRH && !isTV && <PageMateriels />}
+      {route === "reglages" && !isRH && !isTV && <PageReglages />}
       {route === "reglages-admin" && isAdmin && <PageReglagesAdmin />}
-      {route === "historique" && (
+
+      {route === "messages" && (isAdmin || isRH) && !isTV && (
+        <MessagesPage
+          isAdmin={isAdmin}
+          isRH={isRH}
+          meEmpId={me?.id || ""}
+        />
+      )}
+
+      {route === "historique" && !isTV && (
         <HistoriqueEmploye
           isAdmin={isAdmin}
           isRH={isRH}
           meEmpId={me?.id || ""}
         />
       )}
-      {route === "feuille-depenses" && (
+
+      {route === "feuille-depenses" && !isTV && (
         <FeuilleDepensesExcel
           isAdmin={isAdmin}
           isRH={isRH}
           initialEmploye={me?.nom || "Jo"}
         />
       )}
+
       {route === "test-ocr" && isAdmin && <Test />}
 
-      {!validRoutes.includes(route) && <PageAccueil />}
+      {!validRoutes.includes(route) && (
+        <PageAccueil
+          isTV={isTV}
+          tvNewsText={broadcastText}
+          tvNewsFlash={isTV && broadcastNotifOn}
+        />
+      )}
     </div>
   );
 }

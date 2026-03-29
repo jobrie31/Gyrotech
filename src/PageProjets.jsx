@@ -1329,11 +1329,13 @@ function PopupDetailsProjetSimple({
                   style={inputInline}
                 >
                   <option value="">—</option>
-                  {annees.map((a) => (
-                    <option key={a.id} value={a.value}>
-                      {a.value}
-                    </option>
-                  ))}
+                  {[...annees]
+                    .sort((a, b) => Number(b.value) - Number(a.value))
+                    .map((a) => (
+                      <option key={a.id} value={a.value}>
+                        {a.value}
+                      </option>
+                    ))}
                 </select>
               </div>
 

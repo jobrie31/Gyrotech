@@ -1311,7 +1311,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
       await sendInvoiceEmail({
         projetId: projet.id,
         toEmail,
-        subject: `GyroTech – BT ${dossierNo}`,
+        subject: `BT ${dossierNo} - ${String(projet.clientNom || projet.nom || "Sans nom").trim()}`,
         text: "Bonjour, veuillez trouver ci-joint le Bon de Travail de votre intervention.",
         pdfPath,
       });
