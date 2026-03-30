@@ -852,9 +852,6 @@ export default function PageReglagesAdmin() {
   const [timeError, setTimeError] = useState(null);
   const [timeRowEdits, setTimeRowEdits] = useState({});
 
-  const [massDepunchLoading, setMassDepunchLoading] = useState(false);
-  const [massDepunchMsg, setMassDepunchMsg] = useState("");
-
   useEffect(() => {
     if (!canUseAdminPage) {
       setTimeProjets([]);
@@ -991,6 +988,25 @@ export default function PageReglagesAdmin() {
     [timeSegments, timeEmpId]
   );
 
+  const autoDepunchEligibleEmployes = useMemo(() => {
+    return [...employes]
+      .filter((emp) => {
+        const role = normalizeRoleFromDoc(emp);
+        return role !== "rh" && role !== "tv";
+      })
+      .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr-CA"));
+  }, [employes]);
+
+  const autoDepunchEligibleIds = useMemo(
+    () => autoDepunchEligibleEmployes.map((emp) => emp.id),
+    [autoDepunchEligibleEmployes]
+  );
+
+  const autoDepunchEligibleIdSet = useMemo(
+    () => new Set(autoDepunchEligibleIds),
+    [autoDepunchEligibleIds]
+  );
+
   const updateRowEdit = (id, field, value) => {
     setTimeRowEdits((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }));
   };
@@ -1125,133 +1141,277 @@ export default function PageReglagesAdmin() {
     }
   };
 
+  /* ================== AUTO-DÉPUNCH PLANIFIÉ (ADMIN) ================== */
+  const [autoDpLoading, setAutoDpLoading] = useState(true);
+  const [autoDpSaving, setAutoDpSaving] = useState(false);
+  const [autoDpError, setAutoDpError] = useState("");
+  const [autoDpSaved, setAutoDpSaved] = useState(false);
+
+  const [autoDpEnabled, setAutoDpEnabled] = useState(true);
+  const [autoDpRules, setAutoDpRules] = useState([]);
+  const [autoDpRuleEdits, setAutoDpRuleEdits] = useState({});
+
+  const [newAutoDpTime, setNewAutoDpTime] = useState("17:00");
+  const [newAutoDpEmpIds, setNewAutoDpEmpIds] = useState([]);
+
   useEffect(() => {
+    if (!canUseAdminPage) {
+      setAutoDpLoading(false);
+      setAutoDpRules([]);
+      setAutoDpRuleEdits({});
+      return;
+    }
+
+    setAutoDpLoading(true);
+    setAutoDpError("");
+    setAutoDpSaved(false);
+
+    const unsub = onSnapshot(
+      doc(db, "config", "autoDepunch"),
+      (snap) => {
+        const data = snap.exists() ? snap.data() || {} : {};
+        const enabled = data.enabled !== false;
+        const rules = Array.isArray(data.rules)
+          ? data.rules.map((r) => ({
+              id: String(r.id || makeRuleId()),
+              time: normalizeTimeStr(r.time),
+              employeIds: Array.isArray(r.employeIds)
+                ? r.employeIds.map((x) => String(x || "").trim()).filter((id) => autoDepunchEligibleIdSet.has(id))
+                : [],
+              enabled: r.enabled !== false,
+              createdAtMs: Number(r.createdAtMs || 0) || 0,
+              updatedAtMs: Number(r.updatedAtMs || 0) || 0,
+            }))
+          : [];
+
+        rules.sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+
+        setAutoDpEnabled(enabled);
+        setAutoDpRules(rules);
+
+        const edits = {};
+        for (const r of rules) {
+          edits[r.id] = {
+            time: normalizeTimeStr(r.time),
+            employeIds: Array.isArray(r.employeIds) ? r.employeIds : [],
+            enabled: r.enabled !== false,
+          };
+        }
+        setAutoDpRuleEdits(edits);
+        setAutoDpLoading(false);
+      },
+      (err) => {
+        console.error(err);
+        setAutoDpError(err?.message || String(err));
+        setAutoDpLoading(false);
+      }
+    );
+
+    return () => unsub();
+  }, [canUseAdminPage, autoDepunchEligibleIdSet]);
+
+  const toggleNewAutoDpEmp = (empId) => {
+    setNewAutoDpEmpIds((prev) => toggleIdInArray(prev, empId));
+  };
+
+  const selectAllNewAutoDpEmp = () => {
+    setNewAutoDpEmpIds(autoDepunchEligibleIds);
+  };
+
+  const clearAllNewAutoDpEmp = () => {
+    setNewAutoDpEmpIds([]);
+  };
+
+  const toggleRuleAutoDpEmp = (ruleId, empId) => {
+    setAutoDpRuleEdits((prev) => {
+      const row = prev[ruleId] || { employeIds: [] };
+      const current = Array.isArray(row.employeIds) ? row.employeIds : [];
+      return {
+        ...prev,
+        [ruleId]: {
+          ...row,
+          employeIds: toggleIdInArray(current, empId),
+        },
+      };
+    });
+  };
+
+  const selectAllRuleAutoDpEmp = (ruleId) => {
+    setAutoDpRuleEdits((prev) => ({
+      ...prev,
+      [ruleId]: {
+        ...(prev[ruleId] || {}),
+        employeIds: autoDepunchEligibleIds,
+      },
+    }));
+  };
+
+  const clearAllRuleAutoDpEmp = (ruleId) => {
+    setAutoDpRuleEdits((prev) => ({
+      ...prev,
+      [ruleId]: {
+        ...(prev[ruleId] || {}),
+        employeIds: [],
+      },
+    }));
+  };
+
+  const setAutoDpRuleEdit = (ruleId, field, value) => {
+    setAutoDpRuleEdits((prev) => ({
+      ...prev,
+      [ruleId]: {
+        ...(prev[ruleId] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const saveAutoDpConfig = async (nextRules, nextEnabled = autoDpEnabled) => {
     if (!canUseAdminPage) return;
 
-    let timerId;
-    let running = false;
+    try {
+      setAutoDpSaving(true);
+      setAutoDpError("");
+      setAutoDpSaved(false);
 
-    const parseJobKind = (jobIdRaw) => {
-      const s = String(jobIdRaw || "").trim();
-      if (!s) return { kind: "", id: "" };
-      if (s.startsWith("proj:")) return { kind: "projet", id: s.slice(5) };
-      if (s.startsWith("other:")) return { kind: "autre", id: s.slice(6) };
-      if (s.startsWith("autre:")) return { kind: "autre", id: s.slice(6) };
-      if (s.startsWith("autres:")) return { kind: "autre", id: s.slice(7) };
-      return { kind: "projet", id: s };
-    };
+      const cleanedRules = (Array.isArray(nextRules) ? nextRules : [])
+        .map((r) => ({
+          id: String(r.id || makeRuleId()),
+          time: normalizeTimeStr(r.time),
+          employeIds: Array.isArray(r.employeIds)
+            ? Array.from(
+                new Set(
+                  r.employeIds
+                    .map((x) => String(x || "").trim())
+                    .filter((id) => autoDepunchEligibleIdSet.has(id))
+                )
+              )
+            : [],
+          enabled: r.enabled !== false,
+          createdAtMs: Number(r.createdAtMs || Date.now()),
+          updatedAtMs: Date.now(),
+        }))
+        .filter((r) => !!r.time && isQuarterHourTime(r.time) && r.employeIds.length > 0);
 
-    const checkAndDepunch = async () => {
-      try {
-        if (running) return;
+      await setDoc(
+        doc(db, "config", "autoDepunch"),
+        {
+          enabled: nextEnabled !== false,
+          intervalMinutes: 15,
+          timeZone: "America/Toronto",
+          rules: cleanedRules,
+          updatedAt: serverTimestamp(),
+          updatedBy: authUser?.email || null,
+        },
+        { merge: true }
+      );
 
-        const now = new Date();
-        const hours = now.getHours();
+      setAutoDpSaved(true);
+      window.setTimeout(() => setAutoDpSaved(false), 2500);
+    } catch (e) {
+      console.error(e);
+      setAutoDpError(e?.message || String(e));
+    } finally {
+      setAutoDpSaving(false);
+    }
+  };
 
-        const y = now.getFullYear();
-        const dKey = `${y}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const saveAutoDpEnabledOnly = async (checked) => {
+    setAutoDpEnabled(checked);
+    await saveAutoDpConfig(autoDpRules, checked);
+  };
 
-        const lastDone = window.localStorage?.getItem("massDepunchLastDate") || null;
+  const addAutoDpRule = async () => {
+    if (!canUseAdminPage) return;
 
-        if (hours >= 17 && lastDone !== dKey) {
-          running = true;
-          setMassDepunchLoading(true);
-          setMassDepunchMsg("");
-          setTimeError(null);
+    const t = normalizeTimeStr(newAutoDpTime);
+    const ids = Array.from(
+      new Set((newAutoDpEmpIds || []).filter((id) => autoDepunchEligibleIdSet.has(id)))
+    );
 
-          const endTime = new Date(y, now.getMonth(), now.getDate(), 17, 0, 0, 0);
+    if (!t) return alert("Heure invalide.");
+    if (!isQuarterHourTime(t)) return alert("Choisis une heure sur un 15 minutes.");
+    if (!ids.length) return alert("Choisis au moins un employé.");
 
-          let countSegs = 0;
+    const exists = autoDpRules.some(
+      (r) =>
+        normalizeTimeStr(r.time) === t &&
+        arraysEqualAsSet(r.employeIds || [], ids)
+    );
 
-          const empSnap = await getDocs(collection(db, "employes"));
+    if (exists) {
+      return alert("Une règle identique existe déjà.");
+    }
 
-          for (const empDoc of empSnap.docs) {
-            const empId = empDoc.id;
+    const nowMs = Date.now();
+    const nextRules = [
+      ...autoDpRules,
+      {
+        id: makeRuleId(),
+        time: t,
+        employeIds: ids,
+        enabled: true,
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+      },
+    ].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
 
-            const segCol = collection(db, "employes", empId, "timecards", dKey, "segments");
-            const segSnap = await getDocs(segCol);
+    await saveAutoDpConfig(nextRules, autoDpEnabled);
+    setNewAutoDpTime("17:00");
+    setNewAutoDpEmpIds([]);
+  };
 
-            for (const segDoc of segSnap.docs) {
-              const segData = segDoc.data();
-              if (segData.end) continue;
+  const saveAutoDpRule = async (rule) => {
+    if (!canUseAdminPage) return;
 
-              const jobIdRaw = segData.jobId;
-              const parsed = parseJobKind(jobIdRaw);
+    const edit = autoDpRuleEdits[rule.id] || {};
+    const time = normalizeTimeStr(edit.time || rule.time);
+    const employeIds = Array.isArray(edit.employeIds)
+      ? Array.from(
+          new Set(
+            edit.employeIds
+              .map((x) => String(x || "").trim())
+              .filter((id) => autoDepunchEligibleIdSet.has(id))
+          )
+        )
+      : [];
+    const enabled = edit.enabled !== false;
 
-              await updateDoc(segDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
-              countSegs++;
+    if (!time) {
+      setAutoDpError("Heure invalide.");
+      return;
+    }
+    if (!isQuarterHourTime(time)) {
+      setAutoDpError("Choisis une heure sur un 15 minutes.");
+      return;
+    }
+    if (!employeIds.length) {
+      setAutoDpError("Choisis au moins un employé pour cette règle.");
+      return;
+    }
 
-              if (jobIdRaw) {
-                if (parsed.kind === "projet" && parsed.id) {
-                  const directRef = doc(db, "projets", parsed.id, "timecards", dKey, "segments", segDoc.id);
-                  try {
-                    const s = await getDoc(directRef);
-                    if (s.exists()) {
-                      await updateDoc(directRef, { end: endTime, updatedAt: serverTimestamp() });
-                      continue;
-                    }
-                  } catch {}
-
-                  try {
-                    const startTs = segData.start;
-                    if (startTs) {
-                      const projSegCol = collection(db, "projets", parsed.id, "timecards", dKey, "segments");
-                      const qProj = query(projSegCol, where("empId", "==", empId), where("start", "==", startTs));
-                      const projSnap = await getDocs(qProj);
-                      for (const pDoc of projSnap.docs) await updateDoc(pDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
-                    }
-                  } catch (e) {
-                    console.error("massDepunch project fallback error", e);
-                  }
-                } else if (parsed.kind === "autre" && parsed.id) {
-                  const directRef = doc(db, "autresProjets", parsed.id, "timecards", dKey, "segments", segDoc.id);
-                  try {
-                    const s = await getDoc(directRef);
-                    if (s.exists()) {
-                      await updateDoc(directRef, { end: endTime, updatedAt: serverTimestamp() });
-                      continue;
-                    }
-                  } catch {}
-
-                  try {
-                    const startTs = segData.start;
-                    if (startTs) {
-                      const otherSegCol = collection(db, "autresProjets", parsed.id, "timecards", dKey, "segments");
-                      const qOther = query(otherSegCol, where("empId", "==", empId), where("start", "==", startTs));
-                      const otherSnap = await getDocs(qOther);
-                      for (const oDoc of otherSnap.docs) await updateDoc(oDoc.ref, { end: endTime, updatedAt: serverTimestamp() });
-                    }
-                  } catch (e) {
-                    console.error("massDepunch autres fallback error", e);
-                  }
-                }
-              }
-            }
+    const nextRules = autoDpRules.map((r) =>
+      r.id === rule.id
+        ? {
+            ...r,
+            time,
+            employeIds,
+            enabled,
+            updatedAtMs: Date.now(),
           }
+        : r
+    );
 
-          window.localStorage?.setItem("massDepunchLastDate", dKey);
-          setMassDepunchMsg(
-            countSegs
-              ? `Dé-punch auto terminé : ${countSegs} punch(s) fermés à 17h.`
-              : "Dé-punch auto : aucun punch ouvert trouvé pour aujourd'hui."
-          );
-        }
-      } catch (e) {
-        console.error(e);
-        setTimeError(e?.message || String(e));
-      } finally {
-        running = false;
-        setMassDepunchLoading(false);
-      }
-    };
+    await saveAutoDpConfig(nextRules, autoDpEnabled);
+  };
 
-    checkAndDepunch();
-    timerId = window.setInterval(checkAndDepunch, 60 * 1000);
+  const deleteAutoDpRule = async (rule) => {
+    if (!canUseAdminPage) return;
+    if (!window.confirm(`Supprimer la règle ${rule.time} ?`)) return;
 
-    return () => {
-      if (timerId) window.clearInterval(timerId);
-    };
-  }, [canUseAdminPage]);
+    const nextRules = autoDpRules.filter((r) => r.id !== rule.id);
+    await saveAutoDpConfig(nextRules, autoDpEnabled);
+  };
 
   /* ================== AUTRES TÂCHES (ADMIN) ================== */
   const [autresAdminRows, setAutresAdminRows] = useState([]);
@@ -1646,22 +1806,6 @@ export default function PageReglagesAdmin() {
       {/* ===================== 1) GESTION DU TEMPS ===================== */}
       <section style={section}>
         <h3 style={h3Bold}>Gestion du temps (admin)</h3>
-        {massDepunchMsg && (
-          <div
-            style={{
-              marginBottom: 8,
-              padding: 6,
-              borderRadius: 8,
-              background: "#ecfdf3",
-              border: "1px solid #bbf7d0",
-              fontSize: 12,
-              color: "#166534",
-              fontWeight: 800,
-            }}
-          >
-            {massDepunchMsg}
-          </div>
-        )}
 
         {timeError && <div style={alertErr}>{timeError}</div>}
 
@@ -1796,11 +1940,236 @@ export default function PageReglagesAdmin() {
                   </tbody>
                 </table>
               </div>
-
-              {massDepunchLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Dé-punch auto en cours…</div>}
             </div>
           );
         })()}
+      </section>
+
+      {/* ===================== 1.25) AUTO-DÉPUNCH PLANIFIÉ ===================== */}
+      <section style={section}>
+        <h3 style={h3Bold}>Auto-dé-punch planifié</h3>
+
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+          La Cloud Function roulera aux <strong>15 minutes</strong> et appliquera ces règles.
+          Chaque règle dépunchera seulement les employés choisis, ainsi que leurs segments de projet / autre tâche exactement comme ton autoDepunch17.
+        </div>
+
+        {autoDpError && <div style={alertErr}>{autoDpError}</div>}
+        {autoDpSaved && !autoDpError && <div style={alertOk}>Règles enregistrées.</div>}
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            marginBottom: 12,
+            padding: 10,
+            borderRadius: 10,
+            background: "#f8fafc",
+            border: "1px solid #cbd5e1",
+          }}
+        >
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
+            <input
+              type="checkbox"
+              checked={!!autoDpEnabled}
+              onChange={(e) => saveAutoDpEnabledOnly(e.target.checked)}
+              disabled={autoDpSaving || autoDpLoading}
+            />
+            <span>Activer l’auto-dé-punch planifié</span>
+          </label>
+
+          <div style={{ fontSize: 12, color: "#475569", fontWeight: 800 }}>
+            Fuseau : America/Toronto — Intervalle : 15 min
+          </div>
+        </div>
+
+        <div
+          style={{
+            marginBottom: 14,
+            padding: 12,
+            border: "1px solid #111",
+            borderRadius: 12,
+            background: "#f9fafb",
+          }}
+        >
+          <div style={{ fontWeight: 900, marginBottom: 10 }}>Ajouter une règle</div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+            <div style={{ width: 160 }}>
+              <label style={label}>Heure</label>
+              <select
+                value={newAutoDpTime}
+                onChange={(e) => setNewAutoDpTime(e.target.value)}
+                style={{ ...input, width: "100%" }}
+              >
+                {QUARTER_HOUR_OPTIONS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ flex: 1, minWidth: 320 }}>
+              <label style={label}>Employés</label>
+              <MultiSelectEmployesDropdown
+                employes={autoDepunchEligibleEmployes}
+                selectedIds={newAutoDpEmpIds}
+                onToggle={toggleNewAutoDpEmp}
+                placeholder="Choisir les employés"
+                disabled={autoDpSaving || autoDpLoading}
+              />
+              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={selectAllNewAutoDpEmp} style={btnSecondarySmall}>
+                  Tout le monde
+                </button>
+                <button type="button" onClick={clearAllNewAutoDpEmp} style={btnSecondarySmall}>
+                  Vider
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={addAutoDpRule}
+              disabled={autoDpSaving || autoDpLoading}
+              style={btnPrimary}
+            >
+              {autoDpSaving ? "..." : "Ajouter la règle"}
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 12, color: "#374151", fontWeight: 700 }}>
+            Sélectionnés :{" "}
+            {autoDepunchEligibleEmployes
+              .filter((emp) => newAutoDpEmpIds.includes(emp.id))
+              .map((emp) => emp.nom)
+              .join(", ") || "Aucun"}
+          </div>
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={tableBlack}>
+            <thead>
+              <tr style={{ background: "#f9fafb" }}>
+                <th style={thTimeBold}>Actif</th>
+                <th style={thTimeBold}>Heure</th>
+                <th style={thTimeBold}>Employés</th>
+                <th style={thTimeBold}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {autoDpRules.map((rule) => {
+                const edit = autoDpRuleEdits[rule.id] || {
+                  time: rule.time,
+                  employeIds: rule.employeIds || [],
+                  enabled: rule.enabled !== false,
+                };
+
+                const selectedNames = autoDepunchEligibleEmployes
+                  .filter((emp) => Array.isArray(edit.employeIds) && edit.employeIds.includes(emp.id))
+                  .map((emp) => emp.nom);
+
+                return (
+                  <tr key={rule.id}>
+                    <td style={tdTime}>
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
+                        <input
+                          type="checkbox"
+                          checked={edit.enabled !== false}
+                          onChange={(e) => setAutoDpRuleEdit(rule.id, "enabled", e.target.checked)}
+                        />
+                        <span>{edit.enabled !== false ? "Oui" : "Non"}</span>
+                      </label>
+                    </td>
+
+                    <td style={tdTime}>
+                      <select
+                        value={edit.time || "17:00"}
+                        onChange={(e) => setAutoDpRuleEdit(rule.id, "time", e.target.value)}
+                        style={{ ...input, width: 140, padding: "6px 10px" }}
+                      >
+                        {QUARTER_HOUR_OPTIONS.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+
+                    <td style={tdTime}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 320, maxWidth: 520 }}>
+                        <MultiSelectEmployesDropdown
+                          employes={autoDepunchEligibleEmployes}
+                          selectedIds={Array.isArray(edit.employeIds) ? edit.employeIds : []}
+                          onToggle={(empId) => toggleRuleAutoDpEmp(rule.id, empId)}
+                          placeholder="Choisir les employés"
+                          disabled={autoDpSaving}
+                        />
+
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            onClick={() => selectAllRuleAutoDpEmp(rule.id)}
+                            style={btnSecondarySmall}
+                            disabled={autoDpSaving}
+                          >
+                            Tout le monde
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => clearAllRuleAutoDpEmp(rule.id)}
+                            style={btnSecondarySmall}
+                            disabled={autoDpSaving}
+                          >
+                            Vider
+                          </button>
+                        </div>
+
+                        <div style={{ fontSize: 11, color: "#374151", fontWeight: 800 }}>
+                          {selectedNames.join(", ") || "Aucun employé sélectionné"}
+                        </div>
+                      </div>
+                    </td>
+
+                    <td style={tdTime}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          onClick={() => saveAutoDpRule(rule)}
+                          disabled={autoDpSaving}
+                          style={btnPrimarySmall}
+                        >
+                          Enregistrer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteAutoDpRule(rule)}
+                          disabled={autoDpSaving}
+                          style={btnDangerSmall}
+                        >
+                          Supprimer
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {!autoDpLoading && autoDpRules.length === 0 && (
+                <tr>
+                  <td colSpan={4} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+                    Aucune règle pour l’instant.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {autoDpLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Chargement…</div>}
       </section>
 
       {/* ===================== 1.5) ALARMES ===================== */}
@@ -1920,7 +2289,7 @@ export default function PageReglagesAdmin() {
             fontWeight: 700,
           }}
         >
-          Le rôle <b>CompteTV</b> crée maintenant un vrai compte Auth avec mot de passe direct.  
+          Le rôle <b>CompteTV</b> crée maintenant un vrai compte Auth avec mot de passe direct.
           Il n’utilise pas de code d’activation.
         </div>
 
@@ -2332,6 +2701,50 @@ function buildDateTime(dateStr, timeStr) {
   } catch {
     return null;
   }
+}
+
+function normalizeTimeStr(v) {
+  const s = String(v || "").trim();
+  if (!s) return "";
+
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return "";
+
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+
+  if (isNaN(hh) || isNaN(mm)) return "";
+  if (hh < 0 || hh > 23) return "";
+  if (mm < 0 || mm > 59) return "";
+
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function makeRuleId() {
+  return `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function arraysEqualAsSet(a = [], b = []) {
+  const aa = Array.from(new Set(a)).sort();
+  const bb = Array.from(new Set(b)).sort();
+  if (aa.length !== bb.length) return false;
+  for (let i = 0; i < aa.length; i++) {
+    if (aa[i] !== bb[i]) return false;
+  }
+  return true;
+}
+
+const QUARTER_HOUR_OPTIONS = Array.from({ length: 24 * 4 }, (_, i) => {
+  const hh = String(Math.floor(i / 4)).padStart(2, "0");
+  const mm = String((i % 4) * 15).padStart(2, "0");
+  return `${hh}:${mm}`;
+});
+
+function isQuarterHourTime(v) {
+  const s = normalizeTimeStr(v);
+  if (!s) return false;
+  const mm = Number(s.split(":")[1]);
+  return mm % 15 === 0;
 }
 
 /* ================== Styles locaux ================== */

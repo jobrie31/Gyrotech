@@ -3,7 +3,7 @@
  * - Activation de compte (email + code + mot de passe)
  * - Gestion compte TV (mot de passe direct admin)
  * - Envoi de facture par courriel avec Brevo (SMTP)
- * - Auto-dépunch de TOUS les employés à 17h (America/Toronto)
+ * - Auto-dé-punch planifié par règles Firestore (every 15 minutes)
  * - SHUTDOWN GLOBAL: kickAllUsers (revokeRefreshTokens) + sessionVersion++
  * - DEBUG: logs détaillés pour syncProjectSegOnEmpClose
  */
@@ -857,8 +857,13 @@ exports.sendOtherTaskCloseEmail = onCall(
 );
 
 /* =========================
-   Auto-dépunch de tous les employés à 17h
+   Auto-dé-punch planifié (règles Firestore)
+   - roule every 15 minutes
+   - logique comme autoDepunch17
+   - ferme seulement les segments commencés <= heure de la règle
+   - n’affecte pas les punchs commencés après
    ========================= */
+
 function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -868,33 +873,79 @@ function dayKeyInTZ(date = new Date(), timeZone = "America/Toronto") {
   }).format(date);
 }
 
-function getTorontoCutoff17Timestamp(baseDate = new Date()) {
-  const dateParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Toronto",
+function getTimePartsInTZ(date = new Date(), timeZone = "America/Toronto") {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(baseDate);
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
 
-  const year = dateParts.find((p) => p.type === "year")?.value;
-  const month = dateParts.find((p) => p.type === "month")?.value;
-  const day = dateParts.find((p) => p.type === "day")?.value;
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour: get("hour"),
+    minute: get("minute"),
+  };
+}
+
+function normalizeHHMM(value) {
+  const s = String(value || "").trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return "";
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (isNaN(hh) || isNaN(mm)) return "";
+  if (hh < 0 || hh > 23) return "";
+  if (mm < 0 || mm > 59) return "";
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function isQuarterHourHHMM(value) {
+  const s = normalizeHHMM(value);
+  if (!s) return false;
+  const mm = Number(s.split(":")[1]);
+  return mm === 0 || mm === 15 || mm === 30 || mm === 45;
+}
+
+function getQuarterHourSlotHHMM(date = new Date(), timeZone = "America/Toronto") {
+  const { hour, minute } = getTimePartsInTZ(date, timeZone);
+  const mm = Number(minute);
+  const floored = Math.floor(mm / 15) * 15;
+  return `${hour}:${String(floored).padStart(2, "0")}`;
+}
+
+function getTimestampForTZTime(baseDate = new Date(), hhmm = "17:00", timeZone = "America/Toronto") {
+  const { year, month, day } = getTimePartsInTZ(baseDate, timeZone);
 
   if (!year || !month || !day) {
-    throw new Error("Impossible de calculer la date Toronto pour le cutoff 17h.");
+    throw new Error(`Impossible de calculer la date ${timeZone} pour le cutoff ${hhmm}.`);
   }
+
+  const time = normalizeHHMM(hhmm);
+  if (!time) {
+    throw new Error(`Heure invalide: ${hhmm}`);
+  }
+
+  const [hh, mm] = time.split(":").map(Number);
 
   const probe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12, 0, 0));
 
   const tzParts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Toronto",
+    timeZone,
     timeZoneName: "longOffset",
   }).formatToParts(probe);
 
   const offsetRaw = tzParts.find((p) => p.type === "timeZoneName")?.value || "GMT-04:00";
   const isoOffset = offsetRaw.replace("GMT", "");
 
-  const iso = `${year}-${month}-${day}T17:00:00${isoOffset}`;
+  const iso = `${year}-${month}-${day}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${isoOffset}`;
   return admin.firestore.Timestamp.fromDate(new Date(iso));
 }
 
@@ -913,7 +964,7 @@ async function commitInChunks(db, ops, chunkSize = 450) {
   }
 }
 
-async function closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs) {
+async function closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs, closeTag = "auto_depunch_rule") {
   const segsRef = db
     .collection("projets")
     .doc(projId)
@@ -939,8 +990,8 @@ async function closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs) {
       data: {
         end: cutoffTs,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        closedBy: "auto_depunch_17",
-        closedReason: "cutoff_17",
+        closedBy: closeTag,
+        closedReason: "scheduled_rule",
       },
     }));
 
@@ -950,7 +1001,7 @@ async function closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs) {
   return ops.length;
 }
 
-async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs) {
+async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs, closeTag = "auto_depunch_rule") {
   const segsRef = db
     .collection("autresProjets")
     .doc(otherId)
@@ -976,8 +1027,8 @@ async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs) {
       data: {
         end: cutoffTs,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        closedBy: "auto_depunch_17",
-        closedReason: "cutoff_17",
+        closedBy: closeTag,
+        closedReason: "scheduled_rule",
       },
     }));
 
@@ -987,145 +1038,333 @@ async function closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs) {
   return ops.length;
 }
 
-exports.autoDepunchAllAt17 = onSchedule(
+async function claimRuleRunIfNeeded(db, dayKey, ruleId, slotTime) {
+  const runtimeRef = db.collection("config").doc("autoDepunchRuntime");
+  const runKey = `${dayKey}_${ruleId}_${slotTime}`;
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(runtimeRef);
+    const data = snap.exists ? snap.data() || {} : {};
+    const lastRuns = data.lastRuns || {};
+
+    if (lastRuns[runKey]) {
+      return { shouldRun: false, runKey };
+    }
+
+    tx.set(
+      runtimeRef,
+      {
+        lastRuns: {
+          ...lastRuns,
+          [runKey]: true,
+        },
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastRunKey: runKey,
+        lastDayKey: dayKey,
+      },
+      { merge: true }
+    );
+
+    return { shouldRun: true, runKey };
+  });
+}
+
+exports.autoDepunchScheduledRules = onSchedule(
   {
-    schedule: "every day 17:00",
+    schedule: "0,15,30,45 * * * *",
     timeZone: "America/Toronto",
   },
   async () => {
     const db = admin.firestore();
     const now = new Date();
-    const cutoffTs = getTorontoCutoff17Timestamp(now);
-    const cutoffMs = cutoffTs.toMillis();
-    const dayKey = dayKeyInTZ(now, "America/Toronto");
 
-    logger.info("autoDepunchAllAt17 START", {
+    const configRef = db.collection("config").doc("autoDepunch");
+    const configSnap = await configRef.get();
+    const config = configSnap.exists ? configSnap.data() || {} : {};
+
+    const enabled = config.enabled !== false;
+    const timeZone = String(config.timeZone || "America/Toronto").trim() || "America/Toronto";
+    const rules = Array.isArray(config.rules) ? config.rules : [];
+
+    const nowParts = getTimePartsInTZ(now, timeZone);
+    const dayKey = `${nowParts.year}-${nowParts.month}-${nowParts.day}`;
+    const slotHHMM = getQuarterHourSlotHHMM(now, timeZone);
+
+    logger.info("autoDepunchScheduledRules START", {
+      enabled,
+      timeZone,
       dayKey,
-      cutoffIso: cutoffTs.toDate().toISOString(),
+      slotHHMM,
+      actualHour: nowParts.hour,
+      actualMinute: nowParts.minute,
+      rulesCount: rules.length,
     });
 
-    const empsSnap = await db.collection("employes").get();
-
-    let empsTouched = 0;
-    let closedEmpSegsTotal = 0;
-    let closedProjSegsTotal = 0;
-    let closedOtherSegsTotal = 0;
-
-    for (const empDoc of empsSnap.docs) {
-      const empId = empDoc.id;
-      const empData = empDoc.data() || {};
-
-      try {
-        const empSegsRef = db
-          .collection("employes")
-          .doc(empId)
-          .collection("timecards")
-          .doc(dayKey)
-          .collection("segments");
-
-        const openEmpSnap = await empSegsRef.where("end", "==", null).get();
-
-        const eligibleOpenEmpDocs = openEmpSnap.docs.filter((d) => {
-          const data = d.data() || {};
-          const startMs = getStartMillis(data);
-
-          if (startMs == null) {
-            logger.warn("autoDepunchAllAt17 skip emp seg: missing start", {
-              empId,
-              segId: d.id,
-              dayKey,
-            });
-            return false;
-          }
-
-          if (startMs > cutoffMs) {
-            logger.info("autoDepunchAllAt17 skip emp seg: started after cutoff", {
-              empId,
-              segId: d.id,
-              dayKey,
-              startIso: data.start?.toDate?.()?.toISOString?.() || null,
-              cutoffIso: cutoffTs.toDate().toISOString(),
-            });
-            return false;
-          }
-
-          return true;
-        });
-
-        if (eligibleOpenEmpDocs.length === 0) continue;
-
-        let jobTokens = Array.from(
-          new Set(
-            eligibleOpenEmpDocs
-              .map((d) => (d.data()?.jobId ? String(d.data().jobId) : ""))
-              .filter((s) => s && (s.startsWith("proj:") || s.startsWith("other:")))
-          )
-        );
-
-        if (jobTokens.length === 0) {
-          const lastProj = empData?.lastProjectId ? `proj:${String(empData.lastProjectId)}` : "";
-          const lastOther = empData?.lastOtherId ? `other:${String(empData.lastOtherId)}` : "";
-          if (lastProj) jobTokens.push(lastProj);
-          if (lastOther) jobTokens.push(lastOther);
-        }
-
-        for (const t of jobTokens) {
-          if (t.startsWith("proj:")) {
-            const projId = t.slice(5);
-            if (projId) {
-              closedProjSegsTotal += await closeProjSegmentsForEmp(db, projId, empId, dayKey, cutoffTs);
-            }
-          } else if (t.startsWith("other:")) {
-            const otherId = t.slice(6);
-            if (otherId) {
-              closedOtherSegsTotal += await closeOtherSegmentsForEmp(db, otherId, empId, dayKey, cutoffTs);
-            }
-          }
-        }
-
-        const ops = eligibleOpenEmpDocs.map((d) => ({
-          ref: d.ref,
-          data: {
-            end: cutoffTs,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            closedBy: "auto_depunch_17",
-            closedReason: "cutoff_17",
-          },
-        }));
-
-        await commitInChunks(db, ops);
-        closedEmpSegsTotal += ops.length;
-
-        await db
-          .collection("employes")
-          .doc(empId)
-          .collection("timecards")
-          .doc(dayKey)
-          .set(
-            {
-              end: cutoffTs,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              closedBy: "auto_depunch_17",
-              closedReason: "cutoff_17",
-            },
-            { merge: true }
-          );
-
-        empsTouched += 1;
-
-        logger.info("autoDepunchAllAt17 depunch employee OK", {
-          empId,
-          segsClosed: ops.length,
-          tokens: jobTokens,
-          cutoffIso: cutoffTs.toDate().toISOString(),
-        });
-      } catch (e) {
-        logger.error(`autoDepunchAllAt17 FAILED (${empId}):`, e?.message || e);
-      }
+    if (!enabled) {
+      logger.info("autoDepunchScheduledRules EXIT disabled");
+      return;
     }
 
-    logger.info(
-      `autoDepunchAllAt17 DONE day=${dayKey} empsTouched=${empsTouched} closedEmpSegs=${closedEmpSegsTotal} closedProjSegs=${closedProjSegsTotal} closedOtherSegs=${closedOtherSegsTotal}`
-    );
+    if (!rules.length) {
+      logger.info("autoDepunchScheduledRules EXIT no-rules");
+      return;
+    }
+
+    const dueRules = rules.filter((r) => {
+      if (r?.enabled === false) return false;
+      const t = normalizeHHMM(r?.time);
+      if (!t) return false;
+      if (!isQuarterHourHHMM(t)) return false;
+      return t === slotHHMM;
+    });
+
+    if (!dueRules.length) {
+      logger.info("autoDepunchScheduledRules EXIT no-due-rules", {
+        slotHHMM,
+        actualHour: nowParts.hour,
+        actualMinute: nowParts.minute,
+      });
+      return;
+    }
+
+    let totalRulesRun = 0;
+    let totalEmpsTouched = 0;
+    let totalClosedEmpSegs = 0;
+    let totalClosedProjSegs = 0;
+    let totalClosedOtherSegs = 0;
+
+    for (const rawRule of dueRules) {
+      const ruleId = String(rawRule?.id || "").trim() || `rule_${normalizeHHMM(rawRule?.time)}`;
+      const ruleTime = normalizeHHMM(rawRule?.time);
+      const employeIds = Array.from(
+        new Set(
+          (Array.isArray(rawRule?.employeIds) ? rawRule.employeIds : [])
+            .map((x) => String(x || "").trim())
+            .filter(Boolean)
+        )
+      );
+
+      if (!ruleTime || !isQuarterHourHHMM(ruleTime) || employeIds.length === 0) {
+        logger.warn("autoDepunchScheduledRules skip invalid rule", {
+          ruleId,
+          ruleTime,
+          employeIdsCount: employeIds.length,
+        });
+        continue;
+      }
+
+      const claim = await claimRuleRunIfNeeded(db, dayKey, ruleId, ruleTime);
+      if (!claim.shouldRun) {
+        logger.info("autoDepunchScheduledRules skip already-run", {
+          ruleId,
+          ruleTime,
+          dayKey,
+        });
+        continue;
+      }
+
+      const cutoffTs = getTimestampForTZTime(now, ruleTime, timeZone);
+      const cutoffMs = cutoffTs.toMillis();
+
+      logger.info("autoDepunchScheduledRules RULE START", {
+        ruleId,
+        ruleTime,
+        dayKey,
+        employeIdsCount: employeIds.length,
+        cutoffIso: cutoffTs.toDate().toISOString(),
+      });
+
+      let ruleEmpsTouched = 0;
+      let ruleClosedEmpSegs = 0;
+      let ruleClosedProjSegs = 0;
+      let ruleClosedOtherSegs = 0;
+
+      for (const empId of employeIds) {
+        try {
+          const empRef = db.collection("employes").doc(empId);
+          const empSnap = await empRef.get();
+
+          if (!empSnap.exists) {
+            logger.warn("autoDepunchScheduledRules missing employee", {
+              ruleId,
+              empId,
+            });
+            continue;
+          }
+
+          const empData = empSnap.data() || {};
+          const empRole = normalizeRoleFromEmpData(empData);
+
+          if (empRole === "rh" || empRole === "tv") {
+            logger.info("autoDepunchScheduledRules skip role", {
+              ruleId,
+              empId,
+              empRole,
+            });
+            continue;
+          }
+
+          const empSegsRef = empRef
+            .collection("timecards")
+            .doc(dayKey)
+            .collection("segments");
+
+          const openEmpSnap = await empSegsRef.where("end", "==", null).get();
+
+          const eligibleOpenEmpDocs = openEmpSnap.docs.filter((d) => {
+            const data = d.data() || {};
+            const startMs = getStartMillis(data);
+
+            if (startMs == null) {
+              logger.warn("autoDepunchScheduledRules skip emp seg: missing start", {
+                ruleId,
+                empId,
+                segId: d.id,
+                dayKey,
+              });
+              return false;
+            }
+
+            // Logique identique à autoDepunch17 :
+            // si le punch commence APRES l'heure de la règle, on ne le ferme pas
+            if (startMs > cutoffMs) {
+              logger.info("autoDepunchScheduledRules skip emp seg: started after cutoff", {
+                ruleId,
+                empId,
+                segId: d.id,
+                dayKey,
+                startIso: data.start?.toDate?.()?.toISOString?.() || null,
+                cutoffIso: cutoffTs.toDate().toISOString(),
+              });
+              return false;
+            }
+
+            return true;
+          });
+
+          if (eligibleOpenEmpDocs.length === 0) {
+            continue;
+          }
+
+          let jobTokens = Array.from(
+            new Set(
+              eligibleOpenEmpDocs
+                .map((d) => (d.data()?.jobId ? String(d.data().jobId) : ""))
+                .filter((s) => s && (s.startsWith("proj:") || s.startsWith("other:")))
+            )
+          );
+
+          if (jobTokens.length === 0) {
+            const lastProj = empData?.lastProjectId ? `proj:${String(empData.lastProjectId)}` : "";
+            const lastOther = empData?.lastOtherId ? `other:${String(empData.lastOtherId)}` : "";
+            if (lastProj) jobTokens.push(lastProj);
+            if (lastOther) jobTokens.push(lastOther);
+          }
+
+          for (const t of jobTokens) {
+            if (t.startsWith("proj:")) {
+              const projId = t.slice(5);
+              if (projId) {
+                ruleClosedProjSegs += await closeProjSegmentsForEmp(
+                  db,
+                  projId,
+                  empId,
+                  dayKey,
+                  cutoffTs,
+                  "auto_depunch_rule"
+                );
+              }
+            } else if (t.startsWith("other:")) {
+              const otherId = t.slice(6);
+              if (otherId) {
+                ruleClosedOtherSegs += await closeOtherSegmentsForEmp(
+                  db,
+                  otherId,
+                  empId,
+                  dayKey,
+                  cutoffTs,
+                  "auto_depunch_rule"
+                );
+              }
+            }
+          }
+
+          const ops = eligibleOpenEmpDocs.map((d) => ({
+            ref: d.ref,
+            data: {
+              end: cutoffTs,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              closedBy: "auto_depunch_rule",
+              closedReason: "scheduled_rule",
+              closedByRuleId: ruleId,
+              closedByRuleTime: ruleTime,
+            },
+          }));
+
+          await commitInChunks(db, ops);
+          ruleClosedEmpSegs += ops.length;
+
+          await empRef
+            .collection("timecards")
+            .doc(dayKey)
+            .set(
+              {
+                end: cutoffTs,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                closedBy: "auto_depunch_rule",
+                closedReason: "scheduled_rule",
+                closedByRuleId: ruleId,
+                closedByRuleTime: ruleTime,
+              },
+              { merge: true }
+            );
+
+          ruleEmpsTouched += 1;
+
+          logger.info("autoDepunchScheduledRules depunch employee OK", {
+            ruleId,
+            empId,
+            segsClosed: ops.length,
+            tokens: jobTokens,
+            cutoffIso: cutoffTs.toDate().toISOString(),
+          });
+        } catch (e) {
+          logger.error("autoDepunchScheduledRules FAILED employee", {
+            ruleId,
+            empId,
+            message: e?.message || String(e),
+            stack: e?.stack || null,
+          });
+        }
+      }
+
+      totalRulesRun += 1;
+      totalEmpsTouched += ruleEmpsTouched;
+      totalClosedEmpSegs += ruleClosedEmpSegs;
+      totalClosedProjSegs += ruleClosedProjSegs;
+      totalClosedOtherSegs += ruleClosedOtherSegs;
+
+      logger.info("autoDepunchScheduledRules RULE DONE", {
+        ruleId,
+        ruleTime,
+        dayKey,
+        empsTouched: ruleEmpsTouched,
+        closedEmpSegs: ruleClosedEmpSegs,
+        closedProjSegs: ruleClosedProjSegs,
+        closedOtherSegs: ruleClosedOtherSegs,
+      });
+    }
+
+    logger.info("autoDepunchScheduledRules DONE", {
+      dayKey,
+      slotHHMM,
+      actualHour: nowParts.hour,
+      actualMinute: nowParts.minute,
+      totalRulesRun,
+      totalEmpsTouched,
+      totalClosedEmpSegs,
+      totalClosedProjSegs,
+      totalClosedOtherSegs,
+    });
   }
 );

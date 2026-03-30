@@ -19,25 +19,35 @@ export const styles = {
   pageBg: {
     minHeight: "100vh",
     background: `linear-gradient(180deg, ${palette.bgGradTop}, ${palette.bgGradBot})`,
+    width: "100%",
+    overflowX: "hidden",
   },
+
   container: {
-    maxWidth: 1200,
-    margin: "0 auto",
-    paddingLeft: 20,
-    paddingRight: 20,
+    width: "100%",
+    maxWidth: "none",
+    margin: "0",
+    paddingLeft: 12,
+    paddingRight: 12,
     paddingBottom: 20,
     paddingTop: 0,
     boxSizing: "border-box",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial",
     color: palette.text,
+    overflowX: "hidden",
   },
+
   card: {
+    width: "100%",
     background: "#fff",
     border: `1px solid ${palette.border}`,
     borderRadius: 16,
     padding: 16,
     boxShadow: palette.shadow,
+    boxSizing: "border-box",
+    minWidth: 0,
   },
+
   sectionTitle: {
     fontSize: 18,
     fontWeight: 800,
@@ -46,9 +56,24 @@ export const styles = {
     display: "flex",
     alignItems: "center",
     gap: 10,
+    minWidth: 0,
   },
-  tableWrap: { overflowX: "auto" },
-  table: { width: "100%", borderCollapse: "separate", borderSpacing: 0 },
+
+  tableWrap: {
+    width: "100%",
+    maxWidth: "100%",
+    overflowX: "hidden",
+    boxSizing: "border-box",
+  },
+
+  table: {
+    width: "100%",
+    maxWidth: "100%",
+    tableLayout: "fixed",
+    borderCollapse: "separate",
+    borderSpacing: 0,
+  },
+
   th: {
     position: "sticky",
     top: 0,
@@ -61,10 +86,28 @@ export const styles = {
     color: palette.textDim,
     background: palette.headBg,
     borderBottom: `1px solid ${palette.border}`,
+    verticalAlign: "top",
+    boxSizing: "border-box",
   },
-  td: { padding: 12, borderBottom: `1px solid #f1f5f9`, fontSize: 15 },
-  row: { background: "#fff" },
-  rowHover: { background: "#fafcff" },
+
+  td: {
+    padding: 12,
+    borderBottom: "1px solid #f1f5f9",
+    fontSize: 15,
+    verticalAlign: "top",
+    minWidth: 0,
+    boxSizing: "border-box",
+    overflow: "hidden",
+  },
+
+  row: {
+    background: "#fff",
+  },
+
+  rowHover: {
+    background: "#fafcff",
+  },
+
   modalBackdrop: {
     position: "fixed",
     inset: 0,
@@ -76,6 +119,7 @@ export const styles = {
     padding: 20,
     zIndex: 10000,
   },
+
   modalCard: {
     background: "#fff",
     border: `1px solid ${palette.border}`,
@@ -83,13 +127,18 @@ export const styles = {
     padding: 24,
     width: "min(860px, 96vw)",
     boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+    boxSizing: "border-box",
   },
+
   input: {
     height: 40,
     border: `1px solid ${palette.border}`,
     borderRadius: 10,
     padding: "0 10px",
     background: "#fff",
+    boxSizing: "border-box",
+    minWidth: 0,
+    maxWidth: "100%",
   },
 };
 
@@ -104,18 +153,21 @@ export function PageContainer({ children, containerStyle }) {
 
 export function Card({ title, right, children, style }) {
   return (
-    <div style={{ ...styles.card, ...style }}>
+    <div style={{ ...styles.card, ...(style || {}) }}>
       {(title || right) && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            gap: 12,
             marginBottom: 10,
+            minWidth: 0,
+            flexWrap: "wrap",
           }}
         >
           {title ? <h3 style={styles.sectionTitle}>{title}</h3> : <div />}
-          {right ? <div>{right}</div> : null}
+          {right ? <div style={{ minWidth: 0 }}>{right}</div> : null}
         </div>
       )}
       {children}
@@ -130,11 +182,14 @@ export function SectionHeader({ title, actions }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
+        gap: 12,
         margin: "0 0 12px",
+        minWidth: 0,
+        flexWrap: "wrap",
       }}
     >
       <h2 style={{ ...styles.sectionTitle, fontSize: 20 }}>{title}</h2>
-      <div>{actions}</div>
+      <div style={{ minWidth: 0 }}>{actions}</div>
     </div>
   );
 }
@@ -148,7 +203,6 @@ export function Button({ variant = "primary", children, style, disabled, ...prop
     neutral: { bg: "#fff", fg: "#0f172a", bd: palette.border },
   };
 
-  // ✅ fallback: si variant inconnu, on tombe sur primary puis neutral
   const theme = themeMap[variant] || themeMap.primary || themeMap.neutral;
 
   return (
@@ -166,6 +220,9 @@ export function Button({ variant = "primary", children, style, disabled, ...prop
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.6 : 1,
         boxShadow: "0 8px 18px rgba(0,0,0,0.10)",
+        boxSizing: "border-box",
+        maxWidth: "100%",
+        minWidth: 0,
         ...style,
       }}
     >
@@ -197,6 +254,8 @@ export function Pill({ variant = "neutral", children }) {
         color: theme.fg,
         fontWeight: 700,
         fontSize: 13,
+        maxWidth: "100%",
+        boxSizing: "border-box",
       }}
     >
       {children}
@@ -230,15 +289,20 @@ export function TopBar({ left, center, right, style }) {
           alignItems: "center",
           gap: 10,
           width: "100%",
+          minWidth: 0,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           {left}
         </div>
 
-        <div style={{ justifySelf: "center", textAlign: "center", minWidth: 0 }}>{center}</div>
+        <div style={{ justifySelf: "center", textAlign: "center", minWidth: 0 }}>
+          {center}
+        </div>
 
-        <div style={{ justifySelf: "end", minWidth: 0 }}>{right}</div>
+        <div style={{ justifySelf: "end", minWidth: 0 }}>
+          {right}
+        </div>
       </div>
     </div>
   );
@@ -258,6 +322,7 @@ export function ProTable({ columns = [], rows = [], emptyText = "Aucune donnée.
             ))}
           </tr>
         </thead>
+
         <tbody>
           {rows.length === 0 ? (
             <tr>
@@ -270,8 +335,12 @@ export function ProTable({ columns = [], rows = [], emptyText = "Aucune donnée.
               <tr
                 key={r}
                 style={styles.row}
-                onMouseEnter={(e) => (e.currentTarget.style.background = styles.rowHover.background)}
-                onMouseLeave={(e) => (e.currentTarget.style.background = styles.row.background)}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = styles.rowHover.background;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = styles.row.background;
+                }}
               >
                 {cells.map((cell, c) => (
                   <td key={c} style={styles.td}>

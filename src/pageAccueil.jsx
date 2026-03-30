@@ -24,8 +24,8 @@ import AutresProjetsSection from "./AutresProjetsSection";
 import { PopupCreateProjet } from "./PageActions";
 import TableauEmployesTV from "./TableauEmployesTV";
 
-const APP_BUILD = "2.6";
-const LEFT_RAIL_W = 270;
+const APP_BUILD = "3.0";
+const LEFT_RAIL_W = 0;
 const TV_VERSION_RESERVED_H = 34;
 
 const TV_NEWS_TOP = "8vh";
@@ -813,7 +813,16 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
   const modal = (
     <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
       <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 16,
+            flexWrap: "wrap",
+          }}
+        >
           <div style={{ fontWeight: 800, fontSize: 22 }}>Confirmation du punch</div>
           <button
             onClick={() => onCancel && onCancel()}
@@ -825,8 +834,8 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
         </div>
 
         {hasInitialProj ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ flex: 1, fontSize: 18 }}>{confirmText}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, fontSize: 18, minWidth: 220 }}>{confirmText}</div>
             <Button variant="success" onClick={() => onConfirm && onConfirm(initialProj || null)}>
               Oui
             </Button>
@@ -835,8 +844,8 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
             </Button>
           </div>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ flex: 1, fontSize: 18 }}>{confirmText}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, fontSize: 18, minWidth: 220 }}>{confirmText}</div>
             <Button variant="primary" onClick={() => onCancel && onCancel()}>
               Choisir un projet
             </Button>
@@ -855,7 +864,16 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
   const modal = (
     <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
       <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 16,
+            flexWrap: "wrap",
+          }}
+        >
           <div style={{ fontWeight: 800, fontSize: 22 }}>Nouveau projet</div>
           <button
             onClick={onCancel}
@@ -868,7 +886,7 @@ function NewProjectConfirmModal({ open, empName, onConfirm, onCancel }) {
 
         <div style={{ fontSize: 18, marginBottom: 18 }}>Êtes vous sûr de vouloir créer un projet ?</div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, flexWrap: "wrap" }}>
           <Button variant="neutral" onClick={onCancel}>
             Non
           </Button>
@@ -917,6 +935,8 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
         alignItems: "center",
         justifyContent: "center",
         zIndex: 9999,
+        padding: 12,
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -930,9 +950,19 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
           padding: 16,
           boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
           fontSize: 14,
+          boxSizing: "border-box",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            marginBottom: 12,
+            flexWrap: "wrap",
+          }}
+        >
           <h3 style={{ margin: 0 }}>Autres tâches</h3>
           <button
             onClick={onClose}
@@ -948,7 +978,7 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 120px", gap: 8 }}>
           <div style={{ fontWeight: 700, color: "#64748b" }}>Nom</div>
           <div style={{ fontWeight: 700, color: "#64748b" }}>Action</div>
 
@@ -964,6 +994,7 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
                     background: isSpecial ? "#fef3c7" : "transparent",
                     border: isSpecial ? "1px solid #f59e0b" : "1px solid transparent",
                     fontWeight: isSpecial ? 900 : 700,
+                    minWidth: 0,
                   }}
                 >
                   <div
@@ -972,6 +1003,7 @@ function AutresProjetsModal({ open, autresProjets, onChoose, onClose }) {
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: 10,
+                      minWidth: 0,
                     }}
                   >
                     <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1046,7 +1078,16 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
   const modal = (
     <div role="dialog" aria-modal="true" onClick={onCancel} style={styles.modalBackdrop}>
       <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 12,
+            flexWrap: "wrap",
+          }}
+        >
           <div style={{ fontWeight: 900, fontSize: 22 }}>Code requis</div>
           <button
             onClick={onCancel}
@@ -1089,7 +1130,7 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
           </div>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
           <Button variant="neutral" onClick={onCancel}>
             Annuler
           </Button>
@@ -1196,8 +1237,17 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
   const modal = (
     <div role="dialog" aria-modal="true" onClick={onClose} style={styles.modalBackdrop}>
       <div onClick={(e) => e.stopPropagation()} style={{ ...styles.modalCard, width: "min(900px, 96vw)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-          <div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 900, fontSize: 22 }}>{emp?.nom || "Employé(e)"}</div>
             <div style={{ color: "#64748b", marginTop: 2 }}>
               Aujourd’hui ({key}) — Total: <strong>{fmtHM(totalMs)}</strong>
@@ -1213,10 +1263,16 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
           </button>
         </div>
 
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 120px 120px 120px", background: "#f3f4f6" }}>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", width: "100%" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0,1.5fr) 120px 120px 120px",
+              background: "#f3f4f6",
+            }}
+          >
             {["Projet / tâche", "Début", "Fin", "Durée"].map((h) => (
-              <div key={h} style={{ padding: "10px 12px", fontWeight: 900, color: "#111827" }}>
+              <div key={h} style={{ padding: "10px 12px", fontWeight: 900, color: "#111827", minWidth: 0 }}>
                 {h}
               </div>
             ))}
@@ -1227,7 +1283,7 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
               key={r.id}
               style={{
                 display: "grid",
-                gridTemplateColumns: "1.5fr 120px 120px 120px",
+                gridTemplateColumns: "minmax(0,1.5fr) 120px 120px 120px",
                 borderTop: "1px solid #e5e7eb",
                 alignItems: "center",
               }}
@@ -1266,7 +1322,7 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
           )}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
           <Button variant="neutral" onClick={onClose}>
             Fermer
           </Button>
@@ -1623,6 +1679,7 @@ function LigneEmploye({
             fontSize: compactFontSize || styles.td?.fontSize,
             overflow: "hidden",
             textOverflow: "ellipsis",
+            minWidth: 0,
           }}
           title={emp.nom || "—"}
         >
@@ -1637,6 +1694,7 @@ function LigneEmploye({
             fontSize: compactFontSize || styles.td?.fontSize,
             overflow: "hidden",
             textOverflow: "ellipsis",
+            minWidth: 0,
           }}
         >
           {fmtHM(totalMs)}
@@ -1647,6 +1705,8 @@ function LigneEmploye({
             ...styles.td,
             padding: compactCellPadding || styles.td?.padding,
             fontSize: compactFontSize || styles.td?.fontSize,
+            minWidth: 0,
+            width: "100%",
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -1668,14 +1728,24 @@ function LigneEmploye({
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 lineHeight: 1.1,
+                minWidth: 0,
               }}
               title={currentDisplayLabel}
             >
               {currentDisplayLabel}
             </div>
           ) : (
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "nowrap", minWidth: 0 }}>
-              <div style={{ flex: "1 1 200px", minWidth: 120, maxWidth: "100%" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "stretch",
+                flexWrap: "wrap",
+                minWidth: 0,
+                width: "100%",
+              }}
+            >
+              <div style={{ flex: "1 1 260px", minWidth: 0, width: "100%" }}>
                 {present && currentIsOther ? (
                   <div
                     aria-live="polite"
@@ -1731,7 +1801,14 @@ function LigneEmploye({
                 variant="neutral"
                 onClick={() => setAutresOpen(true)}
                 disabled={present}
-                style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
+                style={{
+                  height: 44,
+                  padding: "0 12px",
+                  fontWeight: 800,
+                  flex: "1 1 150px",
+                  minWidth: 0,
+                  whiteSpace: "nowrap",
+                }}
               >
                 Autre tâche
               </Button>
@@ -1741,7 +1818,14 @@ function LigneEmploye({
                 variant="neutral"
                 onClick={() => setNewProjModalOpen(true)}
                 disabled={present}
-                style={{ height: 44, padding: "0 12px", fontWeight: 800, flex: "0 0 auto", whiteSpace: "nowrap" }}
+                style={{
+                  height: 44,
+                  padding: "0 12px",
+                  fontWeight: 800,
+                  flex: "1 1 170px",
+                  minWidth: 0,
+                  whiteSpace: "nowrap",
+                }}
               >
                 Nouveau projet
               </Button>
@@ -1752,7 +1836,6 @@ function LigneEmploye({
                 disabled={pending}
                 variant="neutral"
                 style={{
-                  width: 220,
                   height: 52,
                   background: punchBtnBg,
                   color: "#fff",
@@ -1764,7 +1847,10 @@ function LigneEmploye({
                   alignItems: "center",
                   justifyContent: "center",
                   textShadow: "0 1px 0 rgba(0,0,0,0.15)",
-                  flex: "0 0 auto",
+                  flex: "1 1 190px",
+                  minWidth: 160,
+                  maxWidth: "100%",
+                  width: "100%",
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = punchBtnHover;
@@ -1974,6 +2060,7 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
           100% { box-shadow: 0 0 0 0 rgba(37,99,235,0.00); }
         }
       `}</style>
+
       <PageContainer
         containerStyle={{
           paddingTop: isTV ? 2 : 8,
@@ -1988,8 +2075,12 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
                 height: `calc(100vh - 42px - ${TV_VERSION_RESERVED_H}px)`,
               }
             : {
+                width: "100%",
+                maxWidth: "none",
                 marginLeft: LEFT_RAIL_W,
-                marginRight: 10,
+                marginRight: 0,
+                paddingLeft: 12,
+                paddingRight: 12,
               }),
 
           boxSizing: "border-box",
@@ -2007,6 +2098,7 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
             height: isTV ? "100%" : undefined,
             minHeight: 0,
             overflow: "hidden",
+            width: "100%",
           }}
         >
           {isTV ? (
@@ -2041,10 +2133,17 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
             <>
               <Card
                 title="👥 Employé(e)"
-                right={<div style={{ display: "flex", gap: 22, alignItems: "center" }} />}
+                right={<div style={{ display: "flex", gap: 22, alignItems: "center", minWidth: 0 }} />}
+                style={{ width: "100%" }}
               >
                 <div style={styles.tableWrap}>
                   <table style={styles.table}>
+                    <colgroup>
+                      <col style={{ width: "18%" }} />
+                      <col style={{ width: "12%" }} />
+                      <col style={{ width: "70%" }} />
+                    </colgroup>
+
                     <thead>
                       <tr>
                         {["Nom", "Jour", "Projet"].map((h, i) => (
@@ -2082,11 +2181,11 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
                 </div>
               </Card>
 
-              <Card title="📁 Projets">
+              <Card title="📁 Projets" style={{ width: "100%" }}>
                 <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
               </Card>
 
-              <Card title="📁 Autres tâches">
+              <Card title="📁 Autres tâches" style={{ width: "100%" }}>
                 <AutresProjetsSection allowEdit={false} showHeader={false} />
               </Card>
             </>
@@ -2175,5 +2274,4 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
       </div>
     </>
   );
-
 }
