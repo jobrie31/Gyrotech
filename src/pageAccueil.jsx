@@ -1980,18 +1980,23 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
   const isRH = myRole === "rh";
   const canSeeAdminMenus = isAdmin || isRH;
 
-  const visibleEmployes = useMemo(() => {
-    const employesSansRH = employes.filter((e) => normalizeRoleFromDoc(e) !== "rh");
-    const employesSansRHetTV = employesSansRH.filter((e) => normalizeRoleFromDoc(e) !== "tv");
+    const visibleEmployes = useMemo(() => {
+      const employesSansRHetTV = employes.filter((e) => {
+        const role = normalizeRoleFromDoc(e);
+        return role !== "rh" && role !== "tv";
+      });
 
-    if (isTV) return employesSansRHetTV;
+      if (isTV) return employesSansRHetTV;
 
-    if (canSeeAdminMenus) return employesSansRH;
+      if (canSeeAdminMenus) return employesSansRHetTV;
 
-    if (!myEmploye || normalizeRoleFromDoc(myEmploye) === "rh") return [];
+      if (!myEmploye) return [];
 
-    return employesSansRH.filter((e) => e.id === myEmploye.id);
-  }, [employes, canSeeAdminMenus, myEmploye, isTV]);
+      const myRoleLocal = normalizeRoleFromDoc(myEmploye);
+      if (myRoleLocal === "rh" || myRoleLocal === "tv") return [];
+
+      return employesSansRHetTV.filter((e) => e.id === myEmploye.id);
+    }, [employes, canSeeAdminMenus, myEmploye, isTV]);
 
   const autresProjets = useMemo(() => {
     if (isTV) return [];

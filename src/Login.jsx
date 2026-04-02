@@ -29,7 +29,7 @@ export default function Login() {
     try {
       const flag = window.localStorage?.getItem("sessionKickMsg");
       if (flag === "1") {
-        setInfo("Une mise à jour a été fait");
+        setInfo("Une mise à jour a été faite");
         window.localStorage?.removeItem("sessionKickMsg");
       }
     } catch {}
@@ -57,8 +57,7 @@ export default function Login() {
     }
 
     try {
-      const cred = await signInWithEmailAndPassword(auth, emailClean, passClean);
-      await cred.user.getIdToken(true);
+      await signInWithEmailAndPassword(auth, emailClean, passClean);
     } catch (err) {
       setError(mapError(err?.code, err?.message));
     } finally {
@@ -136,8 +135,7 @@ export default function Login() {
       setNewPass2("");
       setCode("");
 
-      const cred = await signInWithEmailAndPassword(auth, emailClean, p1);
-      await cred.user.getIdToken(true);
+      await signInWithEmailAndPassword(auth, emailClean, p1);
     } catch (err) {
       setError(mapError(err?.code, err?.message));
     } finally {

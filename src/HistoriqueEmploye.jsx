@@ -504,6 +504,21 @@ const saveHintRow = {
   fontWeight: 900,
 };
 
+function normalizeRoleFromDoc(emp) {
+  const roleRaw = String(emp?.role || "").trim().toLowerCase();
+
+  if (roleRaw === "admin") return "admin";
+  if (roleRaw === "rh") return "rh";
+  if (roleRaw === "tv") return "tv";
+  if (roleRaw === "user") return "user";
+
+  if (emp?.isAdmin === true) return "admin";
+  if (emp?.isRH === true) return "rh";
+  if (emp?.isTV === true) return "tv";
+
+  return "user";
+}
+
 /* ---------------------- Top bar ---------------------- */
 function TopBar({ title, rightSlot = null, flashTitle = false }) {
   const titleStyle = flashTitle
@@ -1517,7 +1532,11 @@ export default function HistoriqueEmploye({
   /* ===================== PRIVILEGED : Sommaire + détail ===================== */
   const visibleEmployes = useMemo(() => {
     if (!isPrivileged) return [];
-    return (employes || []).filter((e) => e?.isRH !== true);
+
+    return (employes || []).filter((e) => {
+      const role = normalizeRoleFromDoc(e);
+      return role !== "rh" && role !== "tv";
+    });
   }, [employes, isPrivileged]);
 
   const [summaryLoading, setSummaryLoading] = useState(false);

@@ -569,38 +569,63 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
+    const SECURITY_KEY = "globalSessionVersion";
+    const KICK_MSG_KEY = "sessionKickMsg";
+
     const ref = doc(db, "config", "security");
 
     const unsub = onSnapshot(
       ref,
-      (snap) => {
+      async (snap) => {
         const data = snap.exists() ? snap.data() || {} : {};
-        const v = Number(data.sessionVersion || 0) || 0;
+        const remoteV = Number(data.sessionVersion || 0) || 0;
 
-        const key = "globalSessionVersion";
-        const localRaw = window.localStorage?.getItem(key);
+        let localRaw = null;
+        try {
+          localRaw = window.localStorage?.getItem(SECURITY_KEY);
+        } catch {
+          localRaw = null;
+        }
+
+        const hasLocalVersion = localRaw !== null && localRaw !== undefined && localRaw !== "";
         const localV = Number(localRaw || 0) || 0;
 
-        if (v > localV) {
+        // ✅ PREMIÈRE connexion sur cet appareil / ce navigateur :
+        // on initialise la version locale, mais on NE déconnecte PAS.
+        if (!hasLocalVersion) {
           try {
-            window.localStorage?.setItem(key, String(v));
-            window.localStorage?.setItem("sessionKickMsg", "1");
+            window.localStorage?.setItem(SECURITY_KEY, String(remoteV));
           } catch {}
-
-          signOut(auth).finally(() => {
-            try {
-              window.location.href = "/#/accueil";
-              window.location.reload();
-            } catch {
-              window.location.hash = "#/accueil";
-            }
-          });
           return;
         }
 
-        if (v !== localV) {
+        // ✅ Seulement si la version distante augmente APRÈS qu'on ait déjà une version locale,
+        // on considère que c'est un vrai "déconnecter tout le monde".
+        if (remoteV > localV) {
           try {
-            window.localStorage?.setItem(key, String(v));
+            window.localStorage?.setItem(SECURITY_KEY, String(remoteV));
+            window.localStorage?.setItem(KICK_MSG_KEY, "1");
+          } catch {}
+
+          try {
+            await signOut(auth);
+          } catch (e) {
+            console.error("security forced signOut error:", e);
+          }
+
+          try {
+            window.location.hash = "#/accueil";
+            window.location.reload();
+          } catch {
+            window.location.hash = "#/accueil";
+          }
+          return;
+        }
+
+        // Sync simple si jamais la valeur locale diffère
+        if (remoteV !== localV) {
+          try {
+            window.localStorage?.setItem(SECURITY_KEY, String(remoteV));
           } catch {}
         }
       },

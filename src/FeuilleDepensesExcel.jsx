@@ -788,6 +788,15 @@ export default function FeuilleDepensesExcel({
 
   const [employeNom, setEmployeNom] = useState(initialEmploye);
   const [currentEmploye, setCurrentEmploye] = useState(null);
+
+  // IMPORTANT : ces états représentent le propriétaire du remboursement affiché/édité
+  const [recordEmployeNom, setRecordEmployeNom] = useState(initialEmploye);
+  const [recordEmployeMeta, setRecordEmployeMeta] = useState({
+    employeId: null,
+    employeUid: null,
+    employeEmailLower: "",
+  });
+
   const [notes, setNotes] = useState("");
   const [rows, setRows] = useState(() => [
     emptyRow(),
@@ -873,6 +882,21 @@ export default function FeuilleDepensesExcel({
       unsub?.();
     };
   }, [initialEmploye]);
+
+  // Quand on n'est PAS en train d'éditer un remboursement existant,
+  // le propriétaire du record = l'utilisateur connecté.
+  useEffect(() => {
+    if (editingRef?.id) return;
+
+    setRecordEmployeNom(employeNom || initialEmploye);
+    setRecordEmployeMeta({
+      employeId: currentEmploye?.id || null,
+      employeUid: auth.currentUser?.uid || null,
+      employeEmailLower: String(auth.currentUser?.email || "")
+        .trim()
+        .toLowerCase(),
+    });
+  }, [employeNom, currentEmploye, editingRef?.id, initialEmploye]);
 
   const currentEmailLower = String(auth.currentUser?.email || "")
     .trim()
@@ -988,6 +1012,15 @@ export default function FeuilleDepensesExcel({
     setNotes("");
     setEditingRef(null);
 
+    setRecordEmployeNom(employeNom || initialEmploye);
+    setRecordEmployeMeta({
+      employeId: currentEmploye?.id || null,
+      employeUid: auth.currentUser?.uid || null,
+      employeEmailLower: String(auth.currentUser?.email || "")
+        .trim()
+        .toLowerCase(),
+    });
+
     try {
       (pendingPdfs || []).forEach((p) => {
         try {
@@ -999,6 +1032,7 @@ export default function FeuilleDepensesExcel({
     setPendingPdfs([]);
     datePickerRefs.current = {};
   };
+
   useEffect(() => {
     return () => {
       try {
@@ -1039,39 +1073,64 @@ export default function FeuilleDepensesExcel({
 
   const openPDFMgr = () => setPdfMgr({ open: true });
   const closePDFMgr = () => setPdfMgr({ open: false });
+
   const autoResizeTextarea = (el) => {
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   };
 
-  const openDatePicker = (idx) => {
-    const el = datePickerRefs.current[idx];
-    if (!el) return;
+    const openDatePicker = (idx) => {
+      const el = datePickerRefs.current[idx];
+      if (!el) return;
 
-    if (typeof el.showPicker === "function") {
-      el.showPicker();
-    } else {
-      el.focus();
-      el.click();
-    }
-  };
+      try {
+        el.focus();
+
+        if (typeof el.showPicker === "function") {
+          el.showPicker();
+          return;
+        }
+
+        el.click();
+      } catch (e) {
+        try {
+          el.click();
+        } catch {}
+      }
+    };
+
+    const isAppleTouchDevice = useMemo(() => {
+      if (typeof navigator === "undefined") return false;
+
+      const ua = navigator.userAgent || "";
+      const platform = navigator.platform || "";
+      const maxTouchPoints = navigator.maxTouchPoints || 0;
+
+      const isiPad =
+        /iPad/i.test(ua) ||
+        (platform === "MacIntel" && maxTouchPoints > 1);
+
+      const isiPhone = /iPhone|iPod/i.test(ua);
+
+      return isiPad || isiPhone;
+    }, []);
 
   const setCell = (idx, key, value) => {
-  setRows((prev) => {
-    const copy = [...prev];
-    const cur = { ...(copy[idx] || {}) };
+    setRows((prev) => {
+      const copy = [...prev];
+      const cur = { ...(copy[idx] || {}) };
 
-    if (key === "date") cur[key] = formatYYYYMMDDInput(value);
-    else cur[key] = value;
+      if (key === "date") cur[key] = formatYYYYMMDDInput(value);
+      else cur[key] = value;
 
-    // toujours forcer le taux venant des Réglages Admin
-    cur.taux = String(globalTaux ?? "");
+      // toujours forcer le taux venant des Réglages Admin
+      cur.taux = String(globalTaux ?? "");
 
-    copy[idx] = cur;
-    return copy;
-  });
-};
+      copy[idx] = cur;
+      return copy;
+    });
+  };
 
   const addRow = () =>
     setRows((p) => [
@@ -1237,11 +1296,12 @@ export default function FeuilleDepensesExcel({
     const base = {
       year: Number(saveTargetYear),
       pp: String(saveTargetPP),
-      employeNom: String(employeNom || "—"),
 
-      employeId: currentEmploye?.id || null,
-      employeUid: auth.currentUser?.uid || null,
-      employeEmailLower: String(auth.currentUser?.email || "")
+      // IMPORTANT : on sauvegarde le propriétaire du remboursement, pas l'utilisateur connecté
+      employeNom: String(recordEmployeNom || "—"),
+      employeId: recordEmployeMeta?.employeId || null,
+      employeUid: recordEmployeMeta?.employeUid || null,
+      employeEmailLower: String(recordEmployeMeta?.employeEmailLower || "")
         .trim()
         .toLowerCase(),
 
@@ -1300,11 +1360,12 @@ export default function FeuilleDepensesExcel({
           completedAt: null,
           completedById: null,
           completedByName: "",
-          employeId: currentEmploye?.id || null,
-          employeUid: auth.currentUser?.uid || null,
-          employeEmailLower: String(auth.currentUser?.email || "")
-            .trim()
-            .toLowerCase(),
+          employeId: recordEmployeMeta?.employeId || null,
+          employeUid: recordEmployeMeta?.employeUid || null,
+          employeEmailLower:
+            String(recordEmployeMeta?.employeEmailLower || "")
+              .trim()
+              .toLowerCase(),
         };
 
         setEditingRef(newEditing);
@@ -1358,6 +1419,16 @@ export default function FeuilleDepensesExcel({
   const loadRecordIntoEditor = (rec) => {
     if (!rec) return;
     if (!canAccessRecord(rec)) return;
+
+    // IMPORTANT : on recharge le vrai propriétaire du remboursement
+    setRecordEmployeNom(String(rec.employeNom || "—"));
+    setRecordEmployeMeta({
+      employeId: rec?.employeId || null,
+      employeUid: rec?.employeUid || null,
+      employeEmailLower: String(rec?.employeEmailLower || "")
+        .trim()
+        .toLowerCase(),
+    });
 
     setNotes(String(rec.notes || ""));
     const forcedTaux = Number(globalTaux ?? defaultTaux) || defaultTaux;
@@ -1418,10 +1489,7 @@ export default function FeuilleDepensesExcel({
     try {
       setDeletingId(String(rec.id));
 
-      // 1) supprimer les fichiers dans Storage
       await deleteStoredAttachmentsForRecord(rec.year, rec.pp, rec.id);
-
-      // 2) supprimer le document Firestore
       await deleteDoc(itemDocRef(rec.year, rec.pp, rec.id));
     } catch (e) {
       console.error(e);
@@ -1465,7 +1533,6 @@ export default function FeuilleDepensesExcel({
 
       const didDownload = await downloadRemboursementPdf(rec);
 
-      // si l'utilisateur a annulé "Enregistrer sous..."
       if (!didDownload) {
         return;
       }
@@ -2045,7 +2112,7 @@ export default function FeuilleDepensesExcel({
         >
           <div style={styles.empPill}>
             <div>Employé :</div>
-            <div>{employeNom || "—"}</div>
+            <div>{recordEmployeNom || "—"}</div>
           </div>
         </div>
 
@@ -2090,77 +2157,140 @@ export default function FeuilleDepensesExcel({
                           return m ? fmtMoney(m) : "";
                         })()}
                       </span>
-                    ) : c.key === "date" ? (
-                      <div
-                        style={{
-                          position: "relative",
-                          width: "100%",
-                          minHeight: 28,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <input
-                          type="text"
+                     ) : c.key === "date" ? (
+                      isAppleTouchDevice ? (
+                        <div
                           style={{
-                            ...styles.input,
-                            opacity: !isEditable(c.key) ? 0.75 : 1,
-                            cursor: !isEditable(c.key) ? "not-allowed" : "text",
-                            paddingRight: 0,
+                            position: "relative",
+                            width: "100%",
+                            minHeight: 28,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
                           }}
-                          value={String(r[c.key] ?? "")}
-                          onChange={(e) => setCell(idx, c.key, e.target.value)}
-                          placeholder=""
-                          readOnly={!isEditable(c.key)}
-                        />
+                        >
+                          <input
+                            ref={(el) => {
+                              datePickerRefs.current[idx] = el;
+                            }}
+                            type="date"
+                            value={parseISO_YYYYMMDD(r.date) ? r.date : ""}
+                            onChange={(e) => setCell(idx, "date", e.target.value)}
+                            disabled={!isEditable(c.key)}
+                            style={{
+                              ...styles.input,
+                              opacity: !isEditable(c.key) ? 0.75 : 1,
+                              cursor: !isEditable(c.key) ? "not-allowed" : "pointer",
+                              textAlign: "center",
+                              minHeight: 32,
+                              paddingRight: 28,
+                              WebkitAppearance: "none",
+                              appearance: "none",
+                            }}
+                          />
 
-                        {!String(r[c.key] ?? "").trim() && isEditable(c.key) ? (
-                          <button
-                            type="button"
-                            onClick={() => openDatePicker(idx)}
+                          {isEditable(c.key) ? (
+                            <button
+                              type="button"
+                              onClick={() => openDatePicker(idx)}
+                              style={{
+                                position: "absolute",
+                                right: 2,
+                                top: "50%",
+                                transform: "translateY(-50%)",
+                                border: "none",
+                                background: "transparent",
+                                cursor: "pointer",
+                                fontSize: 16,
+                                lineHeight: 1,
+                                padding: 0,
+                                width: 24,
+                                height: 24,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                              title="Choisir une date"
+                            >
+                              📅
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            position: "relative",
+                            width: "100%",
+                            minHeight: 28,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <input
+                            type="text"
+                            style={{
+                              ...styles.input,
+                              opacity: !isEditable(c.key) ? 0.75 : 1,
+                              cursor: !isEditable(c.key) ? "not-allowed" : "text",
+                              paddingRight: 0,
+                            }}
+                            value={String(r[c.key] ?? "")}
+                            onChange={(e) => setCell(idx, c.key, e.target.value)}
+                            placeholder=""
+                            readOnly={!isEditable(c.key)}
+                            inputMode="numeric"
+                          />
+
+                          {!String(r[c.key] ?? "").trim() && isEditable(c.key) ? (
+                            <button
+                              type="button"
+                              onClick={() => openDatePicker(idx)}
+                              style={{
+                                position: "absolute",
+                                left: "50%",
+                                top: "50%",
+                                transform: "translate(-50%, -50%)",
+                                border: "none",
+                                background: "transparent",
+                                cursor: "pointer",
+                                fontSize: 18,
+                                lineHeight: 1,
+                                padding: 0,
+                                width: 24,
+                                height: 24,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                zIndex: 2,
+                              }}
+                              title="Choisir une date"
+                            >
+                              📅
+                            </button>
+                          ) : null}
+
+                          <input
+                            ref={(el) => {
+                              datePickerRefs.current[idx] = el;
+                            }}
+                            type="date"
+                            value={parseISO_YYYYMMDD(r.date) ? r.date : ""}
+                            onChange={(e) => setCell(idx, "date", e.target.value)}
+                            tabIndex={-1}
                             style={{
                               position: "absolute",
-                              left: "50%",
-                              top: "50%",
-                              transform: "translate(-50%, -50%)",
-                              border: "none",
-                              background: "transparent",
-                              cursor: "pointer",
-                              fontSize: 18,
-                              lineHeight: 1,
-                              padding: 0,
-                              width: 24,
-                              height: 24,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
+                              left: 0,
+                              top: 0,
+                              width: 1,
+                              height: 1,
+                              opacity: 0,
+                              pointerEvents: "none",
                             }}
-                            title="Choisir une date"
-                          >
-                            📅
-                          </button>
-                        ) : null}
-
-                        <input
-                          ref={(el) => {
-                            datePickerRefs.current[idx] = el;
-                          }}
-                          type="date"
-                          value={parseISO_YYYYMMDD(r.date) ? r.date : ""}
-                          onChange={(e) => setCell(idx, "date", e.target.value)}
-                          tabIndex={-1}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            opacity: 0,
-                            pointerEvents: "none",
-                            width: 0,
-                            height: 0,
-                          }}
-                        />
-                      </div>
-                    ) : (
+                          />
+                        </div>
+                      )
+                    ): (
                       <textarea
                         rows={1}
                         style={{
@@ -2261,8 +2391,8 @@ export default function FeuilleDepensesExcel({
                 }}
               >
                 {computedPayBlockStart
-                  ? `${employeNom || "Employé"} • ${fmtDateISO(computedPayBlockStart)} • ${computedPPInfo.pp}`
-                  : `${employeNom || "Employé"} • — • ${computedPPInfo.pp}`}
+                  ? `${recordEmployeNom || "Employé"} • ${fmtDateISO(computedPayBlockStart)} • ${computedPPInfo.pp}`
+                  : `${recordEmployeNom || "Employé"} • — • ${computedPPInfo.pp}`}
               </div>
 
               <div
