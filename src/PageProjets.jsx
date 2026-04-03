@@ -416,30 +416,34 @@ function ErrorBanner({ error, onClose }) {
 function DocsButton({ count, onClick, title = "Documents du projet", style, children }) {
   const c = Number(count || 0);
   return (
-    <div style={{ position: "relative", display: "inline-flex" }}>
-      <button onClick={onClick} style={style} title={title}>
+    <div style={{ position: "relative", display: "flex", width: "100%" }}>
+      <button
+        onClick={onClick}
+        style={{ ...style, width: "100%" }}
+        title={title}
+      >
         {children}
       </button>
       {c > 0 && (
         <span
           style={{
             position: "absolute",
-            top: -6,
-            right: -6,
-            minWidth: 18,
-            height: 18,
-            padding: "0 5px",
+            top: -5,
+            right: -5,
+            minWidth: "clamp(14px, 1.2vw, 18px)",
+            height: "clamp(14px, 1.2vw, 18px)",
+            padding: "0 clamp(3px, 0.35vw, 5px)",
             borderRadius: 999,
             background: "#ef4444",
             color: "#fff",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: 12,
+            fontSize: "clamp(9px, 0.8vw, 12px)",
             fontWeight: 1000,
             border: "2px solid #fff",
             lineHeight: 1,
-            boxShadow: "0 8px 18px rgba(0,0,0,0.18)",
+            boxShadow: "0 6px 14px rgba(0,0,0,0.18)",
             pointerEvents: "none",
           }}
         >
@@ -841,7 +845,16 @@ function PopupDocsManager({ open, onClose, projet }) {
             ) : (
               files.map((f, i) => (
                 <tr key={i}>
-                  <td style={{ ...tdCenter, wordBreak: "break-word" }}>{f.name}</td>
+                  <td
+                    style={{
+                      ...tdCenter,
+                      wordBreak: "normal",
+                      overflowWrap: "normal",
+                      hyphens: "none",
+                    }}
+                  >
+                    {f.name}
+                  </td>
                   <td style={tdCenter}>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
                       <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>Ouvrir</a>
@@ -1543,6 +1556,58 @@ function PopupDetailsProjetSimple({
   );
 }
 
+function CellTextOneLine({ text, title, weight = 700, color = "#111827" }) {
+  return (
+    <div
+      title={title || text || ""}
+      style={{
+        width: "100%",
+        minWidth: 0,
+        fontSize: "clamp(5px, 1.15vw, 19px)",
+        fontWeight: weight,
+        lineHeight: 1.08,
+        color,
+        whiteSpace: "nowrap",
+        wordBreak: "keep-all",
+        overflowWrap: "normal",
+        hyphens: "none",
+        overflow: "hidden",
+        textOverflow: "clip",
+        textAlign: "center",
+      }}
+    >
+      {text || "—"}
+    </div>
+  );
+}
+
+function CellTextTwoLines({ text, title, weight = 700, color = "#111827" }) {
+  return (
+    <div
+      title={title || text || ""}
+      style={{
+        width: "100%",
+        minWidth: 0,
+        fontSize: "clamp(5px, 1.15vw, 19px)",
+        fontWeight: weight,
+        lineHeight: 1.08,
+        color,
+        textAlign: "center",
+        whiteSpace: "normal",
+        wordBreak: "normal",
+        overflowWrap: "normal",
+        hyphens: "none",
+        display: "-webkit-box",
+        WebkitBoxOrient: "vertical",
+        WebkitLineClamp: 2,
+        overflow: "hidden",
+      }}
+    >
+      {text || "—"}
+    </div>
+  );
+}
+
 /* ---------------------- Ligne / Tableau ---------------------- */
 function LigneProjet({
   proj,
@@ -1558,7 +1623,7 @@ function LigneProjet({
   const { firstEverStart, totalClosedMs } = useProjectLifetimeStats(proj.id, setError);
 
   const statutLabel = hasOpen ? "En cours" : "—";
-  const statutStyle = { fontWeight: 900, color: hasOpen ? "#166534" : "#6b7280" };
+  const statutColor = hasOpen ? "#166534" : "#6b7280";
 
   const tempsOuvertureMinutes = Number(proj.tempsOuvertureMinutes || 0) || 0;
   const totalAllMsWithOpen = totalClosedMs + (todayTotalMs || 0) + tempsOuvertureMinutes * 60 * 1000;
@@ -1577,30 +1642,101 @@ function LigneProjet({
         e.currentTarget.style.background = rowBg;
       }}
     >
-      <td style={tdCenter}>{proj.dossierNo != null ? proj.dossierNo : "—"}</td>
-      <td style={tdCenter}>{proj.clientNom || proj.nom || "—"}</td>
-      <td style={tdCenter}>{proj.numeroUnite || "—"}</td>
-      <td style={tdCenter}>{proj.modele || "—"}</td>
       <td style={tdCenter}>
-        <span style={statutStyle}>{statutLabel}</span>
+        <CellTextOneLine text={proj.dossierNo != null ? String(proj.dossierNo) : "—"} />
       </td>
-      <td style={tdCenter}>{fmtDate(firstEverStart)}</td>
-      <td style={tdCenter}>{fmtHM(totalAllMsWithOpen)}</td>
-      <td style={tdCenter}>{proj?.tempsEstimeHeures != null ? fmtHours(proj.tempsEstimeHeures) : "—"}</td>
 
-      <td style={tdCenter} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={() => onOpenDetails?.(proj)} style={btnSecondary} type="button">
+      <td style={tdCenter}>
+        <CellTextTwoLines text={proj.clientNom || proj.nom || "—"} />
+      </td>
+
+      <td style={tdCenter}>
+        <CellTextTwoLines text={proj.numeroUnite || "—"} />
+      </td>
+
+      <td style={tdCenter}>
+        <CellTextTwoLines text={proj.modele || "—"} />
+      </td>
+
+      <td style={tdCenter}>
+        <CellTextOneLine text={statutLabel} weight={900} color={statutColor} />
+      </td>
+
+      <td style={tdCenter}>
+        <CellTextTwoLines text={fmtDate(firstEverStart)} />
+      </td>
+
+      <td style={tdCenter}>
+        <CellTextOneLine text={fmtHM(totalAllMsWithOpen)} />
+      </td>
+
+      <td style={tdCenter}>
+        <CellTextOneLine
+          text={proj?.tempsEstimeHeures != null ? fmtHours(proj.tempsEstimeHeures) : "—"}
+        />
+      </td>
+
+      <td
+        style={{
+          ...tdCenter,
+          paddingLeft: "clamp(2px, 0.25vw, 4px)",
+          paddingRight: "clamp(2px, 0.25vw, 4px)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="projets-actions-grid"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: "clamp(2px, 0.4vw, 8px)",
+            width: "100%",
+            maxWidth: "100%",
+            margin: "0 auto",
+          }}
+        >
+          <button
+            onClick={() => onOpenDetails?.(proj)}
+            style={{ ...btnSecondary, ...actionBtnCompact }}
+            type="button"
+            title="Détails"
+          >
             Détails
           </button>
-          <button onClick={() => onOpenMaterial?.(proj)} style={btnBlue} type="button">
+
+          <button
+            onClick={() => onOpenMaterial?.(proj)}
+            style={{ ...btnBlue, ...actionBtnCompact }}
+            type="button"
+            title="Matériel"
+          >
             Matériel
           </button>
-          <DocsButton count={proj.pdfCount} onClick={() => onOpenPDF?.(proj)} style={btnDocs}>
+
+          <DocsButton
+            count={proj.pdfCount}
+            onClick={() => onOpenPDF?.(proj)}
+            style={{
+              ...btnDocs,
+              ...actionBtnCompact,
+            }}
+          >
             DOCS
           </DocsButton>
-          <button onClick={() => onCloseBT?.(proj)} style={btnCloseBT} type="button">
-            Fermer le BT
+
+          <button
+            onClick={() => onCloseBT?.(proj)}
+            style={{
+              ...btnCloseBT,
+              ...actionBtnCompact,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            type="button"
+            title="Fermer le BT"
+          >
+            Fermer BT
           </button>
         </div>
       </td>
@@ -1740,255 +1876,303 @@ export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
   };
 
   return (
-    <div style={{ padding: 0, width: "100%" }}>
-      <ErrorBanner error={error} onClose={() => setError(null)} />
+    <>
+      <style>{`
+        @media (max-width: 900px) {
+          .projets-actions-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          }
+        }
+      `}</style>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-        <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
-          Projets fermés
-        </button>
-      </div>
+      <div style={{ padding: 0, width: "100%" }}>
+        <ErrorBanner error={error} onClose={() => setError(null)} />
 
-      <div style={{ width: "100%", overflowX: "auto" }}>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "separate",
-            borderSpacing: 0,
-            background: "#fff",
-            border: "1px solid #eee",
-            borderRadius: 12,
-            overflow: "hidden",
-            fontSize: 16,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "#e5e7eb" }}>
-              <th style={thCenter}>BT</th>
-              <th style={thCenter}>Client</th>
-              <th style={thCenter}>Unité</th>
-              <th style={thCenter}>Modèle</th>
-              <th style={thCenter}>Statut</th>
-              <th style={thCenter}>Ouverture</th>
-              <th style={thCenter}>Total</th>
-              <th style={thCenter}>Estimé</th>
-              <th style={thCenter}>Actions</th>
-            </tr>
-          </thead>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+          <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
+            Projets fermés
+          </button>
+        </div>
 
-          <tbody>
-            {projets.map((p, idx) => (
-              <LigneProjet
-                key={p.id}
-                proj={p}
-                idx={idx}
-                tick={tick}
-                setError={setError}
-                onOpenDetails={openDetails}
-                onOpenMaterial={(proj) => openMaterial(proj)}
-                onOpenPDF={openPDF}
-                onCloseBT={openCloseBT}
-              />
-            ))}
+        <div style={{ width: "100%", overflowX: "auto" }}>
+          <table
+            style={{
+              width: "100%",
+              tableLayout: "fixed",
+              borderCollapse: "separate",
+              borderSpacing: 0,
+              background: "#fff",
+              border: "1px solid #eee",
+              borderRadius: 12,
+              overflow: "hidden",
+              fontSize: 16,
+            }}
+          >
+            <colgroup>
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "15%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "27%" }} />
+            </colgroup>
 
-            {projets.length === 0 ? (
-              <tr>
-                <td colSpan={9} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16, fontWeight: 800 }}>
-                  Aucun projet pour l’instant.
-                </td>
+            <thead>
+              <tr style={{ background: "#e5e7eb" }}>
+                <th style={thCenter}>BT</th>
+                <th style={thCenter}>Client</th>
+                <th style={thCenter}>Unité</th>
+                <th style={thCenter}>Modèle</th>
+                <th style={thCenter}>Statut</th>
+                <th style={thCenter}>Ouverture</th>
+                <th style={thCenter}>Total</th>
+                <th style={thCenter}>Estimé</th>
+                <th style={thCenter}>Actions</th>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+            </thead>
 
-      <PopupCreateProjet
-        open={createOpen}
-        onClose={() => {
-          setCreateOpen(false);
-          setCreateProjet(null);
-        }}
-        onError={setError}
-        mode={createProjet ? "edit" : "create"}
-        projet={createProjet}
-        onSaved={() => {}}
-      />
+            <tbody>
+              {projets.map((p, idx) => (
+                <LigneProjet
+                  key={p.id}
+                  proj={p}
+                  idx={idx}
+                  tick={tick}
+                  setError={setError}
+                  onOpenDetails={openDetails}
+                  onOpenMaterial={(proj) => openMaterial(proj)}
+                  onOpenPDF={openPDF}
+                  onCloseBT={openCloseBT}
+                />
+              ))}
 
-      <PopupDetailsProjetSimple
-        open={details.open}
-        projet={details.projet}
-        onClose={closeDetails}
-        onOpenPDF={() => {
-          if (!details.projet) return;
-          openPDF(details.projet);
-        }}
-        onOpenMateriel={() => {
-          const id = details.projet?.id;
-          if (!id) return;
-          closeDetails();
-          openMaterial(id);
-        }}
-        onOpenHistorique={() => {
-          if (!details.projet) return;
-          openHistorique(details.projet);
-        }}
-        onCloseBT={(projLive) => {
-          if (!projLive) return;
-          openCloseBT(projLive);
-        }}
-      />
+              {projets.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={9}
+                    style={{
+                      padding: 14,
+                      color: "#666",
+                      textAlign: "center",
+                      fontSize: 16,
+                      fontWeight: 800,
+                    }}
+                  >
+                    Aucun projet pour l’instant.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
 
-      <PopupDocsManager
-        key={pdfMgr.projet?.id || "no-project"}
-        open={pdfMgr.open}
-        onClose={closePDF}
-        projet={pdfMgr.projet}
-      />
-
-      {materialProjId ? (
-        <ProjectMaterielPanel
-          projId={materialProjId}
-          onClose={() => setMaterialProjId(null)}
-          setParentError={() => {}}
+        <PopupCreateProjet
+          open={createOpen}
+          onClose={() => {
+            setCreateOpen(false);
+            setCreateProjet(null);
+          }}
+          onError={setError}
+          mode={createProjet ? "edit" : "create"}
+          projet={createProjet}
+          onSaved={() => {}}
         />
-      ) : null}
 
-      <PopupHistoriqueProjet open={hist.open} onClose={closeHistorique} projet={hist.projet} />
+        <PopupDetailsProjetSimple
+          open={details.open}
+          projet={details.projet}
+          onClose={closeDetails}
+          onOpenPDF={() => {
+            if (!details.projet) return;
+            openPDF(details.projet);
+          }}
+          onOpenMateriel={() => {
+            const id = details.projet?.id;
+            if (!id) return;
+            closeDetails();
+            openMaterial(id);
+          }}
+          onOpenHistorique={() => {
+            if (!details.projet) return;
+            openHistorique(details.projet);
+          }}
+          onCloseBT={(projLive) => {
+            if (!projLive) return;
+            openCloseBT(projLive);
+          }}
+        />
 
-      <PopupFermerBT
-        open={closeBT.open}
-        projet={closeBT.projet}
-        onClose={closeCloseBT}
-        onCreateInvoice={() => {
-          const proj = closeBT.projet;
-          closeCloseBT();
-          handleCreateInvoiceAndClose(proj);
-        }}
-      />
+        <PopupDocsManager
+          key={pdfMgr.projet?.id || "no-project"}
+          open={pdfMgr.open}
+          onClose={closePDF}
+          projet={pdfMgr.projet}
+        />
 
-      <CloseProjectWizard
-        projet={closeWizard.projet}
-        open={closeWizard.open}
-        onCancel={handleWizardCancel}
-        onClosed={handleWizardClosed}
-        startAtSummary={!!closeWizard.startAtSummary}
-      />
+        {materialProjId ? (
+          <ProjectMaterielPanel
+            projId={materialProjId}
+            onClose={() => setMaterialProjId(null)}
+            setParentError={() => {}}
+          />
+        ) : null}
 
-      <ClosedProjectsPopup
-        open={closedPopupOpen}
-        onClose={() => setClosedPopupOpen(false)}
-        onReopen={handleReopenClosed}
-        onDelete={handleDeleteClosed}
-      />
-    </div>
+        <PopupHistoriqueProjet open={hist.open} onClose={closeHistorique} projet={hist.projet} />
+
+        <PopupFermerBT
+          open={closeBT.open}
+          projet={closeBT.projet}
+          onClose={closeCloseBT}
+          onCreateInvoice={() => {
+            const proj = closeBT.projet;
+            closeCloseBT();
+            handleCreateInvoiceAndClose(proj);
+          }}
+        />
+
+        <CloseProjectWizard
+          projet={closeWizard.projet}
+          open={closeWizard.open}
+          onCancel={handleWizardCancel}
+          onClosed={handleWizardClosed}
+          startAtSummary={!!closeWizard.startAtSummary}
+        />
+
+        <ClosedProjectsPopup
+          open={closedPopupOpen}
+          onClose={() => setClosedPopupOpen(false)}
+          onReopen={handleReopenClosed}
+          onDelete={handleDeleteClosed}
+        />
+      </div>
+    </>
   );
-}
+  }
 
-/* ---------------------- Styles ---------------------- */
-const infoCard = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 14,
-  padding: 12,
-  background: "#f8fafc",
-};
-const infoCardLabel = { color: "#64748b", fontWeight: 900 };
-const infoCardValue = { fontWeight: 1000, fontSize: 18 };
+  /* ---------------------- Styles ---------------------- */
+  const infoCard = {
+    border: "1px solid #e5e7eb",
+    borderRadius: 14,
+    padding: 12,
+    background: "#f8fafc",
+  };
+  const infoCardLabel = { color: "#64748b", fontWeight: 900 };
+  const infoCardValue = { fontWeight: 1000, fontSize: 18 };
 
-const thCenter = {
-  textAlign: "center",
-  padding: "6px 8px",
-  borderBottom: "1px solid #d1d5db",
-  whiteSpace: "nowrap",
-  fontWeight: 700,
-  fontSize: 18,
-  lineHeight: 1.3,
-  color: "#111827",
-};
+  const thCenter = {
+    textAlign: "center",
+    padding: "clamp(3px, 0.7vw, 10px) clamp(4px, 0.9vw, 12px)",
+    borderBottom: "1px solid #d1d5db",
+    whiteSpace: "nowrap",
+    wordBreak: "keep-all",
+    overflowWrap: "normal",
+    hyphens: "none",
+    fontWeight: 800,
+    fontSize: "clamp(7px, 1.1vw, 18px)",
+    lineHeight: 1.08,
+    color: "#111827",
+  };
 
-const tdCenter = {
-  textAlign: "center",
-  padding: "4px 8px",
-  borderBottom: "1px solid #eee",
-  verticalAlign: "middle",
-  fontSize: 17,
-  lineHeight: 1.3,
-};
+  const tdCenter = {
+    textAlign: "center",
+    padding: "clamp(2px, 0.45vw, 8px) clamp(3px, 0.55vw, 8px)",
+    borderBottom: "1px solid #eee",
+    verticalAlign: "middle",
+    lineHeight: 1.05,
+  };
 
-const input = {
-  width: "100%",
-  padding: "10px 12px",
-  border: "1px solid #cbd5e1",
-  borderRadius: 12,
-  background: "#fff",
-  fontSize: 18,
-  fontWeight: 900,
-};
+  const actionBtnCompact = {
+    padding: "clamp(4px, 0.6vw, 10px) clamp(4px, 0.8vw, 12px)",
+    fontSize: "clamp(4px, 0.9vw, 16px)",
+    borderRadius: "clamp(8px, 0.8vw, 12px)",
+    minWidth: 0,
+    width: "100%",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "clip",
+    lineHeight: 1,
+    letterSpacing: "-0.04em",
+  };
 
-const btnPrimary = {
-  border: "none",
-  background: "#2563eb",
-  color: "#fff",
-  borderRadius: 14,
-  padding: "10px 16px",
-  cursor: "pointer",
-  fontWeight: 1000,
-  fontSize: 16,
-  boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
-};
+  const input = {
+    width: "100%",
+    padding: "10px 12px",
+    border: "1px solid #cbd5e1",
+    borderRadius: 12,
+    background: "#fff",
+    fontSize: 18,
+    fontWeight: 900,
+  };
 
-const btnSecondary = {
-  border: "1px solid #cbd5e1",
-  background: "#f8fafc",
-  borderRadius: 14,
-  padding: "10px 14px",
-  cursor: "pointer",
-  fontWeight: 900,
-  fontSize: 16,
-  textDecoration: "none",
-  color: "#111",
-};
+  const btnPrimary = {
+    border: "none",
+    background: "#2563eb",
+    color: "#fff",
+    borderRadius: 14,
+    padding: "10px 16px",
+    cursor: "pointer",
+    fontWeight: 1000,
+    fontSize: 16,
+    boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
+  };
 
-const btnGhost = {
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  borderRadius: 14,
-  padding: "10px 14px",
-  cursor: "pointer",
-  fontWeight: 900,
-  fontSize: 16,
-};
+  const btnSecondary = {
+    border: "1px solid #cbd5e1",
+    background: "#f8fafc",
+    borderRadius: 12,
+    padding: "8px 10px",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 14,
+    textDecoration: "none",
+    color: "#111",
+  };
 
-const btnBlue = {
-  border: "none",
-  background: "#0ea5e9",
-  color: "#fff",
-  borderRadius: 14,
-  padding: "10px 14px",
-  cursor: "pointer",
-  fontWeight: 1000,
-  fontSize: 16,
-};
+  const btnGhost = {
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    borderRadius: 14,
+    padding: "10px 14px",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 16,
+  };
 
-const btnDocs = { ...btnBlue, background: "#faa72bff" };
+  const btnBlue = {
+    border: "none",
+    background: "#0ea5e9",
+    color: "#fff",
+    borderRadius: 12,
+    padding: "8px 10px",
+    cursor: "pointer",
+    fontWeight: 1000,
+    fontSize: 14,
+  };
 
-const btnDanger = {
-  border: "1px solid #ef4444",
-  background: "#fee2e2",
-  color: "#b91c1c",
-  borderRadius: 14,
-  padding: "10px 14px",
-  cursor: "pointer",
-  fontWeight: 1000,
-  fontSize: 16,
-};
+  const btnDocs = { ...btnBlue, background: "#faa72bff" };
 
-const btnCloseBT = {
-  border: "1px solid #16a34a",
-  background: "#dcfce7",
-  color: "#166534",
-  borderRadius: 14,
-  padding: "10px 14px",
-  cursor: "pointer",
-  fontWeight: 1000,
-  fontSize: 16,
-};
+  const btnDanger = {
+    border: "1px solid #ef4444",
+    background: "#fee2e2",
+    color: "#b91c1c",
+    borderRadius: 14,
+    padding: "10px 14px",
+    cursor: "pointer",
+    fontWeight: 1000,
+    fontSize: 16,
+  };
+
+  const btnCloseBT = {
+    border: "1px solid #16a34a",
+    background: "#dcfce7",
+    color: "#166534",
+    borderRadius: 12,
+    padding: "8px 10px",
+    cursor: "pointer",
+    fontWeight: 1000,
+    fontSize: "clamp(4px, 0.82vw, 14px)",
+    letterSpacing: "-0.05em",
+  };

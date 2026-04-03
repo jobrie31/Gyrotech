@@ -23,6 +23,7 @@
 // - cacher les tâches fermées du tableau principal
 // - ligne jaune pour les tâches spéciales dans le tableau
 // - dans Détails > Informations, afficher les employés visibles seulement si scope=selected
+
 import CloseAutreProjetWizard from "./CloseAutreProjetWizard";
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { db, auth, storage } from "./firebaseConfig";
@@ -478,26 +479,39 @@ function CardKV({ k, v }) {
 /* ---------- Styles ---------- */
 const thCenter = {
   textAlign: "center",
-  padding: "6px 8px",
+  padding: "clamp(4px, 0.8vw, 8px)",
   borderBottom: "1px solid #d1d5db",
-  whiteSpace: "nowrap",
-  fontWeight: 700,
-  fontSize: 18,
-  lineHeight: 1.3,
+  whiteSpace: "normal",
+  wordBreak: "break-word",
+  overflowWrap: "anywhere",
+  fontWeight: 800,
+  fontSize: "clamp(11px, 1.15vw, 16px)",
+  lineHeight: 1.15,
   color: "#111827",
 };
 
 const tdCenter = {
   textAlign: "center",
-  padding: "4px 8px",
+  padding: "clamp(3px, 0.7vw, 8px)",
   borderBottom: "1px solid #eee",
   verticalAlign: "middle",
-  fontSize: 17,
-  lineHeight: 1.15,
+  fontSize: "clamp(10px, 1.05vw, 15px)",
+  lineHeight: 1.1,
+  wordBreak: "break-word",
+  overflowWrap: "anywhere",
 };
 
-const thLeft = { ...thCenter, textAlign: "left", paddingLeft: 60 };
-const tdLeft = { ...tdCenter, textAlign: "left", paddingLeft: 50 };
+const thLeft = {
+  ...thCenter,
+  textAlign: "left",
+  paddingLeft: "clamp(10px, 2.2vw, 26px)",
+};
+
+const tdLeft = {
+  ...tdCenter,
+  textAlign: "left",
+  paddingLeft: "clamp(10px, 2vw, 24px)",
+};
 
 const input = {
   width: "100%",
@@ -569,6 +583,20 @@ const btnClose = {
   fontWeight: 800,
 };
 
+const actionBtnCompact = {
+  padding: "clamp(5px, 0.7vw, 9px) clamp(6px, 0.9vw, 10px)",
+  fontSize: "clamp(10px, 0.95vw, 14px)",
+  borderRadius: 10,
+  minWidth: 0,
+  width: "100%",
+  maxWidth: "calc(50% - 4px)",
+  flex: "1 1 calc(50% - 4px)",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  lineHeight: 1.05,
+};
+
 const docsBadgeStyle = {
   position: "absolute",
   top: -7,
@@ -592,8 +620,12 @@ const docsBadgeStyle = {
 function DocsButtonWithBadge({ count = 0, onClick, title = "Documents" }) {
   const n = Number(count || 0);
   return (
-    <div style={{ position: "relative", display: "inline-block" }}>
-      <button onClick={onClick} style={btnDocs} title={title}>
+    <div style={{ position: "relative", display: "flex", width: "100%" }}>
+      <button
+        onClick={onClick}
+        style={{ ...btnDocs, ...actionBtnCompact, maxWidth: "100%", flex: "1 1 auto" }}
+        title={title}
+      >
         DOCS
       </button>
       {n > 0 && <span style={docsBadgeStyle}>{n}</span>}
@@ -1594,42 +1626,92 @@ function RowAutreProjet({
         <span style={statutStyle}>{statutLabel}</span>
       </td>
 
-      <td style={{ ...tdCenter, textAlign: "right", paddingRight: 40 }}>
-        <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      <td style={{ ...tdCenter, textAlign: "right", paddingRight: "clamp(6px, 1.5vw, 18px)" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: "clamp(4px, 0.6vw, 8px)",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            width: "100%",
+            maxWidth: "100%",
+            marginLeft: "auto",
+          }}
+        >
           {p.projectLike ? (
             <>
-              <button onClick={() => onShowSpecialDetails?.(p)} style={btnSecondary} title="Voir les détails">
+              <button
+                onClick={() => onShowSpecialDetails?.(p)}
+                style={{ ...btnSecondary, ...actionBtnCompact }}
+                title="Voir les détails"
+              >
                 Détails
               </button>
 
-              <button onClick={() => onOpenMaterial?.(p)} style={btnBlue} title="Matériel">
+              <button
+                onClick={() => onOpenMaterial?.(p)}
+                style={{ ...btnBlue, ...actionBtnCompact }}
+                title="Matériel"
+              >
                 Matériel
               </button>
 
-              <DocsButtonWithBadge count={p.pdfCount} onClick={() => onShowDocs?.(p)} title="Documents" />
+              <div
+                style={{
+                  display: "flex",
+                  flex: "1 1 calc(50% - 4px)",
+                  maxWidth: "calc(50% - 4px)",
+                  minWidth: 0,
+                }}
+              >
+                <DocsButtonWithBadge
+                  count={p.pdfCount}
+                  onClick={() => onShowDocs?.(p)}
+                  title="Documents"
+                />
+              </div>
 
-              <button onClick={() => onShowHistory?.(p)} style={btnSecondary} title="Voir l'historique">
+              <button
+                onClick={() => onShowHistory?.(p)}
+                style={{ ...btnSecondary, ...actionBtnCompact }}
+                title="Voir l'historique"
+              >
                 Historique
               </button>
 
               {p.ouvert !== false && (
-                <button onClick={() => onShowClose?.(p)} style={btnClose} title="Fermer la tâche">
+                <button
+                  onClick={() => onShowClose?.(p)}
+                  style={{ ...btnClose, ...actionBtnCompact }}
+                  title="Fermer la tâche"
+                >
                   Fermer
                 </button>
               )}
             </>
           ) : (
-            <button onClick={() => onShowHistory?.(p)} style={btnSecondary} title="Voir l'historique">
+            <button
+              onClick={() => onShowHistory?.(p)}
+              style={{ ...btnSecondary, ...actionBtnCompact }}
+              title="Voir l'historique"
+            >
               Historique
             </button>
           )}
 
           {allowEdit && (
             <>
-              <button onClick={() => onRename?.(p)} style={btnSecondary}>
+              <button
+                onClick={() => onRename?.(p)}
+                style={{ ...btnSecondary, ...actionBtnCompact }}
+              >
                 Renommer
               </button>
-              <button onClick={() => onDelete?.(p)} style={btnDanger} title="Supprimer">
+              <button
+                onClick={() => onDelete?.(p)}
+                style={{ ...btnDanger, ...actionBtnCompact }}
+                title="Supprimer"
+              >
                 Supprimer
               </button>
             </>
@@ -1786,7 +1868,6 @@ export default function AutresProjetsSection({
     const myEmpId = me?.id || null;
 
     return rows.filter((r) => {
-      // ✅ cacher toutes les tâches fermées du tableau principal
       if (r.ouvert === false) return false;
 
       if (isAdmin) return true;
@@ -1875,14 +1956,22 @@ export default function AutresProjetsSection({
         </div>
       )}
 
-      <div style={{ overflowX: "auto" }}>
+      <div style={{ overflowX: "hidden" }}>
         <div style={{ border: "1px solid #eee", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", background: "#fff" }}>
+            <colgroup>
+              <col style={{ width: "34%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "52%" }} />
+            </colgroup>
+
             <thead>
               <tr style={{ background: "#e5e7eb" }}>
                 <th style={thLeft}>Nom</th>
                 <th style={thCenter}>Statut</th>
-                <th style={{ ...thCenter, textAlign: "right", paddingRight: 100 }}>Actions</th>
+                <th style={{ ...thCenter, textAlign: "right", paddingRight: "clamp(8px, 2vw, 22px)" }}>
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>

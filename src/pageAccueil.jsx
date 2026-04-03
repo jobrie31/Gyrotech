@@ -656,7 +656,8 @@ async function doDepunchWithProject(emp) {
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
 
   const jobTokens = Array.from(
-    new Set(openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0))
+    new Set(
+      openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0))
   );
 
   const batch = writeBatch(db);
@@ -1539,6 +1540,13 @@ function LigneEmploye({
   const punchBtnBg = present ? "#dc2626" : "#16a34a";
   const punchBtnHover = present ? "#b91c1c" : "#15803d";
 
+  const responsiveRowFont = "clamp(12px, 1.8vw, 15px)";
+  const responsiveControlFont = "clamp(11px, 1.6vw, 14px)";
+  const responsiveBigButtonFont = "clamp(16px, 2.6vw, 24px)";
+  const responsiveControlHeight = "clamp(36px, 6vw, 44px)";
+  const responsiveBigButtonHeight = "clamp(42px, 7vw, 52px)";
+  const responsiveButtonPadding = "clamp(6px, 1.2vw, 12px)";
+
   const compactCellPadding = compactTV ? "4px 10px" : undefined;
   const compactFontSize = compactTV ? "clamp(16px, 1.35vw, 22px)" : undefined;
   const compactProjectFontSize = compactTV ? "clamp(18px, 1.7vw, 30px)" : 15;
@@ -1676,7 +1684,7 @@ function LigneEmploye({
             whiteSpace: "nowrap",
             fontWeight: 900,
             padding: compactCellPadding || styles.td?.padding,
-            fontSize: compactFontSize || styles.td?.fontSize,
+            fontSize: compactFontSize || responsiveRowFont,
             overflow: "hidden",
             textOverflow: "ellipsis",
             minWidth: 0,
@@ -1691,7 +1699,7 @@ function LigneEmploye({
             ...styles.td,
             whiteSpace: "nowrap",
             padding: compactCellPadding || styles.td?.padding,
-            fontSize: compactFontSize || styles.td?.fontSize,
+            fontSize: compactFontSize || responsiveRowFont,
             overflow: "hidden",
             textOverflow: "ellipsis",
             minWidth: 0,
@@ -1704,7 +1712,7 @@ function LigneEmploye({
           style={{
             ...styles.td,
             padding: compactCellPadding || styles.td?.padding,
-            fontSize: compactFontSize || styles.td?.fontSize,
+            fontSize: compactFontSize || responsiveRowFont,
             minWidth: 0,
             width: "100%",
           }}
@@ -1738,7 +1746,7 @@ function LigneEmploye({
             <div
               style={{
                 display: "flex",
-                gap: 10,
+                gap: "clamp(6px, 1vw, 10px)",
                 alignItems: "stretch",
                 flexWrap: "wrap",
                 minWidth: 0,
@@ -1750,13 +1758,13 @@ function LigneEmploye({
                   <div
                     aria-live="polite"
                     style={{
-                      height: 44,
+                      height: responsiveControlHeight,
                       display: "flex",
                       alignItems: "center",
                       fontWeight: 900,
-                      fontSize: 16,
+                      fontSize: responsiveControlFont,
                       color: "#111827",
-                      padding: "0 12px",
+                      padding: `0 ${responsiveButtonPadding}`,
                       borderRadius: 12,
                       background: "#eef2ff",
                       border: "1px solid #c7d2fe",
@@ -1776,13 +1784,14 @@ function LigneEmploye({
                     aria-label="Projet pour ce punch"
                     style={{
                       ...styles.input,
-                      height: 44,
-                      fontSize: present && currentIsProj ? 15 : 14,
+                      height: responsiveControlHeight,
+                      fontSize: responsiveControlFont,
                       fontWeight: present && currentIsProj ? 800 : 750,
                       cursor: present ? "not-allowed" : "pointer",
                       opacity: present ? 0.85 : 1,
                       width: "100%",
                       minWidth: 0,
+                      padding: "0 clamp(8px, 1vw, 10px)",
                     }}
                     disabled={present}
                   >
@@ -1802,12 +1811,15 @@ function LigneEmploye({
                 onClick={() => setAutresOpen(true)}
                 disabled={present}
                 style={{
-                  height: 44,
-                  padding: "0 12px",
+                  height: responsiveControlHeight,
+                  padding: `0 ${responsiveButtonPadding}`,
                   fontWeight: 800,
-                  flex: "1 1 150px",
+                  fontSize: responsiveControlFont,
+                  flex: "1 1 120px",
                   minWidth: 0,
                   whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
                 }}
               >
                 Autre tâche
@@ -1819,12 +1831,15 @@ function LigneEmploye({
                 onClick={() => setNewProjModalOpen(true)}
                 disabled={present}
                 style={{
-                  height: 44,
-                  padding: "0 12px",
+                  height: responsiveControlHeight,
+                  padding: `0 ${responsiveButtonPadding}`,
                   fontWeight: 800,
-                  flex: "1 1 170px",
+                  fontSize: responsiveControlFont,
+                  flex: "1 1 135px",
                   minWidth: 0,
                   whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
                 }}
               >
                 Nouveau projet
@@ -1836,21 +1851,22 @@ function LigneEmploye({
                 disabled={pending}
                 variant="neutral"
                 style={{
-                  height: 52,
+                  height: responsiveBigButtonHeight,
                   background: punchBtnBg,
                   color: "#fff",
-                  fontSize: 24,
+                  fontSize: responsiveBigButtonFont,
                   fontWeight: 900,
                   lineHeight: 1.05,
-                  letterSpacing: 0.3,
+                  letterSpacing: 0.2,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   textShadow: "0 1px 0 rgba(0,0,0,0.15)",
-                  flex: "1 1 190px",
-                  minWidth: 160,
+                  flex: "1 1 150px",
+                  minWidth: 120,
                   maxWidth: "100%",
                   width: "100%",
+                  padding: `0 ${responsiveButtonPadding}`,
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = punchBtnHover;
@@ -1980,23 +1996,23 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
   const isRH = myRole === "rh";
   const canSeeAdminMenus = isAdmin || isRH;
 
-    const visibleEmployes = useMemo(() => {
-      const employesSansRHetTV = employes.filter((e) => {
-        const role = normalizeRoleFromDoc(e);
-        return role !== "rh" && role !== "tv";
-      });
+  const visibleEmployes = useMemo(() => {
+    const employesSansRHetTV = employes.filter((e) => {
+      const role = normalizeRoleFromDoc(e);
+      return role !== "rh" && role !== "tv";
+    });
 
-      if (isTV) return employesSansRHetTV;
+    if (isTV) return employesSansRHetTV;
 
-      if (canSeeAdminMenus) return employesSansRHetTV;
+    if (canSeeAdminMenus) return employesSansRHetTV;
 
-      if (!myEmploye) return [];
+    if (!myEmploye) return [];
 
-      const myRoleLocal = normalizeRoleFromDoc(myEmploye);
-      if (myRoleLocal === "rh" || myRoleLocal === "tv") return [];
+    const myRoleLocal = normalizeRoleFromDoc(myEmploye);
+    if (myRoleLocal === "rh" || myRoleLocal === "tv") return [];
 
-      return employesSansRHetTV.filter((e) => e.id === myEmploye.id);
-    }, [employes, canSeeAdminMenus, myEmploye, isTV]);
+    return employesSansRHetTV.filter((e) => e.id === myEmploye.id);
+  }, [employes, canSeeAdminMenus, myEmploye, isTV]);
 
   const autresProjets = useMemo(() => {
     if (isTV) return [];
@@ -2144,9 +2160,9 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
                 <div style={styles.tableWrap}>
                   <table style={styles.table}>
                     <colgroup>
-                      <col style={{ width: "18%" }} />
-                      <col style={{ width: "12%" }} />
-                      <col style={{ width: "70%" }} />
+                      <col style={{ width: "24%" }} />
+                      <col style={{ width: "10%" }} />
+                      <col style={{ width: "66%" }} />
                     </colgroup>
 
                     <thead>
