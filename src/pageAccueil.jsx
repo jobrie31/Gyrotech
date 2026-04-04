@@ -1541,11 +1541,11 @@ function LigneEmploye({
   const punchBtnHover = present ? "#b91c1c" : "#15803d";
 
   const responsiveRowFont = "clamp(12px, 1.8vw, 15px)";
-  const responsiveControlFont = "clamp(11px, 1.6vw, 14px)";
-  const responsiveBigButtonFont = "clamp(16px, 2.6vw, 24px)";
-  const responsiveControlHeight = "clamp(36px, 6vw, 44px)";
-  const responsiveBigButtonHeight = "clamp(42px, 7vw, 52px)";
-  const responsiveButtonPadding = "clamp(6px, 1.2vw, 12px)";
+  const responsiveControlFont = "clamp(10px, 1.45vw, 14px)";
+  const responsiveBigButtonFont = "clamp(15px, 2.4vw, 24px)";
+  const responsiveControlHeight = "clamp(34px, 5.6vw, 44px)";
+  const responsiveBigButtonHeight = "clamp(40px, 6.4vw, 52px)";
+  const responsiveButtonPadding = "clamp(4px, 0.9vw, 10px)";
 
   const compactCellPadding = compactTV ? "4px 10px" : undefined;
   const compactFontSize = compactTV ? "clamp(16px, 1.35vw, 22px)" : undefined;
@@ -1681,13 +1681,16 @@ function LigneEmploye({
         <td
           style={{
             ...styles.td,
-            whiteSpace: "nowrap",
             fontWeight: 900,
             padding: compactCellPadding || styles.td?.padding,
             fontSize: compactFontSize || responsiveRowFont,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            overflow: "visible",
+            textOverflow: "clip",
             minWidth: 0,
+            whiteSpace: "normal",
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+            lineHeight: 1.15,
           }}
           title={emp.nom || "—"}
         >
@@ -1697,12 +1700,13 @@ function LigneEmploye({
         <td
           style={{
             ...styles.td,
-            whiteSpace: "nowrap",
             padding: compactCellPadding || styles.td?.padding,
             fontSize: compactFontSize || responsiveRowFont,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            overflow: "visible",
+            textOverflow: "clip",
             minWidth: 0,
+            whiteSpace: "nowrap",
+            fontWeight: 900,
           }}
         >
           {fmtHM(totalMs)}
@@ -1743,17 +1747,8 @@ function LigneEmploye({
               {currentDisplayLabel}
             </div>
           ) : (
-            <div
-              style={{
-                display: "flex",
-                gap: "clamp(6px, 1vw, 10px)",
-                alignItems: "stretch",
-                flexWrap: "wrap",
-                minWidth: 0,
-                width: "100%",
-              }}
-            >
-              <div style={{ flex: "1 1 260px", minWidth: 0, width: "100%" }}>
+            <div className="punch-controls">
+              <div className="pc-project">
                 {present && currentIsOther ? (
                   <div
                     aria-live="polite"
@@ -1772,6 +1767,8 @@ function LigneEmploye({
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
+                      width: "100%",
+                      boxSizing: "border-box",
                     }}
                     title="Travail en cours (Autre tâche)"
                   >
@@ -1791,7 +1788,8 @@ function LigneEmploye({
                       opacity: present ? 0.85 : 1,
                       width: "100%",
                       minWidth: 0,
-                      padding: "0 clamp(8px, 1vw, 10px)",
+                      padding: "0 clamp(6px, 0.8vw, 10px)",
+                      boxSizing: "border-box",
                     }}
                     disabled={present}
                   >
@@ -1805,78 +1803,84 @@ function LigneEmploye({
                 )}
               </div>
 
-              <Button
-                type="button"
-                variant="neutral"
-                onClick={() => setAutresOpen(true)}
-                disabled={present}
-                style={{
-                  height: responsiveControlHeight,
-                  padding: `0 ${responsiveButtonPadding}`,
-                  fontWeight: 800,
-                  fontSize: responsiveControlFont,
-                  flex: "1 1 120px",
-                  minWidth: 0,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                Autre tâche
-              </Button>
+              <div className="pc-other">
+                <Button
+                  type="button"
+                  variant="neutral"
+                  onClick={() => setAutresOpen(true)}
+                  disabled={present}
+                  style={{
+                    height: responsiveControlHeight,
+                    padding: `0 ${responsiveButtonPadding}`,
+                    fontWeight: 800,
+                    fontSize: responsiveControlFont,
+                    minWidth: 0,
+                    width: "100%",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  Autre tâche
+                </Button>
+              </div>
 
-              <Button
-                type="button"
-                variant="neutral"
-                onClick={() => setNewProjModalOpen(true)}
-                disabled={present}
-                style={{
-                  height: responsiveControlHeight,
-                  padding: `0 ${responsiveButtonPadding}`,
-                  fontWeight: 800,
-                  fontSize: responsiveControlFont,
-                  flex: "1 1 135px",
-                  minWidth: 0,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                Nouveau projet
-              </Button>
+              <div className="pc-new">
+                <Button
+                  type="button"
+                  variant="neutral"
+                  onClick={() => setNewProjModalOpen(true)}
+                  disabled={present}
+                  style={{
+                    height: responsiveControlHeight,
+                    padding: `0 ${responsiveButtonPadding}`,
+                    fontWeight: 800,
+                    fontSize: responsiveControlFont,
+                    minWidth: 0,
+                    width: "100%",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  Nouveau projet
+                </Button>
+              </div>
 
-              <Button
-                type="button"
-                onClick={handlePunchClick}
-                disabled={pending}
-                variant="neutral"
-                style={{
-                  height: responsiveBigButtonHeight,
-                  background: punchBtnBg,
-                  color: "#fff",
-                  fontSize: responsiveBigButtonFont,
-                  fontWeight: 900,
-                  lineHeight: 1.05,
-                  letterSpacing: 0.2,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  textShadow: "0 1px 0 rgba(0,0,0,0.15)",
-                  flex: "1 1 150px",
-                  minWidth: 120,
-                  maxWidth: "100%",
-                  width: "100%",
-                  padding: `0 ${responsiveButtonPadding}`,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = punchBtnHover;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = punchBtnBg;
-                }}
-              >
-                {present ? "ARRÊT" : "DÉPART"}
-              </Button>
+              <div className="pc-punch">
+                <Button
+                  type="button"
+                  onClick={handlePunchClick}
+                  disabled={pending}
+                  variant="neutral"
+                  style={{
+                    height: responsiveBigButtonHeight,
+                    background: punchBtnBg,
+                    color: "#fff",
+                    fontSize: responsiveBigButtonFont,
+                    fontWeight: 900,
+                    lineHeight: 1.05,
+                    letterSpacing: 0.2,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    textShadow: "0 1px 0 rgba(0,0,0,0.15)",
+                    minWidth: 0,
+                    width: "100%",
+                    maxWidth: "100%",
+                    padding: `0 ${responsiveButtonPadding}`,
+                    boxSizing: "border-box",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = punchBtnHover;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = punchBtnBg;
+                  }}
+                >
+                  {present ? "ARRÊT" : "DÉPART"}
+                </Button>
+              </div>
             </div>
           )}
         </td>
@@ -2080,6 +2084,37 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
           50%  { box-shadow: 0 0 0 3px rgba(37,99,235,0.28), 0 0 26px rgba(37,99,235,0.35); }
           100% { box-shadow: 0 0 0 0 rgba(37,99,235,0.00); }
         }
+
+        .punch-controls {
+          display: grid;
+          grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.05fr);
+          grid-template-areas: "project other new punch";
+          gap: clamp(6px, 1vw, 10px);
+          align-items: stretch;
+          width: 100%;
+          min-width: 0;
+        }
+
+        .pc-project { grid-area: project; min-width: 0; }
+        .pc-other   { grid-area: other; min-width: 0; }
+        .pc-new     { grid-area: new; min-width: 0; }
+        .pc-punch   { grid-area: punch; min-width: 0; }
+
+        @media (max-width: 980px) {
+          .punch-controls {
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            grid-template-areas:
+              "project project"
+              "other new"
+              "punch punch";
+          }
+        }
+
+        @media (max-width: 640px) {
+          .punch-controls {
+            gap: 6px;
+          }
+        }
       `}</style>
 
       <PageContainer
@@ -2160,15 +2195,23 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
                 <div style={styles.tableWrap}>
                   <table style={styles.table}>
                     <colgroup>
-                      <col style={{ width: "24%" }} />
-                      <col style={{ width: "10%" }} />
-                      <col style={{ width: "66%" }} />
+                      <col style={{ width: "30%" }} />
+                      <col style={{ width: "12%" }} />
+                      <col style={{ width: "58%" }} />
                     </colgroup>
 
                     <thead>
                       <tr>
                         {["Nom", "Jour", "Projet"].map((h, i) => (
-                          <th key={i} style={{ ...styles.th, background: "#e5e7eb", color: "#111827" }}>
+                          <th
+                            key={i}
+                            style={{
+                              ...styles.th,
+                              background: "#e5e7eb",
+                              color: "#111827",
+                              whiteSpace: i < 2 ? "nowrap" : "normal",
+                            }}
+                          >
                             {h}
                           </th>
                         ))}

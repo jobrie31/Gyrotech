@@ -59,7 +59,12 @@ function weekdayFR(d) {
 }
 function fmtDateTimeFR(ts) {
   if (!ts) return "—";
-  const d = ts instanceof Date ? ts : null;
+  const d =
+    typeof ts?.toDate === "function"
+      ? ts.toDate()
+      : ts instanceof Date
+      ? ts
+      : null;
   if (!d) return "—";
   return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(
     d.getHours()
@@ -132,14 +137,12 @@ function getSickDaysRemaining(emp) {
 
   return Math.max(0, Math.min(2, storedRemaining));
 }
-
 function formatRangeFRShort(d1, d2) {
   if (!d1 || !d2) return "";
   const a = d1 instanceof Date ? d1 : new Date(d1);
   const b = d2 instanceof Date ? d2 : new Date(d2);
   return `${dayKey(a)} au ${dayKey(b)}`;
 }
-
 function parseISOInput(v) {
   if (!v) return null;
   const [y, m, d] = v.split("-").map((x) => Number(x));
@@ -148,7 +151,6 @@ function parseISOInput(v) {
   dt.setHours(0, 0, 0, 0);
   return dt;
 }
-
 function computeDayTotal(segments) {
   const rows = (segments || [])
     .map((s) => ({
@@ -169,7 +171,6 @@ function computeDayTotal(segments) {
   }
   return { totalHours: round2(msToHours(totalMs)) };
 }
-
 function build14Days(sundayStart) {
   const days = [];
   for (let i = 0; i < 14; i++) {
@@ -183,7 +184,6 @@ function build14Days(sundayStart) {
   }
   return days;
 }
-
 async function mapLimit(items, limit, fn) {
   const list = items || [];
   const out = new Array(list.length);
@@ -201,14 +201,12 @@ async function mapLimit(items, limit, fn) {
   await Promise.all(workers);
   return out;
 }
-
 function getEmpIdFromHash() {
   const raw = (window.location.hash || "").replace(/^#\//, "");
   const parts = raw.split("/");
   if (parts[0] !== "historique") return "";
   return parts[1] || "";
 }
-
 function getActorDisplayName(user, employes = []) {
   const uid = String(user?.uid || "");
   const emailLower = String(user?.email || "").trim().toLowerCase();
@@ -292,6 +290,9 @@ function payBlockLabelFromKey(payKey) {
 
 /* ---------------------- Modal ---------------------- */
 function Modal({ title, onClose, children, width = 980 }) {
+  const winW = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const isPhone = winW <= 640;
+
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose?.();
@@ -316,7 +317,8 @@ function Modal({ title, onClose, children, width = 980 }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 14,
+        padding: isPhone ? 10 : 14,
+        boxSizing: "border-box",
       }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose?.();
@@ -339,7 +341,7 @@ function Modal({ title, onClose, children, width = 980 }) {
             top: 0,
             background: "#fff",
             borderBottom: "1px solid #e2e8f0",
-            padding: "12px 14px",
+            padding: isPhone ? "10px 12px" : "12px 14px",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
@@ -347,7 +349,16 @@ function Modal({ title, onClose, children, width = 980 }) {
             zIndex: 1,
           }}
         >
-          <div style={{ fontWeight: 1000, fontSize: 16 }}>{title}</div>
+          <div
+            style={{
+              fontWeight: 1000,
+              fontSize: isPhone ? 14 : 16,
+              lineHeight: 1.15,
+              wordBreak: "break-word",
+            }}
+          >
+            {title}
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -355,16 +366,18 @@ function Modal({ title, onClose, children, width = 980 }) {
               border: "1px solid #e2e8f0",
               background: "#f8fafc",
               borderRadius: 12,
-              padding: "8px 10px",
+              padding: isPhone ? "7px 8px" : "8px 10px",
               fontWeight: 900,
               cursor: "pointer",
+              fontSize: isPhone ? 12 : 13,
+              flexShrink: 0,
             }}
           >
             ✕ Fermer
           </button>
         </div>
 
-        <div style={{ padding: 14 }}>{children}</div>
+        <div style={{ padding: isPhone ? 12 : 14 }}>{children}</div>
       </div>
     </div>,
     document.body
@@ -372,52 +385,35 @@ function Modal({ title, onClose, children, width = 980 }) {
 }
 
 /* ---------------------- Styles ---------------------- */
-const btnAccueil = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 14px",
-  borderRadius: 14,
-  border: "1px solid #eab308",
-  background: "#facc15",
-  color: "#111827",
-  textDecoration: "none",
-  fontWeight: 900,
-  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
-};
-const smallInput = {
+function btnAccueilStyle(isPhone = false) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: isPhone ? 6 : 8,
+    padding: isPhone ? "8px 10px" : "10px 14px",
+    borderRadius: 14,
+    border: "1px solid #eab308",
+    background: "#facc15",
+    color: "#111827",
+    textDecoration: "none",
+    fontWeight: 900,
+    fontSize: isPhone ? 12 : 13,
+    boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+    maxWidth: "100%",
+    width: "fit-content",
+    whiteSpace: "nowrap",
+    boxSizing: "border-box",
+  };
+}
+const smallInputBase = {
   width: "100%",
   border: "1px solid #cbd5e1",
   borderRadius: 10,
   padding: "10px 12px",
   fontSize: 14,
   background: "#fff",
-};
-const navWrap = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  padding: "10px 12px",
-  border: "1px solid #e2e8f0",
-  borderRadius: 12,
-  background: "#f8fafc",
-  marginTop: 12,
-};
-const bigArrowBtn = {
-  border: "none",
-  background: "#0f172a",
-  color: "#fff",
-  width: 54,
-  height: 44,
-  borderRadius: 12,
-  fontSize: 26,
-  fontWeight: 1000,
-  cursor: "pointer",
-  lineHeight: 1,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
+  boxSizing: "border-box",
 };
 const table = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
 const th = {
@@ -496,12 +492,24 @@ const plusAdminBtn = {
   cursor: "pointer",
   flex: "0 0 auto",
 };
-
 const saveHintRow = {
   minHeight: 18,
   marginTop: 6,
   fontSize: 12,
   fontWeight: 900,
+};
+const mobileCard = {
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: 10,
+  background: "#fff",
+  display: "grid",
+  gap: 8,
+};
+const mobileStatGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
 };
 
 function normalizeRoleFromDoc(emp) {
@@ -521,6 +529,10 @@ function normalizeRoleFromDoc(emp) {
 
 /* ---------------------- Top bar ---------------------- */
 function TopBar({ title, rightSlot = null, flashTitle = false }) {
+  const width = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const isPhone = width <= 640;
+  const isTablet = width <= 900;
+
   const titleStyle = flashTitle
     ? {
         padding: "6px 14px",
@@ -532,18 +544,65 @@ function TopBar({ title, rightSlot = null, flashTitle = false }) {
       }
     : null;
 
+  if (isPhone) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "flex-start" }}>
+          <a href="#/" style={btnAccueilStyle(true)} title="Retour à l'accueil">
+            ⬅ Accueil
+          </a>
+        </div>
+
+        <h1
+          style={{
+            margin: 0,
+            fontSize: "clamp(24px, 7vw, 32px)",
+            lineHeight: 1.1,
+            fontWeight: 900,
+            textAlign: "center",
+            wordBreak: "break-word",
+            ...(titleStyle || {}),
+          }}
+        >
+          {title}
+        </h1>
+
+        {rightSlot ? <div>{rightSlot}</div> : null}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "1fr auto 1fr",
+        position: "relative",
+        display: "flex",
         alignItems: "center",
+        justifyContent: "center",
+        minHeight: 54,
         marginBottom: 16,
-        gap: 10,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "flex-start" }}>
-        <a href="#/" style={btnAccueil} title="Retour à l'accueil">
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: "50%",
+          transform: "translateY(-50%)",
+          maxWidth: isTablet ? 170 : 220,
+          width: "100%",
+          display: "flex",
+          justifyContent: "flex-start",
+        }}
+      >
+        <a href="#/" style={btnAccueilStyle(false)} title="Retour à l'accueil">
           ⬅ Accueil
         </a>
       </div>
@@ -551,27 +610,39 @@ function TopBar({ title, rightSlot = null, flashTitle = false }) {
       <h1
         style={{
           margin: 0,
-          fontSize: 32,
+          fontSize: isTablet ? 28 : 32,
           lineHeight: 1.15,
           fontWeight: 900,
           textAlign: "center",
-          whiteSpace: "nowrap",
+          width: "100%",
+          paddingLeft: isTablet ? 150 : 210,
+          paddingRight: isTablet ? 150 : 210,
+          boxSizing: "border-box",
+          wordBreak: "break-word",
           ...(titleStyle || {}),
         }}
       >
         {title}
       </h1>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        {rightSlot}
-      </div>
+      {rightSlot ? (
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "50%",
+            transform: "translateY(-50%)",
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 10,
+            maxWidth: isTablet ? 280 : 360,
+            width: "100%",
+          }}
+        >
+          {rightSlot}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -582,6 +653,56 @@ export default function HistoriqueEmploye({
   isRH: isRHProp = false,
   meEmpId = "",
 }) {
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
+
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth || 1200);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const isPhone = windowWidth <= 640;
+  const isTablet = windowWidth <= 900;
+  const isCompact = windowWidth <= 1100;
+
+  const smallInput = {
+    ...smallInputBase,
+    fontSize: isPhone ? 13 : 14,
+    padding: isPhone ? "10px 10px" : "10px 12px",
+  };
+
+  const navWrap = {
+    display: "flex",
+    flexDirection: isPhone ? "column" : "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    padding: isPhone ? "10px" : "10px 12px",
+    border: "1px solid #e2e8f0",
+    borderRadius: 12,
+    background: "#f8fafc",
+    marginTop: 12,
+  };
+
+  const bigArrowBtn = {
+    border: "none",
+    background: "#0f172a",
+    color: "#fff",
+    width: isPhone ? "100%" : 54,
+    height: isPhone ? 40 : 44,
+    borderRadius: 12,
+    fontSize: isPhone ? 24 : 26,
+    fontWeight: 1000,
+    cursor: "pointer",
+    lineHeight: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxSizing: "border-box",
+  };
+
   const [error, setError] = useState(null);
 
   const [user, setUser] = useState(null);
@@ -881,7 +1002,6 @@ export default function HistoriqueEmploye({
           note,
           updatedAt: serverTimestamp(),
           updatedBy: user?.email || "",
-
           targetEmpId: empId,
           targetEmailLower: String(
             employes.find((e) => e.id === empId)?.emailLower ||
@@ -1338,7 +1458,7 @@ export default function HistoriqueEmploye({
     };
   }, [isPrivileged, unlocked, payBlockKey, employes]);
 
-  /* ===================== ✅ ALERTES RH SUR RÉPONSES (employé OU admin dans jaune) ===================== */
+  /* ===================== ✅ ALERTES RH SUR RÉPONSES ===================== */
   const [allRepliesByDoc, setAllRepliesByDoc] = useState({});
   useEffect(() => {
     if (!isPrivileged || !unlocked) return;
@@ -1746,125 +1866,6 @@ export default function HistoriqueEmploye({
     );
   };
 
-  /* ===================== Guards screens ===================== */
-  if (!isPrivileged && !pwUnlocked) {
-    return (
-      <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-        <TopBar
-          title="🔒 Mes heures"
-          rightSlot={
-            <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-              Connecté: <strong>{user?.email || "—"}</strong>
-            </div>
-          }
-        />
-
-        <PageContainer>
-          <Card>
-            <div style={{ fontWeight: 1000, marginBottom: 8 }}>
-              Pour ouvrir cette page, retape ton mot de passe.
-            </div>
-
-            {pwErr && (
-              <div
-                style={{
-                  background: "#fdecea",
-                  color: "#7f1d1d",
-                  border: "1px solid #f5c6cb",
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  marginBottom: 12,
-                  fontSize: 14,
-                  fontWeight: 800,
-                }}
-              >
-                {pwErr}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>
-                  Mot de passe
-                </div>
-                <input
-                  type="password"
-                  value={pwInput}
-                  onChange={(e) => setPwInput(e.target.value)}
-                  style={smallInput}
-                  disabled={pwBusy}
-                  autoComplete="current-password"
-                  onKeyDown={(e) => e.key === "Enter" && tryPasswordUnlock()}
-                />
-              </div>
-
-              <Button onClick={tryPasswordUnlock} disabled={pwBusy} variant="primary">
-                {pwBusy ? "Vérification…" : "Déverrouiller"}
-              </Button>
-            </div>
-          </Card>
-        </PageContainer>
-      </div>
-    );
-  }
-
-  if (requiresHistoryCode && !unlocked) {
-    return (
-      <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-        <TopBar
-          title={`🔒 Historique — Code requis`}
-          rightSlot={
-            <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-              Connecté: <strong>{user?.email || "—"}</strong> — {isRH ? "RH" : "Admin"}
-            </div>
-          }
-        />
-
-        <PageContainer>
-          <Card>
-            {codeErr && (
-              <div
-                style={{
-                  background: "#fdecea",
-                  color: "#7f1d1d",
-                  border: "1px solid #f5c6cb",
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  marginBottom: 12,
-                  fontSize: 14,
-                  fontWeight: 800,
-                }}
-              >
-                {codeErr}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>
-                  Code
-                </div>
-                <input
-                  type="password"
-                  value={codeInput}
-                  onChange={(e) => setCodeInput(e.target.value)}
-                  style={smallInput}
-                  disabled={codeLoading}
-                  onKeyDown={(e) => e.key === "Enter" && tryUnlock()}
-                />
-              </div>
-
-              <Button onClick={tryUnlock} disabled={codeLoading} variant="primary">
-                {codeLoading ? "Chargement…" : "Déverrouiller"}
-              </Button>
-            </div>
-          </Card>
-        </PageContainer>
-      </div>
-    );
-  }
-
-  /* ===================== Render helpers ===================== */
   const renderWeekTable = (rows, totalHours) => (
     <div style={{ overflowX: "auto" }}>
       <table style={table}>
@@ -1894,8 +1895,48 @@ export default function HistoriqueEmploye({
     </div>
   );
 
+  const renderWeekCardsMobile = (rows, totalHours) => (
+    <div style={{ display: "grid", gap: 8 }}>
+      {(rows || []).map((r) => (
+        <div key={r.key} style={mobileCard}>
+          <div style={{ fontWeight: 1000, fontSize: 14 }}>{r.weekday}</div>
+          <div style={mobileStatGrid}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 900, color: "#64748b" }}>Date</div>
+              <div style={{ fontSize: 13, fontWeight: 900 }}>{r.dateStr}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 900, color: "#64748b" }}>Heures</div>
+              <div style={{ fontSize: 13, fontWeight: 900 }}>{fmtHoursComma(r.totalHours || 0)}</div>
+            </div>
+          </div>
+        </div>
+      ))}
+      <div
+        style={{
+          ...mobileCard,
+          background: "#dbeafe",
+          borderColor: "#93c5fd",
+        }}
+      >
+        <div style={{ fontWeight: 1000, fontSize: 14 }}>Total</div>
+        <div style={{ fontSize: 16, fontWeight: 1000 }}>{fmtHoursComma(totalHours || 0)} h</div>
+      </div>
+    </div>
+  );
+
   const rightSlot = (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: isPhone ? "stretch" : "flex-end",
+        gap: 10,
+        flexWrap: "wrap",
+        flexDirection: isPhone ? "column" : "row",
+        width: isPhone ? "100%" : "auto",
+      }}
+    >
       {(isAdmin || isRH) ? (
         <PPDownloadButton
           isAdmin={isAdmin}
@@ -1909,7 +1950,14 @@ export default function HistoriqueEmploye({
 
       <button
         type="button"
-        style={btnFeuilleDepenses}
+        style={{
+          ...btnFeuilleDepenses,
+          width: isPhone ? "100%" : "auto",
+          justifyContent: "center",
+          fontSize: isPhone ? 12 : 13,
+          padding: isPhone ? "10px 12px" : "10px 14px",
+          boxSizing: "border-box",
+        }}
         onClick={() => {
           window.location.hash = "#/feuille-depenses";
         }}
@@ -1918,9 +1966,16 @@ export default function HistoriqueEmploye({
         🧾 Feuille dépenses
       </button>
 
-      <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-        Connecté: <strong>{user?.email || "—"}</strong>{" "}
-        {isRH ? "— RH" : isAdmin ? "— Admin" : ""}
+      <div
+        style={{
+          fontSize: 12,
+          color: "#6b7280",
+          whiteSpace: isPhone ? "normal" : "nowrap",
+          textAlign: isPhone ? "center" : "right",
+          width: isPhone ? "100%" : "auto",
+        }}
+      >
+        {isRH ? "RH" : isAdmin ? "Admin" : ""}
       </div>
     </div>
   );
@@ -1931,8 +1986,26 @@ export default function HistoriqueEmploye({
         ‹
       </button>
 
-      <div style={{ display: "grid", gap: 8, textAlign: "center", justifyItems: "center" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div
+        style={{
+          display: "grid",
+          gap: 8,
+          textAlign: "center",
+          justifyItems: "center",
+          width: "100%",
+          minWidth: 0,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            justifyContent: "center",
+            width: "100%",
+          }}
+        >
           <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>PP</div>
 
           <select
@@ -1945,11 +2018,14 @@ export default function HistoriqueEmploye({
             style={{
               border: "1px solid #cbd5e1",
               borderRadius: 12,
-              padding: "8px 12px",
+              padding: isPhone ? "8px 10px" : "8px 12px",
               fontWeight: 1000,
               background: "#fff",
-              maxWidth: 360,
-              fontSize: 16,
+              maxWidth: isPhone ? "100%" : 360,
+              width: isPhone ? "100%" : "auto",
+              fontSize: isPhone ? 14 : 16,
+              minWidth: 0,
+              boxSizing: "border-box",
             }}
             title="Choisir un PP (recommence chaque année)"
           >
@@ -1987,13 +2063,147 @@ export default function HistoriqueEmploye({
     </div>
   );
 
+  /* ===================== Guards screens ===================== */
+  if (!isPrivileged && !pwUnlocked) {
+    return (
+      <div style={{ padding: isPhone ? 12 : 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+        <TopBar title="🔒 Mes heures" />
+
+        <PageContainer>
+          <Card>
+            <div style={{ fontWeight: 1000, marginBottom: 8, fontSize: isPhone ? 14 : 16 }}>
+              Pour ouvrir cette page, retape ton mot de passe.
+            </div>
+
+            {pwErr && (
+              <div
+                style={{
+                  background: "#fdecea",
+                  color: "#7f1d1d",
+                  border: "1px solid #f5c6cb",
+                  padding: isPhone ? "9px 10px" : "10px 14px",
+                  borderRadius: 10,
+                  marginBottom: 12,
+                  fontSize: isPhone ? 12 : 14,
+                  fontWeight: 800,
+                }}
+              >
+                {pwErr}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                alignItems: "end",
+                flexDirection: isPhone ? "column" : "row",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0, width: isPhone ? "100%" : "auto" }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>
+                  Mot de passe
+                </div>
+                <input
+                  type="password"
+                  value={pwInput}
+                  onChange={(e) => setPwInput(e.target.value)}
+                  style={smallInput}
+                  disabled={pwBusy}
+                  autoComplete="current-password"
+                  onKeyDown={(e) => e.key === "Enter" && tryPasswordUnlock()}
+                />
+              </div>
+
+              <div style={{ width: isPhone ? "100%" : "auto" }}>
+                <Button
+                  onClick={tryPasswordUnlock}
+                  disabled={pwBusy}
+                  variant="primary"
+                  style={isPhone ? { width: "100%" } : undefined}
+                >
+                  {pwBusy ? "Vérification…" : "Déverrouiller"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </PageContainer>
+      </div>
+    );
+  }
+
+  if (requiresHistoryCode && !unlocked) {
+    return (
+      <div style={{ padding: isPhone ? 12 : 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+        <TopBar title={`🔒 Historique — Code requis`} />
+
+        <PageContainer>
+          <Card>
+            {codeErr && (
+              <div
+                style={{
+                  background: "#fdecea",
+                  color: "#7f1d1d",
+                  border: "1px solid #f5c6cb",
+                  padding: isPhone ? "9px 10px" : "10px 14px",
+                  borderRadius: 10,
+                  marginBottom: 12,
+                  fontSize: isPhone ? 12 : 14,
+                  fontWeight: 800,
+                }}
+              >
+                {codeErr}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                alignItems: "end",
+                flexDirection: isPhone ? "column" : "row",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0, width: isPhone ? "100%" : "auto" }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>
+                  Code
+                </div>
+                <input
+                  type="password"
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value)}
+                  style={smallInput}
+                  disabled={codeLoading}
+                  onKeyDown={(e) => e.key === "Enter" && tryUnlock()}
+                />
+              </div>
+
+              <div style={{ width: isPhone ? "100%" : "auto" }}>
+                <Button
+                  onClick={tryUnlock}
+                  disabled={codeLoading}
+                  variant="primary"
+                  style={isPhone ? { width: "100%" } : undefined}
+                >
+                  {codeLoading ? "Chargement…" : "Déverrouiller"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </PageContainer>
+      </div>
+    );
+  }
+
   /* ===================== NON-PRIVILEGED VIEW ===================== */
   if (!isPrivileged) {
     const rs = myReplyStatusText;
     const rst = myReplyStatusObj;
 
     return (
-      <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+      <div style={{ padding: isPhone ? 12 : 20, fontFamily: "Arial, system-ui, -apple-system" }}>
         <style>{`
           @keyframes histAdminTitleBlink {
             0%   { background: #ffffff; color: #0f172a; }
@@ -2011,10 +2221,10 @@ export default function HistoriqueEmploye({
                 background: "#fdecea",
                 color: "#7f1d1d",
                 border: "1px solid #f5c6cb",
-                padding: "10px 14px",
+                padding: isPhone ? "9px 10px" : "10px 14px",
                 borderRadius: 12,
                 marginBottom: 14,
-                fontSize: 14,
+                fontSize: isPhone ? 12 : 14,
                 fontWeight: 800,
               }}
             >
@@ -2028,7 +2238,7 @@ export default function HistoriqueEmploye({
             <Card>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <div>
-                  <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
+                  <div style={{ fontWeight: 1000, fontSize: isPhone ? 15 : 16, color: "#b91c1c" }}>
                     🚨 Alertes — notes non vues
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
@@ -2043,7 +2253,7 @@ export default function HistoriqueEmploye({
                   <button
                     key={b.blockKey}
                     type="button"
-                    style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7" }}
+                    style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7", fontSize: isPhone ? 12 : 13 }}
                     title={payBlockLabelFromKey(b.blockKey)}
                     onClick={() => {
                       const dt = parseISOInput(b.blockKey);
@@ -2068,8 +2278,12 @@ export default function HistoriqueEmploye({
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 1000, fontSize: 16 }}>{myEmpObj?.nom || "Moi"}</div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{user?.email || ""}</div>
+                  <div style={{ fontWeight: 1000, fontSize: isPhone ? 15 : 16 }}>
+                    {myEmpObj?.nom || "Moi"}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b", wordBreak: "break-word" }}>
+                    {user?.email || ""}
+                  </div>
                 </div>
 
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -2089,22 +2303,30 @@ export default function HistoriqueEmploye({
 
               <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
                 <div>
-                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1 — {week1Label}</div>
+                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>
+                    Semaine 1 — {week1Label}
+                  </div>
                   {myLoading ? (
                     <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
                   ) : myErr ? (
                     <div style={{ fontWeight: 900, color: "#b91c1c" }}>{myErr}</div>
+                  ) : isPhone ? (
+                    renderWeekCardsMobile(myWeek1, myTotalWeek1)
                   ) : (
                     renderWeekTable(myWeek1, myTotalWeek1)
                   )}
                 </div>
 
                 <div>
-                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 2 — {week2Label}</div>
+                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>
+                    Semaine 2 — {week2Label}
+                  </div>
                   {myLoading ? (
                     <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
                   ) : myErr ? (
                     <div style={{ fontWeight: 900, color: "#b91c1c" }}>{myErr}</div>
+                  ) : isPhone ? (
+                    renderWeekCardsMobile(myWeek2, myTotalWeek2)
                   ) : (
                     renderWeekTable(myWeek2, myTotalWeek2)
                   )}
@@ -2121,6 +2343,7 @@ export default function HistoriqueEmploye({
                         padding: "10px 12px",
                         whiteSpace: "pre-wrap",
                         fontSize: 13,
+                        wordBreak: "break-word",
                       }}
                     >
                       {myNote || "—"}
@@ -2185,8 +2408,9 @@ export default function HistoriqueEmploye({
                           background: "#fffde7",
                           borderRadius: 12,
                           padding: "10px 12px",
-                          fontSize: 13,
+                          fontSize: isPhone ? 13 : 13,
                           resize: "vertical",
+                          boxSizing: "border-box",
                         }}
                       />
 
@@ -2200,6 +2424,7 @@ export default function HistoriqueEmploye({
                             fontWeight: 1000,
                             fontSize: 13,
                             lineHeight: 1.25,
+                            wordBreak: "break-word",
                           }}
                         >
                           {myAdminReplyLikeText}
@@ -2237,7 +2462,7 @@ export default function HistoriqueEmploye({
 
   /* ===================== PRIVILEGED VIEW (ADMIN / RH) ===================== */
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
+    <div style={{ padding: isPhone ? 12 : 20, fontFamily: "Arial, system-ui, -apple-system" }}>
       <style>{`
         @keyframes histAdminTitleBlink {
           0%   { background: #ffffff; color: #0f172a; }
@@ -2259,10 +2484,10 @@ export default function HistoriqueEmploye({
               background: "#fdecea",
               color: "#7f1d1d",
               border: "1px solid #f5c6cb",
-              padding: "10px 14px",
+              padding: isPhone ? "9px 10px" : "10px 14px",
               borderRadius: 12,
               marginBottom: 14,
-              fontSize: 14,
+              fontSize: isPhone ? 12 : 14,
               fontWeight: 800,
             }}
           >
@@ -2278,7 +2503,7 @@ export default function HistoriqueEmploye({
               <Card>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                   <div>
-                    <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
+                    <div style={{ fontWeight: 1000, fontSize: isPhone ? 15 : 16, color: "#b91c1c" }}>
                       🚨 Mes notes RH non vues
                     </div>
                     <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
@@ -2293,7 +2518,7 @@ export default function HistoriqueEmploye({
                     <button
                       key={b.blockKey}
                       type="button"
-                      style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7" }}
+                      style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7", fontSize: isPhone ? 12 : 13 }}
                       title={payBlockLabelFromKey(b.blockKey)}
                       onClick={() => {
                         const dt = parseISOInput(b.blockKey);
@@ -2311,8 +2536,8 @@ export default function HistoriqueEmploye({
               <div style={{ display: "grid", gap: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                   <div>
-                    <div style={{ fontWeight: 1000, fontSize: 18 }}>Mon échange RH</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
+                    <div style={{ fontWeight: 1000, fontSize: isPhone ? 16 : 18 }}>Mon échange RH</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b", wordBreak: "break-word" }}>
                       {myEmpObj?.nom || "Moi"} — {user?.email || ""}
                     </div>
                   </div>
@@ -2338,6 +2563,7 @@ export default function HistoriqueEmploye({
                       padding: "10px 12px",
                       whiteSpace: "pre-wrap",
                       fontSize: 13,
+                      wordBreak: "break-word",
                     }}
                   >
                     {myNote || "—"}
@@ -2404,6 +2630,7 @@ export default function HistoriqueEmploye({
                         padding: "10px 12px",
                         fontSize: 13,
                         resize: "vertical",
+                        boxSizing: "border-box",
                       }}
                     />
 
@@ -2417,6 +2644,7 @@ export default function HistoriqueEmploye({
                           fontWeight: 1000,
                           fontSize: 13,
                           lineHeight: 1.25,
+                          wordBreak: "break-word",
                         }}
                       >
                         {myAdminReplyLikeText}
@@ -2452,7 +2680,7 @@ export default function HistoriqueEmploye({
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 1000, fontSize: 16, color: "#b91c1c" }}>
+                <div style={{ fontWeight: 1000, fontSize: isPhone ? 15 : 16, color: "#b91c1c" }}>
                   🚨 Alertes — réponses non vues
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
@@ -2468,7 +2696,7 @@ export default function HistoriqueEmploye({
                 <button
                   key={b.blockKey}
                   type="button"
-                  style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7" }}
+                  style={{ ...linkBtn, border: "2px solid #ef4444", background: "#fff7f7", fontSize: isPhone ? 12 : 13 }}
                   title={payBlockLabelFromKey(b.blockKey)}
                   onClick={() => {
                     const dt = parseISOInput(b.blockKey);
@@ -2486,7 +2714,7 @@ export default function HistoriqueEmploye({
           <Card>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 1000, fontSize: 24 }}>Heures des employés</div>
+                <div style={{ fontWeight: 1000, fontSize: isPhone ? 20 : 24 }}>Heures des employés</div>
               </div>
 
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -2561,7 +2789,7 @@ export default function HistoriqueEmploye({
 
                       return (
                         <tr key={r.id}>
-                          <td style={tdLeft}>
+                          <td style={{ ...tdLeft, whiteSpace: "normal" }}>
                             <a
                               href={`#/historique/${r.id}`}
                               style={{
@@ -2570,6 +2798,7 @@ export default function HistoriqueEmploye({
                                 color: "#0f172a",
                                 textDecoration: "underline",
                                 textUnderlineOffset: 3,
+                                wordBreak: "break-word",
                               }}
                               onClick={(e) => {
                                 e.preventDefault();
@@ -2578,16 +2807,18 @@ export default function HistoriqueEmploye({
                             >
                               {r.nom}
                             </a>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{r.email || ""}</div>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b", wordBreak: "break-word" }}>
+                              {r.email || ""}
+                            </div>
 
                             {isRH && globalUnseenForEmp ? (
-                              <div style={{ marginTop: 6 }}>
+                              <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 <span style={pill("#fff7f7", "#ef4444", "#b91c1c")}>
                                   Alerte: {payBlockLabelFromKey(globalUnseenForEmp.blockKey)}
                                 </span>
                                 <button
                                   type="button"
-                                  style={{ ...linkBtn, marginLeft: 8, border: "1px solid #ef4444" }}
+                                  style={{ ...linkBtn, border: "1px solid #ef4444" }}
                                   onClick={() => {
                                     const dt = parseISOInput(globalUnseenForEmp.blockKey);
                                     if (dt) setAnchorDate(dt);
@@ -2603,9 +2834,9 @@ export default function HistoriqueEmploye({
                           <td style={td}>{fmtHoursComma(r.week2)}</td>
                           <td style={totalCell}>{fmtHoursComma(r.total)}</td>
 
-                          <td style={{ ...td, whiteSpace: "normal", textAlign: "left" }}>
-                            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "nowrap" }}>
-                              <div style={{ flex: 1, minWidth: 260 }}>
+                          <td style={{ ...td, whiteSpace: "normal", textAlign: "left", minWidth: isPhone ? 240 : 320 }}>
+                            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+                              <div style={{ flex: 1, minWidth: isPhone ? 180 : 260 }}>
                                 {canWriteNotes ? (
                                   <>
                                     <textarea
@@ -2625,6 +2856,7 @@ export default function HistoriqueEmploye({
                                         padding: "8px 10px",
                                         fontSize: 13,
                                         resize: "vertical",
+                                        boxSizing: "border-box",
                                       }}
                                     />
                                     <div
@@ -2647,6 +2879,7 @@ export default function HistoriqueEmploye({
                                       background: "#f8fafc",
                                       minHeight: 54,
                                       whiteSpace: "pre-wrap",
+                                      wordBreak: "break-word",
                                     }}
                                   >
                                     {getDraft(r.id) || "—"}
@@ -2664,8 +2897,8 @@ export default function HistoriqueEmploye({
 
                               {(hasReply || hasAdminReply) ? (
                                 <div style={{ display: "grid", gap: 6, alignItems: "start" }}>
-                                  <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
-                                    {renderReplyBubbleContent(r.id, 360)}
+                                  <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
+                                    {renderReplyBubbleContent(r.id, isPhone ? 280 : 360)}
 
                                     {isAdmin ? (
                                       <button
@@ -2792,8 +3025,10 @@ export default function HistoriqueEmploye({
 
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <div>
-                  <div style={{ fontWeight: 1000, fontSize: 16 }}>{detailEmp?.nom || "(sans nom)"}</div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>{detailEmp?.email || ""}</div>
+                  <div style={{ fontWeight: 1000, fontSize: isPhone ? 15 : 16 }}>{detailEmp?.nom || "(sans nom)"}</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b", wordBreak: "break-word" }}>
+                    {detailEmp?.email || ""}
+                  </div>
                 </div>
 
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -2858,7 +3093,9 @@ export default function HistoriqueEmploye({
                             padding: "10px 12px",
                             fontWeight: 900,
                             textAlign: "right",
-                            width: 160,
+                            width: isPhone ? "100%" : 160,
+                            maxWidth: "100%",
+                            boxSizing: "border-box",
                           }}
                           disabled={!isAdmin}
                         />
@@ -2882,15 +3119,28 @@ export default function HistoriqueEmploye({
                             padding: "10px 12px",
                             fontWeight: 1000,
                             textAlign: "center",
-                            width: 140,
+                            width: isPhone ? "100%" : 140,
                             background: isAdmin || isRH ? "#fff" : "#f1f5f9",
                             cursor: isAdmin || isRH ? "pointer" : "not-allowed",
                             fontSize: 18,
+                            boxSizing: "border-box",
                           }}
                         >
                           {getSickDaysRemaining(detailEmp)}
                         </button>
                       </div>
+
+                      {isAdmin ? (
+                        <div style={{ width: isPhone ? "100%" : "auto" }}>
+                          <Button
+                            variant="primary"
+                            onClick={() => saveRateAndSickDays(detailEmpId)}
+                            style={isPhone ? { width: "100%" } : undefined}
+                          >
+                            Sauvegarder le taux
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -2902,6 +3152,8 @@ export default function HistoriqueEmploye({
                     <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 1 — {week1Label}</div>
                     {detailLoading ? (
                       <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
+                    ) : isPhone ? (
+                      renderWeekCardsMobile(detailWeek1, detailTotalWeek1)
                     ) : (
                       renderWeekTable(detailWeek1, detailTotalWeek1)
                     )}
@@ -2911,6 +3163,8 @@ export default function HistoriqueEmploye({
                     <div style={{ fontWeight: 1000, marginBottom: 6 }}>Semaine 2 — {week2Label}</div>
                     {detailLoading ? (
                       <div style={{ fontWeight: 900, color: "#64748b" }}>Chargement…</div>
+                    ) : isPhone ? (
+                      renderWeekCardsMobile(detailWeek2, detailTotalWeek2)
                     ) : (
                       renderWeekTable(detailWeek2, detailTotalWeek2)
                     )}
@@ -2937,6 +3191,7 @@ export default function HistoriqueEmploye({
                           padding: "10px 12px",
                           fontSize: 13,
                           resize: "vertical",
+                          boxSizing: "border-box",
                         }}
                       />
                     ) : (
@@ -2950,6 +3205,8 @@ export default function HistoriqueEmploye({
                           background: "#f8fafc",
                           minHeight: 120,
                           whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                          boxSizing: "border-box",
                         }}
                       >
                         {getDraft(detailEmpId) || "—"}
@@ -2971,11 +3228,11 @@ export default function HistoriqueEmploye({
                     })()}
 
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-                      <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b", wordBreak: "break-word" }}>
                         Bloc: {getPPFromPayBlockStart(payPeriodStart).pp} • {payBlockLabel} • Clé: {payBlockKey}
                       </div>
 
-                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", width: isPhone ? "100%" : "auto" }}>
                         <div
                           style={{
                             ...saveHintRow,
@@ -2991,21 +3248,24 @@ export default function HistoriqueEmploye({
                         </div>
 
                         {canWriteNotes ? (
-                          <Button
-                            variant="primary"
-                            onClick={() => saveNoteForEmp(detailEmpId)}
-                            disabled={!!noteStatus?.[detailEmpId]?.saving}
-                          >
-                            {noteStatus?.[detailEmpId]?.saving ? "Sauvegarde…" : "Sauvegarder"}
-                          </Button>
+                          <div style={{ width: isPhone ? "100%" : "auto" }}>
+                            <Button
+                              variant="primary"
+                              onClick={() => saveNoteForEmp(detailEmpId)}
+                              disabled={!!noteStatus?.[detailEmpId]?.saving}
+                              style={isPhone ? { width: "100%" } : undefined}
+                            >
+                              {noteStatus?.[detailEmpId]?.saving ? "Sauvegarde…" : "Sauvegarder"}
+                            </Button>
+                          </div>
                         ) : null}
                       </div>
                     </div>
 
                     {(String(repliesFS?.[detailEmpId] || "").trim() || getAdminReplyLikeText(detailEmpId)) ? (
                       <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
-                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                          {renderReplyBubbleContent(detailEmpId, 600)}
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+                          {renderReplyBubbleContent(detailEmpId, isPhone ? 320 : 600)}
 
                           {isAdmin ? (
                             <button
@@ -3112,7 +3372,7 @@ export default function HistoriqueEmploye({
               return (
                 <div style={{ display: "grid", gap: 14 }}>
                   <div>
-                    <div style={{ fontWeight: 1000, fontSize: 16 }}>
+                    <div style={{ fontWeight: 1000, fontSize: isPhone ? 15 : 16 }}>
                       {emp?.nom || "Employé"}
                     </div>
                     <div style={{ fontSize: 13, color: "#64748b", fontWeight: 800 }}>
@@ -3141,7 +3401,7 @@ export default function HistoriqueEmploye({
                       background: "#f8fafc",
                       padding: "18px 14px",
                       textAlign: "center",
-                      fontSize: 34,
+                      fontSize: isPhone ? 28 : 34,
                       fontWeight: 1000,
                       color: "#0f172a",
                     }}
@@ -3149,26 +3409,32 @@ export default function HistoriqueEmploye({
                     {restants}
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button
-                      variant="primary"
-                      onClick={async () => {
-                        await adjustSickDays(sickModal.empId, +1);
-                      }}
-                      disabled={restants >= 2}
-                    >
-                      Ajouter une journée
-                    </Button>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", flexDirection: isPhone ? "column" : "row" }}>
+                    <div style={{ width: isPhone ? "100%" : "auto" }}>
+                      <Button
+                        variant="primary"
+                        onClick={async () => {
+                          await adjustSickDays(sickModal.empId, +1);
+                        }}
+                        disabled={restants >= 2}
+                        style={isPhone ? { width: "100%" } : undefined}
+                      >
+                        Ajouter une journée
+                      </Button>
+                    </div>
 
-                    <Button
-                      variant="danger"
-                      onClick={async () => {
-                        await adjustSickDays(sickModal.empId, -1);
-                      }}
-                      disabled={restants <= 0}
-                    >
-                      Enlever une journée
-                    </Button>
+                    <div style={{ width: isPhone ? "100%" : "auto" }}>
+                      <Button
+                        variant="danger"
+                        onClick={async () => {
+                          await adjustSickDays(sickModal.empId, -1);
+                        }}
+                        disabled={restants <= 0}
+                        style={isPhone ? { width: "100%" } : undefined}
+                      >
+                        Enlever une journée
+                      </Button>
+                    </div>
                   </div>
                 </div>
               );
@@ -3192,6 +3458,7 @@ export default function HistoriqueEmploye({
                   fontSize: 13,
                   fontWeight: 900,
                   color: "#64748b",
+                  lineHeight: 1.4,
                 }}
               >
                 Ce message sera affiché dans la case jaune en gras avec la signature :{" "}
@@ -3212,6 +3479,7 @@ export default function HistoriqueEmploye({
                   padding: "10px 12px",
                   fontSize: 14,
                   resize: "vertical",
+                  boxSizing: "border-box",
                 }}
               />
 
@@ -3228,7 +3496,7 @@ export default function HistoriqueEmploye({
                 </div>
 
                 {String(adminReplyModal.draft || "").trim() ? (
-                  <div style={{ whiteSpace: "pre-wrap", fontWeight: 1000, lineHeight: 1.25 }}>
+                  <div style={{ whiteSpace: "pre-wrap", fontWeight: 1000, lineHeight: 1.25, wordBreak: "break-word" }}>
                     {String(adminReplyModal.draft || "").trim()} — {actorDisplayName}
                   </div>
                 ) : (
@@ -3252,30 +3520,36 @@ export default function HistoriqueEmploye({
                 </div>
               ) : null}
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <Button
-                  variant="primary"
-                  onClick={async () => {
-                    await saveAdminReplyLikeForEmp(adminReplyModal.empId, adminReplyModal.draft);
-                    setAdminReplyModal({ open: false, empId: "", draft: "" });
-                  }}
-                  disabled={!!adminReplyLikeStatus?.[adminReplyModal.empId]?.saving}
-                >
-                  {adminReplyLikeStatus?.[adminReplyModal.empId]?.saving
-                    ? "Sauvegarde…"
-                    : "Sauvegarder"}
-                </Button>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", flexDirection: isPhone ? "column" : "row" }}>
+                <div style={{ width: isPhone ? "100%" : "auto" }}>
+                  <Button
+                    variant="primary"
+                    onClick={async () => {
+                      await saveAdminReplyLikeForEmp(adminReplyModal.empId, adminReplyModal.draft);
+                      setAdminReplyModal({ open: false, empId: "", draft: "" });
+                    }}
+                    disabled={!!adminReplyLikeStatus?.[adminReplyModal.empId]?.saving}
+                    style={isPhone ? { width: "100%" } : undefined}
+                  >
+                    {adminReplyLikeStatus?.[adminReplyModal.empId]?.saving
+                      ? "Sauvegarde…"
+                      : "Sauvegarder"}
+                  </Button>
+                </div>
 
-                <Button
-                  variant="danger"
-                  onClick={async () => {
-                    await saveAdminReplyLikeForEmp(adminReplyModal.empId, "");
-                    setAdminReplyModal({ open: false, empId: "", draft: "" });
-                  }}
-                  disabled={!!adminReplyLikeStatus?.[adminReplyModal.empId]?.saving}
-                >
-                  Enlever le message admin
-                </Button>
+                <div style={{ width: isPhone ? "100%" : "auto" }}>
+                  <Button
+                    variant="danger"
+                    onClick={async () => {
+                      await saveAdminReplyLikeForEmp(adminReplyModal.empId, "");
+                      setAdminReplyModal({ open: false, empId: "", draft: "" });
+                    }}
+                    disabled={!!adminReplyLikeStatus?.[adminReplyModal.empId]?.saving}
+                    style={isPhone ? { width: "100%" } : undefined}
+                  >
+                    Enlever le message admin
+                  </Button>
+                </div>
               </div>
             </div>
           </Modal>

@@ -1385,6 +1385,12 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #ffffff !important; }
           .no-print { display: none !important; }
         }
+
+        @media (max-width: 900px) {
+          .close-project-details-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
       `}</style>
 
       <div
@@ -1520,6 +1526,7 @@ export function CloseProjectWizard({ projet, open, onCancel, onClosed, startAtSu
                     }}
                   >
                     <div
+                      className="close-project-details-grid"
                       style={{
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",

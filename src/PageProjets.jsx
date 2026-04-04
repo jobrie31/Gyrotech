@@ -560,10 +560,12 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
           border: "1px solid #e5e7eb",
           width: "min(980px, 96vw)",
           maxHeight: "92vh",
-          overflow: "auto",
+          overflowY: "auto",
+          overflowX: "hidden",
           borderRadius: 18,
           padding: 18,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+          boxSizing: "border-box",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -1113,6 +1115,39 @@ function PopupDetailsProjetSimple({
     };
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevBodyPosition = document.body.style.position;
+    const prevBodyTop = document.body.style.top;
+    const prevBodyLeft = document.body.style.left;
+    const prevBodyRight = document.body.style.right;
+    const prevBodyWidth = document.body.style.width;
+
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+
+    return () => {
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+      document.body.style.position = prevBodyPosition;
+      document.body.style.top = prevBodyTop;
+      document.body.style.left = prevBodyLeft;
+      document.body.style.right = prevBodyRight;
+      document.body.style.width = prevBodyWidth;
+      window.scrollTo(0, scrollY);
+    };
+  }, [open]);
+
   const commitPatchDebounced = (patch) => {
     if (!projId) return;
     if (isFirstLoadRef.current) return;
@@ -1189,15 +1224,30 @@ function PopupDetailsProjetSimple({
         padding: 16,
       }}
     >
+      <style>{`
+        @media (max-width: 900px) {
+          .popup-projet-layout {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
+
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
           width: "min(980px, 96vw)",
+          maxHeight: "92vh",
+          overflowY: "auto",
+          overflowX: "hidden",
+          WebkitOverflowScrolling: "touch",
+          overscrollBehavior: "contain",
+          touchAction: "pan-y",
           borderRadius: 18,
           padding: 18,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+          boxSizing: "border-box",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -1211,7 +1261,10 @@ function PopupDetailsProjetSimple({
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 12, fontSize: 18 }}>
+        <div
+          className="popup-projet-layout"
+          style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 12, fontSize: 18 }}
+        >
           <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 14, padding: 14 }}>
             <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 20 }}>Informations</div>
 
@@ -1484,7 +1537,16 @@ function PopupDetailsProjetSimple({
 
               <button
                 onClick={() => onCloseBT?.(p)}
-                style={btnCloseBT}
+                style={{
+                  border: "1px solid #16a34a",
+                  background: "#dcfce7",
+                  color: "#166534",
+                  borderRadius: 12,
+                  padding: "8px 10px",
+                  cursor: "pointer",
+                  fontWeight: 1000,
+                  fontSize: 14,
+                }}
               >
                 Fermer le BT
               </button>
@@ -1889,7 +1951,27 @@ export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-          <button type="button" onClick={() => setClosedPopupOpen(true)} style={btnSecondary}>
+          <button
+            type="button"
+            onClick={() => setClosedPopupOpen(true)}
+            style={{
+              ...btnSecondary,
+              height: "clamp(34px, 5.6vw, 44px)",
+              padding: "0 clamp(6px, 0.9vw, 10px)",
+              fontSize: "clamp(10px, 1.45vw, 14px)",
+              fontWeight: 800,
+              minWidth: 0,
+              maxWidth: "100%",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              borderRadius: 12,
+              lineHeight: 1,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
             Projets fermés
           </button>
         </div>

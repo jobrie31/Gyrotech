@@ -1199,6 +1199,84 @@ export function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
   return (
     <div style={backdrop}>
       <div style={{ ...cardXL, width: "min(1050px, 96vw)" }} onClick={(e) => e.stopPropagation()}>
+        <style>{`
+          .closed-projects-wrap {
+            width: 100%;
+            min-width: 0;
+          }
+
+          .closed-projects-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            border: 1px solid #eee;
+            border-radius: 14px;
+            table-layout: fixed;
+            font-size: clamp(8px, 1.25vw, 18px);
+          }
+
+          .closed-projects-th {
+            text-align: center;
+            padding: clamp(3px, 0.55vw, 10px);
+            border-bottom: 1px solid #e0e0e0;
+            font-weight: 1000;
+            line-height: 1.05;
+            overflow-wrap: anywhere;
+          }
+
+          .closed-projects-td {
+            padding: clamp(3px, 0.55vw, 10px);
+            border-bottom: 1px solid #eee;
+            text-align: center;
+            line-height: 1.05;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            vertical-align: middle;
+          }
+
+          .closed-projects-td--date {
+            white-space: nowrap;
+          }
+
+          .closed-projects-actions {
+            display: flex;
+            gap: clamp(4px, 0.8vw, 10px);
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .closed-projects-btn-blue,
+          .closed-projects-btn-trash,
+          .closed-projects-btn-close {
+            font-size: clamp(6px, 0.95vw, 16px) !important;
+            padding: clamp(4px, 0.55vw, 10px) clamp(5px, 0.75vw, 14px) !important;
+            line-height: 1 !important;
+            border-radius: 12px !important;
+            white-space: nowrap !important;
+          }
+
+          @media (max-width: 760px) {
+            .closed-projects-table {
+              font-size: 8px;
+            }
+
+            .closed-projects-th,
+            .closed-projects-td {
+              padding: 3px;
+            }
+
+            .closed-projects-actions {
+              gap: 4px;
+            }
+
+            .closed-projects-btn-blue,
+            .closed-projects-btn-trash {
+              min-width: 0;
+            }
+          }
+        `}</style>
+
         <div style={rowBetween}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>📁 Projets fermés (≤ 2 mois)</div>
           <button onClick={onClose} style={btnX}>×</button>
@@ -1210,47 +1288,77 @@ export function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
 
         {localError ? <ErrorBanner error={localError} onClose={() => setLocalError(null)} /> : null}
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={table}>
+        <div className="closed-projects-wrap">
+          <table className="closed-projects-table">
+            <colgroup>
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "24%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "20%" }} />
+            </colgroup>
             <thead>
               <tr style={{ background: "#f6f7f8" }}>
-                <th style={th}>Type</th>
-                <th style={th}>BT / Nom</th>
-                <th style={th}>Client / Tâche</th>
-                <th style={th}># d'Unité</th>
-                <th style={th}>Date fermeture</th>
-                <th style={th}>Remarque</th>
-                <th style={th}>Actions</th>
+                <th className="closed-projects-th">Type</th>
+                <th className="closed-projects-th">BT / Nom</th>
+                <th className="closed-projects-th">Client / Tâche</th>
+                <th className="closed-projects-th"># d'Unité</th>
+                <th className="closed-projects-th">Date fermeture</th>
+                <th className="closed-projects-th">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={7} style={td}>Chargement…</td>
+                  <td colSpan={6} className="closed-projects-td">Chargement…</td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={td}>Aucun projet fermé récemment.</td>
+                  <td colSpan={6} className="closed-projects-td">Aucun projet fermé récemment.</td>
                 </tr>
               ) : (
                 rows.map((p) => {
                   const isProjet = p.entityType === "projet";
                   return (
                     <tr key={`${p.entityType}-${p.id}`}>
-                      <td style={td}>{p.typeLabel || "—"}</td>
-                      <td style={td}>{isProjet ? (p.dossierNo != null ? p.dossierNo : "—") : (p.nom || "—")}</td>
-                      <td style={td}>{p.displayName || "—"}</td>
-                      <td style={td}>{p.displayUnit || "—"}</td>
-                      <td style={td}>{fmtDate(p.closedAt || p.fermeCompletAt || p.documentFermetureEnvoyeAt)}</td>
-                      <td style={{ ...td, color: "#6b7280" }}>
-                        {isProjet
-                          ? "Projet archivé (sera supprimé après 2 mois)."
-                          : "Tâche spéciale archivée (PDF + email envoyés)."}
+                      <td className="closed-projects-td">{p.typeLabel || "—"}</td>
+                      <td className="closed-projects-td">
+                        {isProjet ? (p.dossierNo != null ? p.dossierNo : "—") : (p.nom || "—")}
                       </td>
-                      <td style={td}>
-                        <div style={{ display: "inline-flex", gap: 10, alignItems: "center", justifyContent: "center" }}>
-                          <button type="button" onClick={() => onReopen?.(p)} style={btnBlue}>Réouvrir</button>
-                          <button type="button" onClick={() => onDelete?.(p)} style={btnTrash}>🗑️</button>
+                      <td className="closed-projects-td">{p.displayName || "—"}</td>
+                      <td className="closed-projects-td">{p.displayUnit || "—"}</td>
+                      <td className="closed-projects-td closed-projects-td--date">
+                        {fmtDate(p.closedAt || p.fermeCompletAt || p.documentFermetureEnvoyeAt)}
+                      </td>
+                      <td className="closed-projects-td">
+                        <div className="closed-projects-actions">
+                          <button
+                            type="button"
+                            onClick={() => onReopen?.(p)}
+                            style={{
+                              ...btnBlue,
+                              fontSize: "clamp(6px, 0.95vw, 16px)",
+                              padding: "clamp(4px, 0.55vw, 10px) clamp(5px, 0.75vw, 14px)",
+                              whiteSpace: "nowrap",
+                              lineHeight: 1,
+                              minWidth: 0,
+                              width: "100%",
+                              overflow: "hidden",
+                              textOverflow: "clip",
+                            }}
+                            className="closed-projects-btn-blue"
+                          >
+                            Réouvrir
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDelete?.(p)}
+                            style={btnTrash}
+                            className="closed-projects-btn-trash"
+                          >
+                            🗑️
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1262,7 +1370,7 @@ export function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onClose} style={btnGhost}>Fermer</button>
+          <button onClick={onClose} style={btnGhost} className="closed-projects-btn-close">Fermer</button>
         </div>
       </div>
     </div>

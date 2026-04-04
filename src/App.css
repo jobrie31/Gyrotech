@@ -29,9 +29,15 @@ body {
 
 body {
   text-align: initial;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
-/* Hérite partout */
+body.modal-open {
+  overflow: hidden;
+  touch-action: none;
+}
+
 *,
 *::before,
 *::after {
@@ -51,7 +57,6 @@ body {
   overflow-x: hidden;
 }
 
-/* Images / médias jamais plus larges que l'écran */
 img,
 svg,
 canvas,
@@ -60,12 +65,12 @@ video {
   height: auto;
 }
 
-/* Liens/boutons/forms plus stables sur iPad/mobile */
 button,
 input,
 select,
 textarea {
   font: inherit;
+  max-width: 100%;
 }
 
 /* Garde tes styles Vite d'origine si jamais utilisés ailleurs */

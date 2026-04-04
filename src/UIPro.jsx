@@ -1,7 +1,3 @@
-// UIPro.jsx — Petits composants & styles pro réutilisables pour PageAccueil
-// Aucune dépendance externe (pas de Tailwind). Copiez ce fichier à la racine `src/`.
-// Usage: import { styles, Card, SectionHeader, Pill, Button, PageContainer, TopBar } from "./UIPro";
-
 import React from "react";
 
 /* ===== Palette & helpers ===== */
@@ -24,11 +20,11 @@ export const styles = {
   },
 
   container: {
-    width: "100%",
-    maxWidth: "none",
-    margin: "0",
-    paddingLeft: 12,
-    paddingRight: 12,
+    width: "80%",
+    maxWidth: "80%",
+    margin: "0 auto",
+    paddingLeft: 0,
+    paddingRight: 0,
     paddingBottom: 20,
     paddingTop: 0,
     boxSizing: "border-box",
@@ -194,7 +190,6 @@ export function SectionHeader({ title, actions }) {
   );
 }
 
-/* ✅ FIX: Button safe (fallback variant) */
 export function Button({ variant = "primary", children, style, disabled, ...props }) {
   const themeMap = {
     primary: { bg: "#2563eb", fg: "#fff", bd: "#1d4ed8" },
@@ -231,7 +226,6 @@ export function Button({ variant = "primary", children, style, disabled, ...prop
   );
 }
 
-/* ✅ FIX: Pill safe aussi (même principe) */
 export function Pill({ variant = "neutral", children }) {
   const themeMap = {
     success: { bg: "#dcfce7", bd: "#86efac", fg: "#166534" },

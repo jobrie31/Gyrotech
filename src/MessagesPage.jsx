@@ -49,6 +49,9 @@ function getConversationId(a, b) {
 
 /* ---------------- modal ---------------- */
 function CenterModal({ title, children, onClose, width = 460 }) {
+  const isSmall =
+    typeof window !== "undefined" ? window.innerWidth <= 640 : false;
+
   return createPortal(
     <div
       style={{
@@ -59,7 +62,8 @@ function CenterModal({ title, children, onClose, width = 460 }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 16,
+        padding: isSmall ? 10 : 16,
+        boxSizing: "border-box",
       }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose?.();
@@ -68,16 +72,18 @@ function CenterModal({ title, children, onClose, width = 460 }) {
       <div
         style={{
           width: `min(${width}px, 96vw)`,
+          maxHeight: "90vh",
+          overflowY: "auto",
           background: "#fff",
           borderRadius: 18,
           border: "1px solid #e2e8f0",
           boxShadow: "0 30px 80px rgba(0,0,0,0.25)",
-          overflow: "hidden",
+          overflowX: "hidden",
         }}
       >
         <div
           style={{
-            padding: "14px 16px",
+            padding: isSmall ? "12px 12px" : "14px 16px",
             borderBottom: "1px solid #e2e8f0",
             display: "flex",
             alignItems: "center",
@@ -85,7 +91,17 @@ function CenterModal({ title, children, onClose, width = 460 }) {
             gap: 10,
           }}
         >
-          <div style={{ fontWeight: 1000, fontSize: 18 }}>{title}</div>
+          <div
+            style={{
+              fontWeight: 1000,
+              fontSize: isSmall ? 16 : 18,
+              lineHeight: 1.15,
+              wordBreak: "break-word",
+            }}
+          >
+            {title}
+          </div>
+
           <button
             type="button"
             onClick={onClose}
@@ -93,16 +109,18 @@ function CenterModal({ title, children, onClose, width = 460 }) {
               border: "1px solid #cbd5e1",
               background: "#fff",
               borderRadius: 10,
-              padding: "6px 10px",
+              padding: isSmall ? "5px 8px" : "6px 10px",
               fontWeight: 1000,
               cursor: "pointer",
+              flexShrink: 0,
+              fontSize: isSmall ? 12 : 13,
             }}
           >
             ✕
           </button>
         </div>
 
-        <div style={{ padding: 16 }}>{children}</div>
+        <div style={{ padding: isSmall ? 12 : 16 }}>{children}</div>
       </div>
     </div>,
     document.body
@@ -110,33 +128,91 @@ function CenterModal({ title, children, onClose, width = 460 }) {
 }
 
 /* ---------------- styles ---------------- */
-const btnAccueil = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 14px",
-  borderRadius: 14,
-  border: "1px solid #eab308",
-  background: "#facc15",
-  color: "#111827",
-  textDecoration: "none",
-  fontWeight: 900,
-  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
-};
+function getBtnAccueilStyle(isPhone = false) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: isPhone ? 6 : 8,
+    padding: isPhone ? "8px 10px" : "10px 14px",
+    borderRadius: 14,
+    border: "1px solid #eab308",
+    background: "#facc15",
+    color: "#111827",
+    textDecoration: "none",
+    fontWeight: 900,
+    fontSize: isPhone ? 12 : 13,
+    boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+    maxWidth: "100%",
+    width: "fit-content",
+    boxSizing: "border-box",
+    whiteSpace: "nowrap",
+  };
+}
 
 function TopBar({ title, rightSlot = null }) {
+  const width = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const isPhone = width <= 640;
+  const isTablet = width <= 900;
+
+  if (isPhone) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "flex-start" }}>
+          <a href="#/" style={getBtnAccueilStyle(true)} title="Retour à l'accueil">
+            ⬅ Accueil
+          </a>
+        </div>
+
+        <h1
+          style={{
+            margin: 0,
+            fontSize: "clamp(24px, 7vw, 32px)",
+            lineHeight: 1.1,
+            fontWeight: 900,
+            textAlign: "center",
+            wordBreak: "break-word",
+          }}
+        >
+          {title}
+        </h1>
+
+        {rightSlot ? <div>{rightSlot}</div> : null}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "1fr auto 1fr",
+        position: "relative",
+        display: "flex",
         alignItems: "center",
+        justifyContent: "center",
+        minHeight: 54,
         marginBottom: 16,
-        gap: 10,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "flex-start" }}>
-        <a href="#/" style={btnAccueil} title="Retour à l'accueil">
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: "50%",
+          transform: "translateY(-50%)",
+          maxWidth: isTablet ? 170 : 220,
+          width: "100%",
+          display: "flex",
+          justifyContent: "flex-start",
+        }}
+      >
+        <a href="#/" style={getBtnAccueilStyle(false)} title="Retour à l'accueil">
           ⬅ Accueil
         </a>
       </div>
@@ -144,26 +220,38 @@ function TopBar({ title, rightSlot = null }) {
       <h1
         style={{
           margin: 0,
-          fontSize: 32,
+          fontSize: isTablet ? 28 : 32,
           lineHeight: 1.15,
           fontWeight: 900,
           textAlign: "center",
-          whiteSpace: "nowrap",
+          paddingLeft: isTablet ? 150 : 210,
+          paddingRight: isTablet ? 150 : 210,
+          width: "100%",
+          boxSizing: "border-box",
+          wordBreak: "break-word",
         }}
       >
         {title}
       </h1>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        {rightSlot}
-      </div>
+      {rightSlot ? (
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "50%",
+            transform: "translateY(-50%)",
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 10,
+            maxWidth: isTablet ? 180 : 240,
+            width: "100%",
+          }}
+        >
+          {rightSlot}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -176,6 +264,20 @@ export default function MessagesPage({
   onMessageNotifChange = null,
   onMessageNotifClear = null,
 }) {
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
+
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth || 1200);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const isPhone = windowWidth <= 640;
+  const isTablet = windowWidth <= 900;
+  const isCompact = windowWidth <= 1100;
+
   const [user, setUser] = useState(null);
   const [error, setError] = useState("");
 
@@ -513,19 +615,25 @@ export default function MessagesPage({
 
   if (isAdmin && !unlocked) {
     return (
-      <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-        <TopBar
-          title="💬 Messages"
-          rightSlot={
-            <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-              Connecté: <strong>{user?.email || "—"}</strong> — Admin
-            </div>
-          }
-        />
+      <div
+        style={{
+          padding: isPhone ? 12 : 20,
+          fontFamily: "Arial, system-ui, -apple-system",
+          boxSizing: "border-box",
+        }}
+      >
+        <TopBar title="💬 Messages" />
 
         <PageContainer>
           <Card>
-            <div style={{ fontWeight: 1000, marginBottom: 10 }}>
+            <div
+              style={{
+                fontWeight: 1000,
+                marginBottom: 10,
+                fontSize: isPhone ? 15 : 16,
+                lineHeight: 1.35,
+              }}
+            >
               Entre ton mot de passe pour ouvrir Messages.
             </div>
 
@@ -535,20 +643,36 @@ export default function MessagesPage({
                   background: "#fdecea",
                   color: "#7f1d1d",
                   border: "1px solid #f5c6cb",
-                  padding: "10px 14px",
+                  padding: isPhone ? "9px 10px" : "10px 14px",
                   borderRadius: 10,
                   marginBottom: 12,
-                  fontSize: 14,
+                  fontSize: isPhone ? 12 : 14,
                   fontWeight: 800,
+                  wordBreak: "break-word",
                 }}
               >
                 {codeErr}
               </div>
             ) : null}
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                alignItems: "end",
+                flexDirection: isPhone ? "column" : "row",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0, width: isPhone ? "100%" : "auto" }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 900,
+                    color: "#475569",
+                    marginBottom: 6,
+                  }}
+                >
                   Mot de passe
                 </div>
                 <input
@@ -563,16 +687,24 @@ export default function MessagesPage({
                     width: "100%",
                     border: "1px solid #cbd5e1",
                     borderRadius: 10,
-                    padding: "10px 12px",
-                    fontSize: 14,
+                    padding: isPhone ? "10px 10px" : "10px 12px",
+                    fontSize: isPhone ? 13 : 14,
                     background: "#fff",
+                    boxSizing: "border-box",
                   }}
                 />
               </div>
 
-              <Button onClick={tryUnlock} disabled={codeLoading} variant="primary">
-                {codeLoading ? "Validation…" : "Déverrouiller"}
-              </Button>
+              <div style={{ width: isPhone ? "100%" : "auto" }}>
+                <Button
+                  onClick={tryUnlock}
+                  disabled={codeLoading}
+                  variant="primary"
+                  style={isPhone ? { width: "100%" } : undefined}
+                >
+                  {codeLoading ? "Validation…" : "Déverrouiller"}
+                </Button>
+              </div>
             </div>
           </Card>
         </PageContainer>
@@ -581,15 +713,14 @@ export default function MessagesPage({
   }
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      <TopBar
-        title="💬 Messages"
-        rightSlot={
-          <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-            Connecté: <strong>{user?.email || "—"}</strong> {isRH ? "— RH" : "— Admin"}
-          </div>
-        }
-      />
+    <div
+      style={{
+        padding: isPhone ? 12 : 20,
+        fontFamily: "Arial, system-ui, -apple-system",
+        boxSizing: "border-box",
+      }}
+    >
+      <TopBar title="💬 Messages" />
 
       <PageContainer>
         {error ? (
@@ -598,11 +729,12 @@ export default function MessagesPage({
               background: "#fdecea",
               color: "#7f1d1d",
               border: "1px solid #f5c6cb",
-              padding: "10px 14px",
+              padding: isPhone ? "9px 10px" : "10px 14px",
               borderRadius: 12,
               marginBottom: 14,
-              fontSize: 14,
+              fontSize: isPhone ? 12 : 14,
               fontWeight: 800,
+              wordBreak: "break-word",
             }}
           >
             {error}
@@ -612,13 +744,19 @@ export default function MessagesPage({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "320px 1fr",
+            gridTemplateColumns: isTablet ? "1fr" : "320px minmax(0,1fr)",
             gap: 14,
             alignItems: "stretch",
           }}
         >
           <Card>
-            <div style={{ fontWeight: 1000, fontSize: 18, marginBottom: 10 }}>
+            <div
+              style={{
+                fontWeight: 1000,
+                fontSize: isPhone ? 16 : 18,
+                marginBottom: 10,
+              }}
+            >
               Admins / RH
             </div>
 
@@ -653,15 +791,32 @@ export default function MessagesPage({
                         : "1px solid #e2e8f0",
                       background: active ? "#eff6ff" : isUnread ? "#f0fdf4" : "#fff",
                       borderRadius: 14,
-                      padding: "12px 12px",
+                      padding: isPhone ? "10px 10px" : "12px 12px",
                       cursor: "pointer",
+                      width: "100%",
+                      boxSizing: "border-box",
                     }}
                   >
-                    <div style={{ fontWeight: 1000, color: "#0f172a", fontSize: 15 }}>
+                    <div
+                      style={{
+                        fontWeight: 1000,
+                        color: "#0f172a",
+                        fontSize: isPhone ? 14 : 15,
+                        lineHeight: 1.2,
+                        wordBreak: "break-word",
+                      }}
+                    >
                       {getEmpDisplayName(emp)}
                     </div>
 
-                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b", marginTop: 2 }}>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 800,
+                        color: "#64748b",
+                        marginTop: 2,
+                      }}
+                    >
                       {emp?.isAdmin ? "Admin" : emp?.isRH ? "RH" : ""}
                     </div>
 
@@ -669,7 +824,7 @@ export default function MessagesPage({
                       <div
                         style={{
                           marginTop: 8,
-                          fontSize: 12,
+                          fontSize: isPhone ? 11 : 12,
                           color: isUnread ? "#166534" : "#475569",
                           whiteSpace: "nowrap",
                           overflow: "hidden",
@@ -680,7 +835,7 @@ export default function MessagesPage({
                         {lastBy}: {lastText}
                       </div>
                     ) : (
-                      <div style={{ marginTop: 8, fontSize: 12, color: "#94a3b8" }}>
+                      <div style={{ marginTop: 8, fontSize: isPhone ? 11 : 12, color: "#94a3b8" }}>
                         Aucun message
                       </div>
                     )}
@@ -692,15 +847,30 @@ export default function MessagesPage({
 
           <Card>
             {selectedEmp ? (
-              <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", height: "72vh" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateRows: "auto 1fr auto",
+                  height: isPhone ? "68vh" : isTablet ? "70vh" : "72vh",
+                  minHeight: isPhone ? 500 : 560,
+                }}
+              >
                 <div
                   style={{
                     borderBottom: "1px solid #e2e8f0",
                     paddingBottom: 10,
                     marginBottom: 10,
+                    minWidth: 0,
                   }}
                 >
-                  <div style={{ fontWeight: 1000, fontSize: 20 }}>
+                  <div
+                    style={{
+                      fontWeight: 1000,
+                      fontSize: isPhone ? 18 : 20,
+                      lineHeight: 1.15,
+                      wordBreak: "break-word",
+                    }}
+                  >
                     {getEmpDisplayName(selectedEmp)}
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
@@ -715,11 +885,14 @@ export default function MessagesPage({
                     flexDirection: "column",
                     alignItems: "stretch",
                     gap: 10,
-                    paddingRight: 4,
+                    paddingRight: isPhone ? 0 : 4,
+                    minWidth: 0,
                   }}
                 >
                   {messages.length === 0 ? (
-                    <div style={{ color: "#64748b", fontWeight: 900 }}>Aucun message.</div>
+                    <div style={{ color: "#64748b", fontWeight: 900, fontSize: isPhone ? 13 : 14 }}>
+                      Aucun message.
+                    </div>
                   ) : (
                     messages.map((m) => {
                       const isSection = String(m.type || "message") === "section";
@@ -732,25 +905,28 @@ export default function MessagesPage({
                               display: "flex",
                               justifyContent: "center",
                               margin: "10px 0 6px",
+                              minWidth: 0,
                             }}
                           >
                             <div
                               style={{
                                 width: "100%",
                                 borderRadius: 14,
-                                padding: "14px 18px",
+                                padding: isPhone ? "12px 12px" : "14px 18px",
                                 background: "linear-gradient(90deg, #fed7aa 0%, #fdba74 100%)",
                                 border: "1px solid #fb923c",
                                 color: "#9a3412",
                                 boxShadow: "0 6px 18px rgba(249,115,22,0.18)",
+                                boxSizing: "border-box",
                               }}
                             >
                               <div
                                 style={{
-                                  fontSize: 22,
+                                  fontSize: isPhone ? 18 : 22,
                                   fontWeight: 1000,
                                   lineHeight: 1.15,
                                   textAlign: "center",
+                                  wordBreak: "break-word",
                                 }}
                               >
                                 {String(m.sectionTitle || m.text || "").trim() || "Nouvelle section"}
@@ -759,10 +935,11 @@ export default function MessagesPage({
                               <div
                                 style={{
                                   marginTop: 6,
-                                  fontSize: 11,
+                                  fontSize: isPhone ? 10 : 11,
                                   fontWeight: 900,
                                   color: "#7c2d12",
                                   textAlign: "left",
+                                  wordBreak: "break-word",
                                 }}
                               >
                                 {String(m.fromName || "").trim() || "—"} — {fmtDateTimeFR(m.createdAt)}
@@ -780,54 +957,64 @@ export default function MessagesPage({
                           style={{
                             display: "flex",
                             justifyContent: mine ? "flex-end" : "flex-start",
+                            minWidth: 0,
                           }}
                         >
                           <div
                             style={{
                               width: "fit-content",
                               minWidth: 0,
-                              maxWidth: "72%",
+                              maxWidth: isPhone ? "88%" : "72%",
                               border: "1px solid " + (mine ? "#bfdbfe" : "#e2e8f0"),
                               background: mine ? "#dbeafe" : "#f8fafc",
                               color: "#0f172a",
                               borderRadius: 16,
-                              padding: "10px 12px",
+                              padding: isPhone ? "9px 10px" : "10px 12px",
                               whiteSpace: "pre-wrap",
                               lineHeight: 1.35,
                               display: "inline-block",
+                              boxSizing: "border-box",
                             }}
                           >
                             <div
+                              style={{
+                                display: "flex",
+                                alignItems: "baseline",
+                                gap: 8,
+                                marginBottom: 4,
+                                flexWrap: "wrap",
+                                minWidth: 0,
+                              }}
+                            >
+                              <div
                                 style={{
-                                    display: "flex",
-                                    alignItems: "baseline",
-                                    gap: 8,
-                                    marginBottom: 4,
-                                    flexWrap: "wrap",
+                                  fontSize: isPhone ? 12 : 13,
+                                  fontWeight: 1000,
+                                  wordBreak: "break-word",
                                 }}
-                                >
-                                <div style={{ fontSize: 13, fontWeight: 1000 }}>
-                                    {String(m.fromName || "").trim() || "—"}
-                                </div>
+                              >
+                                {String(m.fromName || "").trim() || "—"}
+                              </div>
 
-                                <div
-                                    style={{
-                                    fontSize: 8,
-                                    fontWeight: 900,
-                                    color: "#64748b",
-                                    }}
-                                >
-                                    {fmtDateTimeFR(m.createdAt)}
-                                </div>
-                                </div>
-
-                                <div
+                              <div
                                 style={{
-                                    fontSize: 14,
-                                    wordBreak: "break-word",
+                                  fontSize: isPhone ? 8 : 8,
+                                  fontWeight: 900,
+                                  color: "#64748b",
+                                  wordBreak: "break-word",
                                 }}
-                                >
-                                {String(m.text || "")}
+                              >
+                                {fmtDateTimeFR(m.createdAt)}
+                              </div>
+                            </div>
+
+                            <div
+                              style={{
+                                fontSize: isPhone ? 13 : 14,
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {String(m.text || "")}
                             </div>
                           </div>
                         </div>
@@ -845,9 +1032,17 @@ export default function MessagesPage({
                     marginTop: 10,
                     display: "grid",
                     gap: 8,
+                    minWidth: 0,
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={() => {
@@ -859,11 +1054,13 @@ export default function MessagesPage({
                         background: "#fff7ed",
                         color: "#c2410c",
                         borderRadius: 10,
-                        padding: "6px 10px",
+                        padding: isPhone ? "8px 10px" : "6px 10px",
                         fontWeight: 900,
-                        fontSize: 12,
+                        fontSize: isPhone ? 11 : 12,
                         cursor: "pointer",
                         alignSelf: "flex-start",
+                        width: isPhone ? "100%" : "auto",
+                        boxSizing: "border-box",
                       }}
                     >
                       + Nouvelle section
@@ -871,7 +1068,7 @@ export default function MessagesPage({
                   </div>
 
                   <textarea
-                    rows={3}
+                    rows={isPhone ? 4 : 3}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
@@ -885,27 +1082,37 @@ export default function MessagesPage({
                       width: "100%",
                       border: "1px solid #cbd5e1",
                       borderRadius: 12,
-                      padding: "10px 12px",
-                      fontSize: 14,
+                      padding: isPhone ? "10px 10px" : "10px 12px",
+                      fontSize: isPhone ? 13 : 14,
                       resize: "vertical",
                       background: "#fff",
+                      boxSizing: "border-box",
                     }}
                   />
 
                   <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                    <Button
-                      onClick={sendMessage}
-                      disabled={sending || !String(draft || "").trim()}
-                      variant="primary"
-                    >
-                      {sending ? "Envoi…" : "Envoyer"}
-                    </Button>
+                    <div style={{ width: isPhone ? "100%" : "auto" }}>
+                      <Button
+                        onClick={sendMessage}
+                        disabled={sending || !String(draft || "").trim()}
+                        variant="primary"
+                        style={isPhone ? { width: "100%" } : undefined}
+                      >
+                        {sending ? "Envoi…" : "Envoyer"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
             ) : (
-              <div style={{ color: "#64748b", fontWeight: 900 }}>
-                Choisis une personne à gauche.
+              <div
+                style={{
+                  color: "#64748b",
+                  fontWeight: 900,
+                  fontSize: isPhone ? 13 : 14,
+                }}
+              >
+                Choisis une personne {isTablet ? "ci-dessus" : "à gauche"}.
               </div>
             )}
           </Card>
@@ -922,7 +1129,14 @@ export default function MessagesPage({
           width={520}
         >
           <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ fontSize: 14, color: "#475569", fontWeight: 700 }}>
+            <div
+              style={{
+                fontSize: isPhone ? 13 : 14,
+                color: "#475569",
+                fontWeight: 700,
+                lineHeight: 1.4,
+              }}
+            >
               Entre le titre de la section.
             </div>
 
@@ -941,14 +1155,23 @@ export default function MessagesPage({
                 width: "100%",
                 border: "1px solid #cbd5e1",
                 borderRadius: 12,
-                padding: "12px 14px",
-                fontSize: 15,
+                padding: isPhone ? "10px 12px" : "12px 14px",
+                fontSize: isPhone ? 14 : 15,
                 background: "#fff",
+                boxSizing: "border-box",
               }}
               autoFocus
             />
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 10,
+                flexWrap: "wrap",
+                flexDirection: isPhone ? "column" : "row",
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setSectionModalOpen(false)}
@@ -957,9 +1180,12 @@ export default function MessagesPage({
                   border: "1px solid #cbd5e1",
                   background: "#fff",
                   borderRadius: 10,
-                  padding: "10px 14px",
+                  padding: isPhone ? "10px 12px" : "10px 14px",
                   fontWeight: 900,
                   cursor: creatingSection ? "default" : "pointer",
+                  width: isPhone ? "100%" : "auto",
+                  fontSize: isPhone ? 12 : 13,
+                  boxSizing: "border-box",
                 }}
               >
                 Annuler
@@ -974,13 +1200,16 @@ export default function MessagesPage({
                   background: "#2563eb",
                   color: "#fff",
                   borderRadius: 10,
-                  padding: "10px 14px",
+                  padding: isPhone ? "10px 12px" : "10px 14px",
                   fontWeight: 1000,
                   cursor:
                     creatingSection || !String(sectionTitle || "").trim()
                       ? "default"
                       : "pointer",
                   opacity: creatingSection || !String(sectionTitle || "").trim() ? 0.65 : 1,
+                  width: isPhone ? "100%" : "auto",
+                  fontSize: isPhone ? 12 : 13,
+                  boxSizing: "border-box",
                 }}
               >
                 {creatingSection ? "Création…" : "Créer la section"}

@@ -172,20 +172,29 @@ function MaterielRow({ row, onOpen }) {
       style={{
         background: "white",
         borderBottom: "1px dashed #e2e8f0",
-        height: 34,
         cursor: "pointer",
       }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "#eef2ff")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
     >
       {/* NOM */}
-      <td style={{ ...styles.td, padding: "6px 10px", maxWidth: 520 }}>
+      <td
+        style={{
+          ...styles.td,
+          padding: "8px 10px",
+          minWidth: 0,
+          verticalAlign: "middle",
+        }}
+      >
         <div
           style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
             fontWeight: 650,
+            whiteSpace: "normal",
+            overflow: "visible",
+            textOverflow: "clip",
+            wordBreak: "break-word",
+            overflowWrap: "anywhere",
+            lineHeight: 1.2,
           }}
         >
           {row.nom || "—"}
@@ -196,10 +205,14 @@ function MaterielRow({ row, onOpen }) {
       <td
         style={{
           ...styles.td,
-          padding: "6px 10px",
-          width: 130,
+          padding: "8px clamp(6px, 1vw, 10px)",
+          width: "clamp(78px, 14vw, 130px)",
+          minWidth: "clamp(78px, 14vw, 130px)",
+          maxWidth: "clamp(78px, 14vw, 130px)",
           textAlign: "right",
+          whiteSpace: "nowrap",
           fontVariantNumeric: "tabular-nums",
+          verticalAlign: "middle",
         }}
       >
         {formatCAD(row.prix)}
@@ -215,12 +228,12 @@ function CategoryHeaderRow({ cat, onOpenCategory }) {
   return (
     <>
       <tr aria-hidden="true">
-        <td colSpan={3} style={{ padding: 0, height: 6, background: "transparent" }} />
+        <td colSpan={2} style={{ padding: 0, height: 6, background: "transparent" }} />
       </tr>
 
       <tr>
         <th
-          colSpan={3}
+          colSpan={2}
           onClick={() => {
             if (!isNone) onOpenCategory?.(cat);
           }}
@@ -265,7 +278,7 @@ export default function PageMateriels() {
   const [cNom, setCNom] = useState("");
   const [busyCat, setBusyCat] = useState(false);
 
-  // ✅ Modale "modifier article" (sur clic)
+  // Modale "modifier article" (sur clic)
   const [openEdit, setOpenEdit] = useState(false);
   const [editRow, setEditRow] = useState(null);
   const [eNom, setENom] = useState("");
@@ -273,7 +286,7 @@ export default function PageMateriels() {
   const [eCatId, setECatId] = useState("");
   const [busyEdit, setBusyEdit] = useState(false);
 
-  // ✅ Modale "modifier catégorie" (sur clic du header)
+  // Modale "modifier catégorie" (sur clic du header)
   const [openEditCat, setOpenEditCat] = useState(false);
   const [editCat, setEditCat] = useState(null);
   const [catNom, setCatNom] = useState("");
@@ -330,7 +343,6 @@ export default function PageMateriels() {
     return groups.reduce((sum, g) => sum + (g.items?.length || 0), 0);
   }, [groups]);
 
-  /* --- ouvrir modale édition article --- */
   const openEditFor = (row) => {
     setEditRow(row);
     setENom(row?.nom || "");
@@ -347,7 +359,6 @@ export default function PageMateriels() {
     setECatId("");
   };
 
-  /* --- ouvrir modale édition catégorie --- */
   const openEditForCategory = (cat) => {
     if (!cat?.id) return;
     setEditCat(cat);
@@ -361,7 +372,6 @@ export default function PageMateriels() {
     setCatNom("");
   };
 
-  /* --- actions modales --- */
   const submitAddItem = async () => {
     const cleanNom = mNom.trim();
     const num = parsePrix(mPrix);
@@ -391,7 +401,6 @@ export default function PageMateriels() {
     const clean = cNom.trim();
     if (!clean) return;
 
-    // petit guard anti doublons (case-insensitive)
     const exists = categories.some((c) => String(c.nom || "").trim().toLowerCase() === clean.toLowerCase());
     if (exists) return setError("Cette catégorie existe déjà.");
 
@@ -450,14 +459,11 @@ export default function PageMateriels() {
     }
   };
 
-  /* --- update all items for category rename/delete --- */
   const updateItemsCategoryName = async ({ oldName, newNameOrNull }) => {
     const old = String(oldName || "").trim();
     if (!old) return;
 
-    const snap = await getDocs(
-      query(collection(db, "materiels"), where("categorie", "==", old))
-    );
+    const snap = await getDocs(query(collection(db, "materiels"), where("categorie", "==", old)));
 
     const ops = [];
     snap.forEach((d) => {
@@ -479,24 +485,16 @@ export default function PageMateriels() {
     if (!clean) return setError("Nom de catégorie requis.");
 
     const exists = categories.some(
-      (c) =>
-        c.id !== editCat.id &&
-        String(c.nom || "").trim().toLowerCase() === clean.toLowerCase()
+      (c) => c.id !== editCat.id && String(c.nom || "").trim().toLowerCase() === clean.toLowerCase()
     );
     if (exists) return setError("Une autre catégorie porte déjà ce nom.");
 
-    // si aucun changement
     if (clean === oldName) return closeEditCat();
 
     try {
       setBusyEditCat(true);
-
-      // 1) renommer la catégorie
       await updateDoc(doc(db, "categoriesMateriels", editCat.id), { nom: clean });
-
-      // 2) migrer les items (car ils stockent le nom, pas l'id)
       await updateItemsCategoryName({ oldName, newNameOrNull: clean });
-
       closeEditCat();
     } catch (err) {
       setError(err?.message || String(err));
@@ -516,13 +514,8 @@ export default function PageMateriels() {
 
     try {
       setBusyEditCat(true);
-
-      // 1) mettre les items à null sinon ils disparaissent de l'affichage
       await updateItemsCategoryName({ oldName, newNameOrNull: null });
-
-      // 2) supprimer la catégorie
       await deleteDoc(doc(db, "categoriesMateriels", editCat.id));
-
       closeEditCat();
     } catch (err) {
       setError(err?.message || String(err));
@@ -531,43 +524,28 @@ export default function PageMateriels() {
     }
   };
 
-  /* --- rendering --- */
   return (
     <div style={{ width: "100%" }}>
-      {/* ✅ TopBar FULL WIDTH (dans la marge) */}
       <TopBar
         left={
           <a href="#/" style={btnAccueil} title="Retour à l'accueil">
             ⬅ Accueil
           </a>
         }
-
         center={
-          <h1 style={{ margin: 0, fontSize: 36, fontWeight: 900 }}>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: "clamp(20px, 3vw, 36px)",
+              fontWeight: 900,
+              lineHeight: 1.05,
+              whiteSpace: "nowrap",
+            }}
+          >
             Matériels
           </h1>
         }
-        right={
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Recherche"
-              style={{
-                ...styles.input,
-                width: 260,
-                height: 32,
-                padding: "4px 8px",
-              }}
-            />
-            <Button variant="neutral" onClick={() => setOpenAddCat(true)}>
-              Ajouter une catégorie
-            </Button>
-            <Button variant="primary" onClick={() => setOpenAddItem(true)}>
-              Ajouter un article
-            </Button>
-          </div>
-        }
+        right={<div />}
         style={{
           width: "100%",
           boxSizing: "border-box",
@@ -576,7 +554,64 @@ export default function PageMateriels() {
         }}
       />
 
-      {/* ✅ Le contenu reste dans PageContainer (comme avant) */}
+      <div
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          padding: "0 20px 12px 20px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: "clamp(6px, 1vw, 10px)",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            flexWrap: "wrap",
+          }}
+        >
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Recherche"
+            style={{
+              ...styles.input,
+              width: "clamp(180px, 28vw, 320px)",
+              minWidth: 0,
+              height: "clamp(30px, 4vw, 38px)",
+              padding: "clamp(4px, 0.5vw, 8px) clamp(8px, 0.9vw, 10px)",
+              fontSize: "clamp(11px, 1.1vw, 14px)",
+            }}
+          />
+
+          <Button
+            variant="neutral"
+            onClick={() => setOpenAddCat(true)}
+            style={{
+              padding: "clamp(6px, 0.8vw, 10px) clamp(8px, 1vw, 14px)",
+              fontSize: "clamp(10px, 1vw, 14px)",
+              lineHeight: 1.05,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Ajouter une catégorie
+          </Button>
+
+          <Button
+            variant="primary"
+            onClick={() => setOpenAddItem(true)}
+            style={{
+              padding: "clamp(6px, 0.8vw, 10px) clamp(8px, 1vw, 14px)",
+              fontSize: "clamp(10px, 1vw, 14px)",
+              lineHeight: 1.05,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Ajouter un article
+          </Button>
+        </div>
+      </div>
+
       <PageContainer>
         <ErrorBanner error={error} onClose={() => setError(null)} />
 
@@ -588,14 +623,20 @@ export default function PageMateriels() {
                 borderCollapse: "separate",
                 borderSpacing: 0,
                 width: "100%",
+                tableLayout: "fixed",
               }}
             >
+              <colgroup>
+                <col style={{ width: "auto" }} />
+                <col style={{ width: "clamp(78px, 14vw, 130px)" }} />
+              </colgroup>
+
               <thead>{/* volontairement vide */}</thead>
 
               <tbody>
                 {term && totalVisibleItems === 0 && (
                   <tr>
-                    <td colSpan={3} style={{ padding: "8px 10px", color: "#64748b" }}>
+                    <td colSpan={2} style={{ padding: "8px 10px", color: "#64748b" }}>
                       Aucun résultat pour “<strong>{q}</strong>”.
                     </td>
                   </tr>
@@ -614,7 +655,7 @@ export default function PageMateriels() {
 
                       {!term && items.length === 0 && (
                         <tr>
-                          <td colSpan={3} style={{ padding: "8px 10px", color: "#94a3b8" }}>
+                          <td colSpan={2} style={{ padding: "8px 10px", color: "#94a3b8" }}>
                             Aucun item dans cette catégorie.
                           </td>
                         </tr>
@@ -628,7 +669,7 @@ export default function PageMateriels() {
                   groups[0].items.length === 0 &&
                   categories.length === 0 && (
                     <tr>
-                      <td colSpan={3} style={{ padding: "8px 10px", color: "#64748b" }}>
+                      <td colSpan={2} style={{ padding: "8px 10px", color: "#64748b" }}>
                         Aucune donnée pour l’instant — ajoute une catégorie ou un article.
                       </td>
                     </tr>
@@ -638,16 +679,11 @@ export default function PageMateriels() {
           </div>
         </Card>
 
-        {/* Modale: Ajouter un article */}
         <Modal open={openAddItem} title="Ajouter un article" onClose={() => setOpenAddItem(false)}>
           <div style={{ display: "grid", gap: 10 }}>
             <label style={{ display: "grid", gap: 6 }}>
               <span>Nom</span>
-              <input
-                value={mNom}
-                onChange={(e) => setMNom(e.target.value)}
-                style={{ ...styles.input }}
-              />
+              <input value={mNom} onChange={(e) => setMNom(e.target.value)} style={{ ...styles.input }} />
             </label>
 
             <label style={{ display: "grid", gap: 6 }}>
@@ -689,16 +725,11 @@ export default function PageMateriels() {
           </div>
         </Modal>
 
-        {/* Modale: Ajouter une catégorie */}
         <Modal open={openAddCat} title="Ajouter une catégorie" onClose={() => setOpenAddCat(false)}>
           <div style={{ display: "grid", gap: 10 }}>
             <label style={{ display: "grid", gap: 6 }}>
               <span>Nom de la catégorie</span>
-              <input
-                value={cNom}
-                onChange={(e) => setCNom(e.target.value)}
-                style={{ ...styles.input }}
-              />
+              <input value={cNom} onChange={(e) => setCNom(e.target.value)} style={{ ...styles.input }} />
             </label>
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
@@ -712,7 +743,6 @@ export default function PageMateriels() {
           </div>
         </Modal>
 
-        {/* ✅ Modale: Modifier un article (clic sur la ligne) */}
         <Modal
           open={openEdit}
           title={editRow?.nom ? `Modifier — ${editRow.nom}` : "Modifier l’article"}
@@ -775,7 +805,6 @@ export default function PageMateriels() {
           </div>
         </Modal>
 
-        {/* ✅ Modale: Modifier / Supprimer une catégorie (clic sur le header) */}
         <Modal
           open={openEditCat}
           title={editCat?.nom ? `Catégorie — ${editCat.nom}` : "Modifier la catégorie"}
@@ -820,22 +849,25 @@ export default function PageMateriels() {
       </PageContainer>
     </div>
   );
-
 }
 
 const btnAccueil = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 8,
-  padding: "10px 14px",
-  borderRadius: 14,
+  justifyContent: "center",
+  gap: "clamp(4px, 0.8vw, 8px)",
+  padding: "clamp(6px, 1.4vw, 10px) clamp(8px, 1.8vw, 14px)",
+  borderRadius: "clamp(10px, 2vw, 14px)",
   border: "1px solid #eab308",
   background: "#facc15",
   color: "#111827",
-  textDecoration: "none",   // ✅ important pour <a>
+  textDecoration: "none",
   fontWeight: 900,
+  fontSize: "clamp(11px, 2.4vw, 16px)",
+  lineHeight: 1,
   boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
   cursor: "pointer",
+  whiteSpace: "nowrap",
+  maxWidth: "100%",
+  minHeight: "clamp(32px, 5vw, 42px)",
 };
-
-

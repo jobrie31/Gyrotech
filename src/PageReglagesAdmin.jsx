@@ -29,6 +29,7 @@ function MultiSelectEmployesDropdown({
   onToggle,
   placeholder = "Choisir des employés",
   disabled = false,
+  compact = false,
 }) {
   const [open, setOpen] = useState(false);
   const boxRef = React.useRef(null);
@@ -57,7 +58,7 @@ function MultiSelectEmployesDropdown({
       : `${selectedNames.slice(0, 2).join(", ")} +${selectedNames.length - 2}`;
 
   return (
-    <div ref={boxRef} style={{ position: "relative", minWidth: 280 }}>
+    <div ref={boxRef} style={{ position: "relative", width: "100%", minWidth: 0 }}>
       <button
         type="button"
         onClick={() => !disabled && setOpen((v) => !v)}
@@ -65,12 +66,15 @@ function MultiSelectEmployesDropdown({
         style={{
           ...input,
           width: "100%",
+          minWidth: 0,
           textAlign: "left",
           cursor: disabled ? "not-allowed" : "pointer",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           fontWeight: 800,
+          fontSize: compact ? 12 : 13,
+          padding: compact ? "7px 9px" : "8px 10px",
         }}
       >
         <span
@@ -79,12 +83,14 @@ function MultiSelectEmployesDropdown({
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             paddingRight: 10,
+            minWidth: 0,
+            flex: 1,
           }}
           title={selectedNames.join(", ")}
         >
           {summary}
         </span>
-        <span style={{ fontSize: 12 }}>{open ? "▲" : "▼"}</span>
+        <span style={{ fontSize: compact ? 11 : 12, flexShrink: 0 }}>{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
@@ -102,6 +108,7 @@ function MultiSelectEmployesDropdown({
             boxShadow: "0 10px 24px rgba(0,0,0,0.12)",
             zIndex: 1000,
             padding: 8,
+            boxSizing: "border-box",
           }}
         >
           {employes.length === 0 && (
@@ -119,10 +126,11 @@ function MultiSelectEmployesDropdown({
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  padding: "8px 10px",
+                  padding: compact ? "7px 8px" : "8px 10px",
                   borderRadius: 8,
                   cursor: "pointer",
                   fontWeight: 700,
+                  fontSize: compact ? 12 : 13,
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = "#f3f4f6";
@@ -136,7 +144,7 @@ function MultiSelectEmployesDropdown({
                   checked={checked}
                   onChange={() => onToggle(emp.id)}
                 />
-                <span>{emp.nom}</span>
+                <span style={{ minWidth: 0, wordBreak: "break-word" }}>{emp.nom}</span>
               </label>
             );
           })}
@@ -218,10 +226,28 @@ function TvPasswordModal({
           padding: 16,
           border: "2px solid #111",
           boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+          boxSizing: "border-box",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontWeight: 900 }}>Mot de passe Compte TV</h3>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            marginBottom: 12,
+          }}
+        >
+          <h3
+            style={{
+              margin: 0,
+              fontWeight: 900,
+              fontSize: "clamp(18px, 3vw, 24px)",
+              lineHeight: 1.15,
+            }}
+          >
+            Mot de passe Compte TV
+          </h3>
           <button
             type="button"
             onClick={onClose}
@@ -231,13 +257,21 @@ function TvPasswordModal({
               fontSize: 28,
               cursor: "pointer",
               lineHeight: 1,
+              flexShrink: 0,
             }}
           >
             ×
           </button>
         </div>
 
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: "#6b7280",
+            marginBottom: 12,
+            wordBreak: "break-word",
+          }}
+        >
           Compte : <strong>{targetEmp?.nom || "—"}</strong> — {targetEmp?.email || "—"}
         </div>
 
@@ -267,7 +301,15 @@ function TvPasswordModal({
           </div>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            marginTop: 14,
+            flexWrap: "wrap",
+          }}
+        >
           <button type="button" onClick={onClose} style={btnSecondary} disabled={busy}>
             Annuler
           </button>
@@ -281,6 +323,20 @@ function TvPasswordModal({
 }
 
 export default function PageReglagesAdmin() {
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
+
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth || 1200);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const isPhone = windowWidth <= 640;
+  const isSmallTablet = windowWidth <= 900;
+  const isCompact = windowWidth <= 1100;
+
   /* ============================================================
      ✅ Détection utilisateur courant + admin
   ============================================================ */
@@ -1655,353 +1711,348 @@ export default function PageReglagesAdmin() {
   };
 
   /* ================== HEADER ================== */
-  const HeaderRow = ({ title = "🛠️ Réglages Admin" }) => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 10, marginBottom: 12 }}>
-      <div style={{ display: "flex", justifyContent: "flex-start" }}>
-        <a href="#/" style={btnAccueil} title="Retour à l'accueil">
-          ⬅ Accueil
-        </a>
+  const HeaderRow = ({ title = "🛠️ Réglages Admin" }) => {
+    if (isPhone) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "flex-start" }}>
+            <a href="#/" style={btnAccueilResponsive(isPhone, true)} title="Retour à l'accueil">
+              ⬅ Accueil
+            </a>
+          </div>
+
+          <h1
+            style={{
+              margin: 0,
+              fontSize: "clamp(24px, 7vw, 32px)",
+              lineHeight: 1.1,
+              fontWeight: 900,
+              textAlign: "center",
+              wordBreak: "break-word",
+            }}
+          >
+            {title}
+          </h1>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: 54,
+          marginBottom: 14,
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: "50%",
+            transform: "translateY(-50%)",
+            maxWidth: isSmallTablet ? 170 : 220,
+            width: "100%",
+            display: "flex",
+            justifyContent: "flex-start",
+          }}
+        >
+          <a href="#/" style={btnAccueilResponsive(isPhone, false)} title="Retour à l'accueil">
+            ⬅ Accueil
+          </a>
+        </div>
+
+        <h1
+          style={{
+            margin: 0,
+            fontSize: isSmallTablet ? 28 : 32,
+            lineHeight: 1.1,
+            fontWeight: 900,
+            textAlign: "center",
+            paddingLeft: isSmallTablet ? 150 : 210,
+            paddingRight: isSmallTablet ? 150 : 210,
+            width: "100%",
+            boxSizing: "border-box",
+            wordBreak: "break-word",
+          }}
+        >
+          {title}
+        </h1>
       </div>
+    );
+  };
 
-      <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.15, fontWeight: 900, textAlign: "center", whiteSpace: "nowrap" }}>
-        {title}
-      </h1>
+  const renderTimeSegmentsDesktop = () => (
+    <div style={{ overflowX: "auto", marginTop: 4 }}>
+      <table style={tableBlackResponsive(isPhone)}>
+        <thead>
+          <tr style={{ background: "#f9fafb" }}>
+            <th style={thTimeBoldResponsive(isPhone)}>Début</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Fin</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Employé</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {displayedSegments.map((seg) => {
+            const edit = timeRowEdits[seg.id] || {};
+            const empName = seg.empName || timeEmployes.find((e) => e.id === seg.empId)?.nom || "—";
+            return (
+              <tr key={seg.id}>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <input
+                    type="time"
+                    value={edit.startTime || ""}
+                    onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)}
+                    style={{ ...input, width: isPhone ? "100%" : 110, padding: "4px 6px" }}
+                  />
+                </td>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <input
+                    type="time"
+                    value={edit.endTime || ""}
+                    onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)}
+                    style={{ ...input, width: isPhone ? "100%" : 110, padding: "4px 6px" }}
+                  />
+                </td>
+                <td style={tdTimeResponsive(isPhone)}>{empName}</td>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => saveSegment(seg)} disabled={timeLoading} style={btnPrimarySmallResponsive(isPhone)}>
+                      Enregistrer
+                    </button>
 
-      <div />
+                    {timeJobType === "projet" && (
+                      <button type="button" onClick={() => deleteSegment(seg)} disabled={timeLoading} style={btnDangerSmallResponsive(isPhone)}>
+                        Supprimer
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+          {!timeLoading && displayedSegments.length === 0 && (
+            <tr>
+              <td colSpan={4} style={{ padding: 8, color: "#6b7280", textAlign: "center" }}>
+                Aucun bloc de temps pour ces critères.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 
-  /* ================== UI access ================== */
-  if (meLoading) return <div style={{ padding: 24 }}>Chargement…</div>;
+  const renderTimeSegmentsMobile = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+      {displayedSegments.map((seg) => {
+        const edit = timeRowEdits[seg.id] || {};
+        const empName = seg.empName || timeEmployes.find((e) => e.id === seg.empId)?.nom || "—";
+        return (
+          <div key={seg.id} style={cardMobile}>
+            <div style={cardMobileTitle}>{empName}</div>
 
-  if (!canShowAdmin) {
-    return (
-      <div style={{ padding: 24, fontFamily: "Arial, system-ui, -apple-system" }}>
-        <HeaderRow title="🛠️ Réglages Admin" />
-        <h2 style={{ marginTop: 0, fontWeight: 900 }}>Accès refusé</h2>
-        <div style={{ color: "#6b7280" }}>
-          Cette page est réservée aux administrateurs.
-          {isRH ? " (Compte RH détecté, mais pas admin.)" : ""}
-        </div>
-      </div>
-    );
-  }
-
-  if (!adminAccessGranted) {
-    return (
-      <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-        <HeaderRow title="🛠️ Réglages Admin" />
-
-        <div style={{ maxWidth: 520, margin: "0 auto" }}>
-          <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
-            Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — ({getRoleLabel(me)})
-          </div>
-
-          <section style={section}>
-            <h3 style={h3Bold}>Code d’accès</h3>
-
-            {adminCodeLoading && <div style={{ fontSize: 12, color: "#6b7280" }}>Chargement du code…</div>}
-            {adminCodeError && <div style={alertErr}>{adminCodeError}</div>}
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <label style={label}>Code</label>
+            <div style={mobileFieldGrid}>
+              <div>
+                <label style={label}>Début</label>
                 <input
-                  value={adminCodeInput}
-                  onChange={(e) => setAdminCodeInput(e.target.value)}
-                  type="password"
+                  type="time"
+                  value={edit.startTime || ""}
+                  onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)}
                   style={{ ...input, width: "100%" }}
-                  disabled={adminCodeLoading}
-                  onKeyDown={(e) => e.key === "Enter" && tryUnlockAdmin()}
                 />
               </div>
 
-              <button type="button" onClick={tryUnlockAdmin} disabled={adminCodeLoading} style={btnPrimary}>
-                Déverrouiller
-              </button>
-            </div>
-          </section>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ padding: 20, fontFamily: "Arial, system-ui, -apple-system" }}>
-      <HeaderRow title="🛠️ Réglages Admin" />
-
-      <TvPasswordModal
-        open={tvPwdModalOpen}
-        targetEmp={tvPwdTargetEmp}
-        pwd1={tvPwd1}
-        pwd2={tvPwd2}
-        setPwd1={setTvPwd1}
-        setPwd2={setTvPwd2}
-        onClose={() => {
-          if (tvPwdBusy) return;
-          setTvPwdModalOpen(false);
-          setTvPwdTargetEmp(null);
-          setTvPwd1("");
-          setTvPwd2("");
-          setTvPwdError("");
-        }}
-        onSave={saveTvPassword}
-        busy={tvPwdBusy}
-        error={tvPwdError}
-      />
-
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginBottom: 16 }}>
-        {hasDraftProjet && (
-          <button type="button" onClick={() => (window.location.hash = "#/projets")} style={btnSecondary}>
-            ⬅️ Retour au projet en cours
-          </button>
-        )}
-
-        <div style={{ fontSize: 12, color: "#6b7280" }}>
-          Connecté: <strong>{me?.nom || authUser?.email || "—"}</strong> — ({getRoleLabel(me)})
-        </div>
-      </div>
-
-      {/* ===================== 0) SÉCURITÉ ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Sécurité</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Pour déconnecter tout le monde (mise à jour, etc). Aucune donnée n’est supprimée.
-        </div>
-
-        {kickAllMsg && (
-          <div
-            style={{
-              marginBottom: 8,
-              padding: 8,
-              borderRadius: 10,
-              border: "2px solid #111",
-              background: kickAllMsg.startsWith("✅") ? "#dcfce7" : "#fee2e2",
-              fontWeight: 900,
-              fontSize: 12,
-            }}
-          >
-            {kickAllMsg}
-          </div>
-        )}
-
-        <button
-          type="button"
-          onClick={kickAllUsers}
-          disabled={kickAllLoading}
-          style={{
-            border: "2px solid #111",
-            background: "#fee2e2",
-            color: "#111",
-            borderRadius: 12,
-            padding: "10px 14px",
-            cursor: "pointer",
-            fontWeight: 1000,
-          }}
-        >
-          {kickAllLoading ? "..." : "🚫 Déconnecter tout le monde"}
-        </button>
-      </section>
-
-      {/* ===================== 1) GESTION DU TEMPS ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Gestion du temps (admin)</h3>
-
-        {timeError && <div style={alertErr}>{timeError}</div>}
-
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-          <div>
-            <label style={label}>Date</label>
-            <input type="date" value={timeDate} onChange={(e) => setTimeDate(e.target.value)} style={input} />
-          </div>
-
-          <div>
-            <label style={label}>Type</label>
-            <select
-              value={timeJobType}
-              onChange={(e) => {
-                const v = e.target.value;
-                setTimeJobType(v);
-                setTimeProjId("");
-                setTimeOtherId("");
-              }}
-              style={input}
-            >
-              <option value="projet">Projet</option>
-              <option value="autre">Autre tâche</option>
-            </select>
-          </div>
-
-          {timeJobType === "projet" ? (
-            <div>
-              <label style={label}>Projet</label>
-              <select value={timeProjId} onChange={(e) => setTimeProjId(e.target.value)} style={input}>
-                <option value="">Sélectionner…</option>
-                {timeProjets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nom}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <div>
-              <label style={label}>Autre tâche</label>
-              <select value={timeOtherId} onChange={(e) => setTimeOtherId(e.target.value)} style={input}>
-                <option value="">Sélectionner…</option>
-                {timeAutresProjets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nom}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <div>
-            <label style={label}>Employé</label>
-            <select value={timeEmpId} onChange={(e) => setTimeEmpId(e.target.value)} style={input}>
-              <option value="">Tous</option>
-              {timeEmployes.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.nom}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {(() => {
-          const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
-          if (!timeDate || !jobId) {
-            return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre tâche.</div>;
-          }
-
-          return (
-            <div style={{ marginTop: 8 }}>
-              {timeLoading && <div style={{ color: "#6b7280", fontSize: 12 }}>Chargement…</div>}
-
-              <div style={{ overflowX: "auto", marginTop: 4 }}>
-                <table style={tableBlack}>
-                  <thead>
-                    <tr style={{ background: "#f9fafb" }}>
-                      <th style={thTimeBold}>Début</th>
-                      <th style={thTimeBold}>Fin</th>
-                      <th style={thTimeBold}>Employé</th>
-                      <th style={thTimeBold}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayedSegments.map((seg) => {
-                      const edit = timeRowEdits[seg.id] || {};
-                      const empName = seg.empName || timeEmployes.find((e) => e.id === seg.empId)?.nom || "—";
-                      return (
-                        <tr key={seg.id}>
-                          <td style={tdTime}>
-                            <input
-                              type="time"
-                              value={edit.startTime || ""}
-                              onChange={(e) => updateRowEdit(seg.id, "startTime", e.target.value)}
-                              style={{ ...input, width: 110, padding: "4px 6px" }}
-                            />
-                          </td>
-                          <td style={tdTime}>
-                            <input
-                              type="time"
-                              value={edit.endTime || ""}
-                              onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)}
-                              style={{ ...input, width: 110, padding: "4px 6px" }}
-                            />
-                          </td>
-                          <td style={tdTime}>{empName}</td>
-                          <td style={tdTime}>
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                              <button type="button" onClick={() => saveSegment(seg)} disabled={timeLoading} style={btnPrimarySmall}>
-                                Enregistrer
-                              </button>
-
-                              {timeJobType === "projet" && (
-                                <button type="button" onClick={() => deleteSegment(seg)} disabled={timeLoading} style={btnDangerSmall}>
-                                  Supprimer
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {!timeLoading && displayedSegments.length === 0 && (
-                      <tr>
-                        <td colSpan={4} style={{ padding: 8, color: "#6b7280", textAlign: "center" }}>
-                          Aucun bloc de temps pour ces critères.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              <div>
+                <label style={label}>Fin</label>
+                <input
+                  type="time"
+                  value={edit.endTime || ""}
+                  onChange={(e) => updateRowEdit(seg.id, "endTime", e.target.value)}
+                  style={{ ...input, width: "100%" }}
+                />
               </div>
             </div>
-          );
-        })()}
-      </section>
 
-      {/* ===================== 1.25) AUTO-DÉPUNCH PLANIFIÉ ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Auto-dé-punch planifié</h3>
+            <div style={mobileActionsWrap}>
+              <button type="button" onClick={() => saveSegment(seg)} disabled={timeLoading} style={btnPrimaryFullMobile}>
+                Enregistrer
+              </button>
 
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
-          La Cloud Function roulera aux <strong>15 minutes</strong> et appliquera ces règles.
-          Chaque règle dépunchera seulement les employés choisis, ainsi que leurs segments de projet / autre tâche exactement comme ton autoDepunch17.
-        </div>
-
-        {autoDpError && <div style={alertErr}>{autoDpError}</div>}
-        {autoDpSaved && !autoDpError && <div style={alertOk}>Règles enregistrées.</div>}
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            flexWrap: "wrap",
-            marginBottom: 12,
-            padding: 10,
-            borderRadius: 10,
-            background: "#f8fafc",
-            border: "1px solid #cbd5e1",
-          }}
-        >
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
-            <input
-              type="checkbox"
-              checked={!!autoDpEnabled}
-              onChange={(e) => saveAutoDpEnabledOnly(e.target.checked)}
-              disabled={autoDpSaving || autoDpLoading}
-            />
-            <span>Activer l’auto-dé-punch planifié</span>
-          </label>
-
-          <div style={{ fontSize: 12, color: "#475569", fontWeight: 800 }}>
-            Fuseau : America/Toronto — Intervalle : 15 min
+              {timeJobType === "projet" && (
+                <button type="button" onClick={() => deleteSegment(seg)} disabled={timeLoading} style={btnDangerFullMobile}>
+                  Supprimer
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+        );
+      })}
 
-        <div
-          style={{
-            marginBottom: 14,
-            padding: 12,
-            border: "1px solid #111",
-            borderRadius: 12,
-            background: "#f9fafb",
-          }}
-        >
-          <div style={{ fontWeight: 900, marginBottom: 10 }}>Ajouter une règle</div>
+      {!timeLoading && displayedSegments.length === 0 && (
+        <div style={emptyMobile}>Aucun bloc de temps pour ces critères.</div>
+      )}
+    </div>
+  );
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
-            <div style={{ width: 160 }}>
+  const renderAutoDpDesktop = () => (
+    <div style={{ overflowX: "auto" }}>
+      <table style={tableBlackResponsive(isPhone)}>
+        <thead>
+          <tr style={{ background: "#f9fafb" }}>
+            <th style={thTimeBoldResponsive(isPhone)}>Actif</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Heure</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Employés</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {autoDpRules.map((rule) => {
+            const edit = autoDpRuleEdits[rule.id] || {
+              time: rule.time,
+              employeIds: rule.employeIds || [],
+              enabled: rule.enabled !== false,
+            };
+
+            const selectedNames = autoDepunchEligibleEmployes
+              .filter((emp) => Array.isArray(edit.employeIds) && edit.employeIds.includes(emp.id))
+              .map((emp) => emp.nom);
+
+            return (
+              <tr key={rule.id}>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900, flexWrap: "wrap" }}>
+                    <input
+                      type="checkbox"
+                      checked={edit.enabled !== false}
+                      onChange={(e) => setAutoDpRuleEdit(rule.id, "enabled", e.target.checked)}
+                    />
+                    <span>{edit.enabled !== false ? "Oui" : "Non"}</span>
+                  </label>
+                </td>
+
+                <td style={tdTimeResponsive(isPhone)}>
+                  <select
+                    value={edit.time || "17:00"}
+                    onChange={(e) => setAutoDpRuleEdit(rule.id, "time", e.target.value)}
+                    style={{ ...input, width: isPhone ? "100%" : 140, padding: "6px 10px" }}
+                  >
+                    {QUARTER_HOUR_OPTIONS.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+
+                <td style={tdTimeResponsive(isPhone)}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: isPhone ? 180 : 260, maxWidth: 520 }}>
+                    <MultiSelectEmployesDropdown
+                      employes={autoDepunchEligibleEmployes}
+                      selectedIds={Array.isArray(edit.employeIds) ? edit.employeIds : []}
+                      onToggle={(empId) => toggleRuleAutoDpEmp(rule.id, empId)}
+                      placeholder="Choisir les employés"
+                      disabled={autoDpSaving}
+                      compact={isPhone}
+                    />
+
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => selectAllRuleAutoDpEmp(rule.id)}
+                        style={btnSecondarySmallResponsive(isPhone)}
+                        disabled={autoDpSaving}
+                      >
+                        Tout le monde
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => clearAllRuleAutoDpEmp(rule.id)}
+                        style={btnSecondarySmallResponsive(isPhone)}
+                        disabled={autoDpSaving}
+                      >
+                        Vider
+                      </button>
+                    </div>
+
+                    <div style={{ fontSize: 11, color: "#374151", fontWeight: 800, wordBreak: "break-word" }}>
+                      {selectedNames.join(", ") || "Aucun employé sélectionné"}
+                    </div>
+                  </div>
+                </td>
+
+                <td style={tdTimeResponsive(isPhone)}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => saveAutoDpRule(rule)}
+                      disabled={autoDpSaving}
+                      style={btnPrimarySmallResponsive(isPhone)}
+                    >
+                      Enregistrer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteAutoDpRule(rule)}
+                      disabled={autoDpSaving}
+                      style={btnDangerSmallResponsive(isPhone)}
+                    >
+                      Supprimer
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+
+          {!autoDpLoading && autoDpRules.length === 0 && (
+            <tr>
+              <td colSpan={4} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+                Aucune règle pour l’instant.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderAutoDpMobile = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {autoDpRules.map((rule) => {
+        const edit = autoDpRuleEdits[rule.id] || {
+          time: rule.time,
+          employeIds: rule.employeIds || [],
+          enabled: rule.enabled !== false,
+        };
+
+        const selectedNames = autoDepunchEligibleEmployes
+          .filter((emp) => Array.isArray(edit.employeIds) && edit.employeIds.includes(emp.id))
+          .map((emp) => emp.nom);
+
+        return (
+          <div key={rule.id} style={cardMobile}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={cardMobileTitle}>Règle {edit.time || "—"}</div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={edit.enabled !== false}
+                  onChange={(e) => setAutoDpRuleEdit(rule.id, "enabled", e.target.checked)}
+                />
+                <span>{edit.enabled !== false ? "Active" : "Inactive"}</span>
+              </label>
+            </div>
+
+            <div>
               <label style={label}>Heure</label>
               <select
-                value={newAutoDpTime}
-                onChange={(e) => setNewAutoDpTime(e.target.value)}
+                value={edit.time || "17:00"}
+                onChange={(e) => setAutoDpRuleEdit(rule.id, "time", e.target.value)}
                 style={{ ...input, width: "100%" }}
               >
                 {QUARTER_HOUR_OPTIONS.map((t) => (
@@ -2012,655 +2063,1183 @@ export default function PageReglagesAdmin() {
               </select>
             </div>
 
-            <div style={{ flex: 1, minWidth: 320 }}>
+            <div>
               <label style={label}>Employés</label>
               <MultiSelectEmployesDropdown
                 employes={autoDepunchEligibleEmployes}
-                selectedIds={newAutoDpEmpIds}
-                onToggle={toggleNewAutoDpEmp}
+                selectedIds={Array.isArray(edit.employeIds) ? edit.employeIds : []}
+                onToggle={(empId) => toggleRuleAutoDpEmp(rule.id, empId)}
                 placeholder="Choisir les employés"
-                disabled={autoDpSaving || autoDpLoading}
+                disabled={autoDpSaving}
+                compact
               />
-              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={selectAllNewAutoDpEmp} style={btnSecondarySmall}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => selectAllRuleAutoDpEmp(rule.id)}
+                  style={btnSecondarySmallResponsive(true)}
+                  disabled={autoDpSaving}
+                >
                   Tout le monde
                 </button>
-                <button type="button" onClick={clearAllNewAutoDpEmp} style={btnSecondarySmall}>
+                <button
+                  type="button"
+                  onClick={() => clearAllRuleAutoDpEmp(rule.id)}
+                  style={btnSecondarySmallResponsive(true)}
+                  disabled={autoDpSaving}
+                >
                   Vider
                 </button>
               </div>
+              <div style={{ marginTop: 8, fontSize: 11, color: "#374151", fontWeight: 800, wordBreak: "break-word" }}>
+                {selectedNames.join(", ") || "Aucun employé sélectionné"}
+              </div>
             </div>
 
-            <button
-              type="button"
-              onClick={addAutoDpRule}
-              disabled={autoDpSaving || autoDpLoading}
-              style={btnPrimary}
-            >
-              {autoDpSaving ? "..." : "Ajouter la règle"}
-            </button>
-          </div>
-
-          <div style={{ marginTop: 8, fontSize: 12, color: "#374151", fontWeight: 700 }}>
-            Sélectionnés :{" "}
-            {autoDepunchEligibleEmployes
-              .filter((emp) => newAutoDpEmpIds.includes(emp.id))
-              .map((emp) => emp.nom)
-              .join(", ") || "Aucun"}
-          </div>
-        </div>
-
-        <div style={{ overflowX: "auto" }}>
-          <table style={tableBlack}>
-            <thead>
-              <tr style={{ background: "#f9fafb" }}>
-                <th style={thTimeBold}>Actif</th>
-                <th style={thTimeBold}>Heure</th>
-                <th style={thTimeBold}>Employés</th>
-                <th style={thTimeBold}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {autoDpRules.map((rule) => {
-                const edit = autoDpRuleEdits[rule.id] || {
-                  time: rule.time,
-                  employeIds: rule.employeIds || [],
-                  enabled: rule.enabled !== false,
-                };
-
-                const selectedNames = autoDepunchEligibleEmployes
-                  .filter((emp) => Array.isArray(edit.employeIds) && edit.employeIds.includes(emp.id))
-                  .map((emp) => emp.nom);
-
-                return (
-                  <tr key={rule.id}>
-                    <td style={tdTime}>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
-                        <input
-                          type="checkbox"
-                          checked={edit.enabled !== false}
-                          onChange={(e) => setAutoDpRuleEdit(rule.id, "enabled", e.target.checked)}
-                        />
-                        <span>{edit.enabled !== false ? "Oui" : "Non"}</span>
-                      </label>
-                    </td>
-
-                    <td style={tdTime}>
-                      <select
-                        value={edit.time || "17:00"}
-                        onChange={(e) => setAutoDpRuleEdit(rule.id, "time", e.target.value)}
-                        style={{ ...input, width: 140, padding: "6px 10px" }}
-                      >
-                        {QUARTER_HOUR_OPTIONS.map((t) => (
-                          <option key={t} value={t}>
-                            {t}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-
-                    <td style={tdTime}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 320, maxWidth: 520 }}>
-                        <MultiSelectEmployesDropdown
-                          employes={autoDepunchEligibleEmployes}
-                          selectedIds={Array.isArray(edit.employeIds) ? edit.employeIds : []}
-                          onToggle={(empId) => toggleRuleAutoDpEmp(rule.id, empId)}
-                          placeholder="Choisir les employés"
-                          disabled={autoDpSaving}
-                        />
-
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button
-                            type="button"
-                            onClick={() => selectAllRuleAutoDpEmp(rule.id)}
-                            style={btnSecondarySmall}
-                            disabled={autoDpSaving}
-                          >
-                            Tout le monde
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => clearAllRuleAutoDpEmp(rule.id)}
-                            style={btnSecondarySmall}
-                            disabled={autoDpSaving}
-                          >
-                            Vider
-                          </button>
-                        </div>
-
-                        <div style={{ fontSize: 11, color: "#374151", fontWeight: 800 }}>
-                          {selectedNames.join(", ") || "Aucun employé sélectionné"}
-                        </div>
-                      </div>
-                    </td>
-
-                    <td style={tdTime}>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button
-                          type="button"
-                          onClick={() => saveAutoDpRule(rule)}
-                          disabled={autoDpSaving}
-                          style={btnPrimarySmall}
-                        >
-                          Enregistrer
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteAutoDpRule(rule)}
-                          disabled={autoDpSaving}
-                          style={btnDangerSmall}
-                        >
-                          Supprimer
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-
-              {!autoDpLoading && autoDpRules.length === 0 && (
-                <tr>
-                  <td colSpan={4} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
-                    Aucune règle pour l’instant.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {autoDpLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Chargement…</div>}
-      </section>
-
-      {/* ===================== 1.5) ALARMES ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Alarmes</h3>
-        <PageAlarmesAdmin />
-      </section>
-
-      {/* ===================== 2) FACTURATION ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Facturation</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Ces informations sont utilisées en haut de la facture et pour le prix unitaire de la main-d&apos;œuvre.
-        </div>
-
-        {factureError && <div style={alertErr}>{factureError}</div>}
-        {factureSaved && !factureError && <div style={alertOk}>Réglages de facturation enregistrés.</div>}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Nom de l&apos;entreprise</label>
-              <input value={factureNom} onChange={(e) => setFactureNom(e.target.value)} style={{ ...input, width: "100%" }} />
-            </div>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Sous-titre / description</label>
-              <input value={factureSousTitre} onChange={(e) => setFactureSousTitre(e.target.value)} style={{ ...input, width: "100%" }} />
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Téléphone</label>
-              <input value={factureTel} onChange={(e) => setFactureTel(e.target.value)} style={{ ...input, width: "100%" }} />
-            </div>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <label style={label}>Courriel</label>
-              <input value={factureCourriel} onChange={(e) => setFactureCourriel(e.target.value)} style={{ ...input, width: "100%" }} />
-            </div>
-          </div>
-
-          <div style={{ maxWidth: 260 }}>
-            <label style={label}>Taux sur la route</label>
-            <input
-              value={factureTauxHoraire}
-              onChange={(e) => setFactureTauxHoraire(e.target.value)}
-              inputMode="decimal"
-              style={{ ...input, width: "100%" }}
-            />
-          </div>
-
-          <div style={{ marginTop: 4 }}>
-            <button onClick={saveFacture} disabled={factureLoading} style={btnPrimary}>
-              {factureLoading ? "Chargement..." : "Enregistrer la facture"}
-            </button>
-          </div>
-
-          <div style={{ marginTop: 12, borderTop: "2px solid #111", paddingTop: 10 }}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Emails — destinataires facture</div>
-            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>1 email par ligne (ou séparé par virgules).</div>
-
-            {invoiceEmailError && <div style={alertErr}>{invoiceEmailError}</div>}
-            {invoiceEmailSaved && !invoiceEmailError && <div style={alertOk}>Emails enregistrés.</div>}
-
-            <textarea
-              value={invoiceToRaw}
-              onChange={(e) => setInvoiceToRaw(e.target.value)}
-              rows={4}
-              style={{ width: "100%", border: "2px solid #111", borderRadius: 10, padding: 10, fontWeight: 800, fontSize: 13 }}
-              placeholder={"ex: jlabrie@styro.ca\ncompta@domaine.com"}
-              disabled={invoiceEmailLoading}
-            />
-
-            <div style={{ marginTop: 8 }}>
-              <button onClick={saveInvoiceEmails} disabled={invoiceEmailLoading} style={btnPrimary}>
-                {invoiceEmailLoading ? "Chargement..." : "Enregistrer les emails"}
+            <div style={mobileActionsWrap}>
+              <button
+                type="button"
+                onClick={() => saveAutoDpRule(rule)}
+                disabled={autoDpSaving}
+                style={btnPrimaryFullMobile}
+              >
+                Enregistrer
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteAutoDpRule(rule)}
+                disabled={autoDpSaving}
+                style={btnDangerFullMobile}
+              >
+                Supprimer
               </button>
             </div>
           </div>
-        </div>
-      </section>
+        );
+      })}
 
-      {/* ===================== 2.5) APPROBATION FEUILLES DE DÉPENSES ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Approbation des feuilles de dépenses</h3>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-          Pour l’instant, toutes les feuilles de dépenses sont envoyées en attente et peuvent être approuvées par <b>n’importe quel admin</b>.
-        </div>
-        <div
-          style={{
-            background: "#fef9c3",
-            border: "2px solid #facc15",
-            color: "#92400e",
-            borderRadius: 10,
-            padding: 10,
-            fontWeight: 900,
-            fontSize: 12,
-          }}
-        >
-          Statut actuel : ⌛ À approuver par un admin
-        </div>
-      </section>
+      {!autoDpLoading && autoDpRules.length === 0 && (
+        <div style={emptyMobile}>Aucune règle pour l’instant.</div>
+      )}
+    </div>
+  );
 
-      {/* ===================== 3) TRAVAILLEURS ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Employés</h3>
+  const renderEmployesDesktop = () => (
+    <div style={{ overflowX: "auto" }}>
+      <table style={tableBlackResponsive(isPhone)}>
+        <thead>
+          <tr style={{ background: "#f9fafb" }}>
+            <th style={thTimeBoldResponsive(isPhone)}>Nom</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Email</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Statut</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Rôle</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {employes.map((emp) => {
+            const role = normalizeRoleFromDoc(emp);
+            const activated = !!emp.activatedAt || !!emp.uid;
+            const isTV = role === "tv";
 
-        <div
-          style={{
-            marginBottom: 10,
-            padding: 10,
-            borderRadius: 10,
-            background: "#f8fafc",
-            border: "1px solid #cbd5e1",
-            fontSize: 12,
-            color: "#334155",
-            fontWeight: 700,
-          }}
-        >
-          Le rôle <b>CompteTV</b> crée maintenant un vrai compte Auth avec mot de passe direct.
-          Il n’utilise pas de code d’activation.
-        </div>
+            return (
+              <tr key={emp.id}>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <strong>{emp.nom || "—"}</strong>
+                </td>
 
-        {tvCreateMsg && <div style={alertOk}>{tvCreateMsg}</div>}
+                <td style={tdTimeResponsive(isPhone)}>{emp.email || "—"}</td>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "end" }}>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <label style={label}>Nom</label>
-            <input
-              value={employeNomInput}
-              onChange={(e) => setEmployeNomInput(e.target.value)}
-              placeholder="Nom de l'employé"
-              style={{ ...input, width: "100%" }}
-            />
-          </div>
+                <td style={tdTimeResponsive(isPhone)}>
+                  {isTV ? (
+                    <>
+                      <span style={{ fontWeight: 900, color: activated ? "#166534" : "#1d4ed8" }}>
+                        {activated ? "COMPTE TV ACTIF" : "COMPTE TV"}
+                      </span>
+                      <span style={{ color: "#6b7280" }}> — Mot de passe direct</span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontWeight: 900, color: activated ? "#166534" : "#b45309" }}>
+                        {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
+                      </span>
+                      {!activated && <span style={{ color: "#6b7280" }}> — Code: {emp.activationCode || "—"}</span>}
+                    </>
+                  )}
+                </td>
 
-          <div style={{ flex: 1, minWidth: 260 }}>
-            <label style={label}>Email</label>
-            <input
-              value={employeEmailInput}
-              onChange={(e) => setEmployeEmailInput(e.target.value)}
-              placeholder="Email"
-              style={{ ...input, width: "100%" }}
-            />
-          </div>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <span style={{ fontWeight: 900 }}>{getRoleLabel(emp)}</span>
+                </td>
 
-          <div style={{ width: 220 }}>
-            <label style={label}>Rôle</label>
-            <select
-              value={employeRoleInput}
-              onChange={(e) => {
-                setEmployeRoleInput(e.target.value);
-                setTvCreateMsg("");
-              }}
-              style={{ ...input, width: "100%" }}
-            >
-              <option value="user">User</option>
-              <option value="admin">Admin</option>
-              <option value="rh">Ressource humaine</option>
-              <option value="tv">CompteTV</option>
-            </select>
-          </div>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {!activated && !isTV && (
+                      <button
+                        onClick={() => onResetActivationCode(emp.id)}
+                        style={btnSecondarySmallResponsive(isPhone)}
+                        title="Générer un nouveau code"
+                      >
+                        Nouveau code
+                      </button>
+                    )}
 
-          {employeRoleInput === "tv" ? (
-            <>
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <label style={label}>Mot de passe CompteTV</label>
-                <input
-                  type="password"
-                  value={employeTvPasswordInput}
-                  onChange={(e) => setEmployeTvPasswordInput(e.target.value)}
-                  style={{ ...input, width: "100%" }}
-                  placeholder="Minimum 6 caractères"
-                />
-              </div>
+                    {isTV && (
+                      <button
+                        onClick={() => openTvPasswordModal(emp)}
+                        style={btnSecondarySmallResponsive(isPhone)}
+                        title="Modifier le mot de passe du Compte TV"
+                      >
+                        Mot de passe
+                      </button>
+                    )}
 
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <label style={label}>Confirmer mot de passe</label>
-                <input
-                  type="password"
-                  value={employeTvPassword2Input}
-                  onChange={(e) => setEmployeTvPassword2Input(e.target.value)}
-                  style={{ ...input, width: "100%" }}
-                  placeholder="Retape le mot de passe"
-                />
-              </div>
-            </>
-          ) : (
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <label style={label}>Code activation</label>
-              <input
-                value={employeCodeInput}
-                onChange={(e) => setEmployeCodeInput(e.target.value)}
-                style={{ ...input, width: "100%" }}
-              />
-            </div>
+                    <button
+                      onClick={() => onDelEmploye(emp.id, emp.nom)}
+                      style={btnDangerSmallResponsive(isPhone)}
+                      title="Supprimer cet employé"
+                    >
+                      Supprimer
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+
+          {employes.length === 0 && (
+            <tr>
+              <td colSpan={5} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+                Aucun employé pour l’instant.
+              </td>
+            </tr>
           )}
+        </tbody>
+      </table>
+    </div>
+  );
 
-          <button onClick={onAddEmploye} style={btnPrimary} disabled={tvCreateBusy}>
-            {tvCreateBusy ? "..." : "Ajouter"}
-          </button>
-        </div>
+  const renderEmployesMobile = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {employes.map((emp) => {
+        const role = normalizeRoleFromDoc(emp);
+        const activated = !!emp.activatedAt || !!emp.uid;
+        const isTV = role === "tv";
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={tableBlack}>
-            <thead>
-              <tr style={{ background: "#f9fafb" }}>
-                <th style={thTimeBold}>Nom</th>
-                <th style={thTimeBold}>Email</th>
-                <th style={thTimeBold}>Statut</th>
-                <th style={thTimeBold}>Rôle</th>
-                <th style={thTimeBold}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {employes.map((emp) => {
-                const role = normalizeRoleFromDoc(emp);
-                const activated = !!emp.activatedAt || !!emp.uid;
-                const isTV = role === "tv";
+        return (
+          <div key={emp.id} style={cardMobile}>
+            <div style={cardMobileTitle}>{emp.nom || "—"}</div>
 
-                return (
-                  <tr key={emp.id}>
-                    <td style={tdTime}>
-                      <strong>{emp.nom || "—"}</strong>
-                    </td>
+            <div style={mobileInfoLine}>
+              <span style={mobileLabelMini}>Email :</span> {emp.email || "—"}
+            </div>
 
-                    <td style={tdTime}>{emp.email || "—"}</td>
-
-                    <td style={tdTime}>
-                      {isTV ? (
-                        <>
-                          <span style={{ fontWeight: 900, color: activated ? "#166534" : "#1d4ed8" }}>
-                            {activated ? "COMPTE TV ACTIF" : "COMPTE TV"}
-                          </span>
-                          <span style={{ color: "#6b7280" }}> — Mot de passe direct</span>
-                        </>
-                      ) : (
-                        <>
-                          <span style={{ fontWeight: 900, color: activated ? "#166534" : "#b45309" }}>
-                            {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
-                          </span>
-                          {!activated && <span style={{ color: "#6b7280" }}> — Code: {emp.activationCode || "—"}</span>}
-                        </>
-                      )}
-                    </td>
-
-                    <td style={tdTime}>
-                      <span style={{ fontWeight: 900 }}>{getRoleLabel(emp)}</span>
-                    </td>
-
-                    <td style={tdTime}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {!activated && !isTV && (
-                          <button
-                            onClick={() => onResetActivationCode(emp.id)}
-                            style={btnSecondarySmall}
-                            title="Générer un nouveau code"
-                          >
-                            Nouveau code
-                          </button>
-                        )}
-
-                        {isTV && (
-                          <button
-                            onClick={() => openTvPasswordModal(emp)}
-                            style={btnSecondarySmall}
-                            title="Modifier le mot de passe du Compte TV"
-                          >
-                            Mot de passe
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => onDelEmploye(emp.id, emp.nom)}
-                          style={btnDangerSmall}
-                          title="Supprimer cet employé"
-                        >
-                          Supprimer
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-
-              {employes.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
-                    Aucun employé pour l’instant.
-                  </td>
-                </tr>
+            <div style={mobileInfoLine}>
+              <span style={mobileLabelMini}>Statut :</span>{" "}
+              {isTV ? (
+                <>
+                  <span style={{ fontWeight: 900, color: activated ? "#166534" : "#1d4ed8" }}>
+                    {activated ? "COMPTE TV ACTIF" : "COMPTE TV"}
+                  </span>
+                  <span style={{ color: "#6b7280" }}> — Mot de passe direct</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontWeight: 900, color: activated ? "#166534" : "#b45309" }}>
+                    {activated ? "ACTIVÉ" : "NON ACTIVÉ"}
+                  </span>
+                  {!activated && <span style={{ color: "#6b7280" }}> — Code: {emp.activationCode || "—"}</span>}
+                </>
               )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* ===================== 4) AUTRES TÂCHES (ADMIN) ===================== */}
-      <section style={section}>
-        <h3 style={h3Bold}>Autres tâches (admin)</h3>
-        {autresAdminError && <div style={alertErr}>{autresAdminError}</div>}
-
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", marginBottom: 10 }}>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <label style={label}>Nom</label>
-            <input value={newAutreNom} onChange={(e) => setNewAutreNom(e.target.value)} style={{ ...input, width: "100%" }} />
-          </div>
-
-          <div style={{ width: 120 }}>
-            <label style={label}>Ordre</label>
-            <input value={newAutreOrdre} onChange={(e) => setNewAutreOrdre(e.target.value)} inputMode="numeric" style={{ ...input, width: "100%" }} />
-          </div>
-
-          <div style={{ width: 220 }}>
-            <label style={label}>Code (optionnel)</label>
-            <input value={newAutreCode} onChange={(e) => setNewAutreCode(e.target.value)} style={{ ...input, width: "100%" }} />
-          </div>
-
-          <div style={{ width: 180 }}>
-            <label style={label}>Visibilité</label>
-            <select value={newAutreScope} onChange={(e) => setNewAutreScope(e.target.value)} style={{ ...input, width: "100%" }}>
-              <option value="all">Tous</option>
-              <option value="selected">Employés choisis</option>
-            </select>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 180 }}>
-            <input
-              id="newAutreProjectLike"
-              type="checkbox"
-              checked={!!newAutreProjectLike}
-              onChange={(e) => setNewAutreProjectLike(e.target.checked)}
-            />
-            <label htmlFor="newAutreProjectLike" style={{ fontWeight: 900 }}>
-              Tâche spéciale
-            </label>
-          </div>
-
-          <button onClick={addAutreRow} disabled={autresAdminLoading} style={btnPrimary}>
-            Ajouter
-          </button>
-        </div>
-
-        {newAutreScope === "selected" && (
-          <div
-            style={{
-              marginBottom: 12,
-              border: "1px solid #111",
-              borderRadius: 10,
-              padding: 10,
-              background: "#f9fafb",
-            }}
-          >
-            <div style={{ fontWeight: 900, marginBottom: 8, fontSize: 12 }}>
-              Visible seulement pour :
             </div>
 
-            <MultiSelectEmployesDropdown
-              employes={timeEmployes}
-              selectedIds={newAutreVisibleToEmpIds}
-              onToggle={toggleNewAutreEmp}
-              placeholder="Choisir les employés"
-            />
+            <div style={mobileInfoLine}>
+              <span style={mobileLabelMini}>Rôle :</span> <strong>{getRoleLabel(emp)}</strong>
+            </div>
 
-            <div style={{ marginTop: 8, fontSize: 12, color: "#374151", fontWeight: 700 }}>
-              Sélectionnés :{" "}
-              {timeEmployes
-                .filter((emp) => newAutreVisibleToEmpIds.includes(emp.id))
-                .map((emp) => emp.nom)
-                .join(", ") || "Aucun"}
+            <div style={mobileActionsWrap}>
+              {!activated && !isTV && (
+                <button
+                  onClick={() => onResetActivationCode(emp.id)}
+                  style={btnSecondaryFullMobile}
+                  title="Générer un nouveau code"
+                >
+                  Nouveau code
+                </button>
+              )}
+
+              {isTV && (
+                <button
+                  onClick={() => openTvPasswordModal(emp)}
+                  style={btnSecondaryFullMobile}
+                  title="Modifier le mot de passe du Compte TV"
+                >
+                  Mot de passe
+                </button>
+              )}
+
+              <button
+                onClick={() => onDelEmploye(emp.id, emp.nom)}
+                style={btnDangerFullMobile}
+                title="Supprimer cet employé"
+              >
+                Supprimer
+              </button>
             </div>
           </div>
-        )}
+        );
+      })}
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={tableBlack}>
-            <thead>
-              <tr style={{ background: "#f9fafb" }}>
-                <th style={thTimeBold}>Nom</th>
-                <th style={thTimeBold}>Ordre</th>
-                <th style={thTimeBold}>Code</th>
-                <th style={thTimeBold}>Visibilité</th>
-                <th style={thTimeBold}>Type</th>
-                <th style={thTimeBold}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {autresAdminRows.map((r) => {
-                const edit = autresRowEdits[r.id] || {
-                  nom: r.nom,
-                  ordre: r.ordre,
-                  code: r.code,
-                  scope: r.scope || "all",
-                  visibleToEmpIds: Array.isArray(r.visibleToEmpIds) ? r.visibleToEmpIds : [],
-                  projectLike: r.projectLike === true,
-                };
+      {employes.length === 0 && <div style={emptyMobile}>Aucun employé pour l’instant.</div>}
+    </div>
+  );
 
-                return (
-                  <tr key={r.id}>
-                    <td style={tdTime}>
-                      <input
-                        value={edit.nom ?? ""}
-                        onChange={(e) => setAutresEdit(r.id, "nom", e.target.value)}
-                        style={{ ...input, width: 320, padding: "6px 10px" }}
-                      />
-                    </td>
-                    <td style={tdTime}>
-                      <input
-                        value={edit.ordre ?? ""}
-                        onChange={(e) => setAutresEdit(r.id, "ordre", e.target.value)}
-                        inputMode="numeric"
-                        style={{ ...input, width: 110, padding: "6px 10px" }}
-                      />
-                    </td>
-                    <td style={tdTime}>
-                      <input
-                        value={edit.code ?? ""}
-                        onChange={(e) => setAutresEdit(r.id, "code", e.target.value)}
-                        style={{ ...input, width: 220, padding: "6px 10px" }}
-                        placeholder="(vide = aucun code)"
-                      />
-                    </td>
-                    <td style={tdTime}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        <select
-                          value={edit.scope || "all"}
-                          onChange={(e) => setAutresEdit(r.id, "scope", e.target.value)}
-                          style={{ ...input, width: 180, padding: "6px 10px" }}
-                        >
-                          <option value="all">Tous</option>
-                          <option value="selected">Employés choisis</option>
-                        </select>
+  const renderAutresDesktop = () => (
+    <div style={{ overflowX: "auto" }}>
+      <table style={tableBlackResponsive(isPhone)}>
+        <thead>
+          <tr style={{ background: "#f9fafb" }}>
+            <th style={thTimeBoldResponsive(isPhone)}>Nom</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Ordre</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Code</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Visibilité</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Type</th>
+            <th style={thTimeBoldResponsive(isPhone)}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {autresAdminRows.map((r) => {
+            const edit = autresRowEdits[r.id] || {
+              nom: r.nom,
+              ordre: r.ordre,
+              code: r.code,
+              scope: r.scope || "all",
+              visibleToEmpIds: Array.isArray(r.visibleToEmpIds) ? r.visibleToEmpIds : [],
+              projectLike: r.projectLike === true,
+            };
 
-                        {edit.scope === "selected" && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 420 }}>
-                            <MultiSelectEmployesDropdown
-                              employes={timeEmployes}
-                              selectedIds={Array.isArray(edit.visibleToEmpIds) ? edit.visibleToEmpIds : []}
-                              onToggle={(empId) => toggleAutreRowEmp(r.id, empId)}
-                              placeholder="Choisir les employés"
-                            />
+            return (
+              <tr key={r.id}>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <input
+                    value={edit.nom ?? ""}
+                    onChange={(e) => setAutresEdit(r.id, "nom", e.target.value)}
+                    style={{ ...input, width: isPhone ? "100%" : 320, padding: "6px 10px" }}
+                  />
+                </td>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <input
+                    value={edit.ordre ?? ""}
+                    onChange={(e) => setAutresEdit(r.id, "ordre", e.target.value)}
+                    inputMode="numeric"
+                    style={{ ...input, width: isPhone ? "100%" : 110, padding: "6px 10px" }}
+                  />
+                </td>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <input
+                    value={edit.code ?? ""}
+                    onChange={(e) => setAutresEdit(r.id, "code", e.target.value)}
+                    style={{ ...input, width: isPhone ? "100%" : 220, padding: "6px 10px" }}
+                    placeholder="(vide = aucun code)"
+                  />
+                </td>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <select
+                      value={edit.scope || "all"}
+                      onChange={(e) => setAutresEdit(r.id, "scope", e.target.value)}
+                      style={{ ...input, width: isPhone ? "100%" : 180, padding: "6px 10px" }}
+                    >
+                      <option value="all">Tous</option>
+                      <option value="selected">Employés choisis</option>
+                    </select>
 
-                            <div style={{ fontSize: 11, color: "#374151", fontWeight: 800 }}>
-                              {timeEmployes
-                                .filter((emp) => Array.isArray(edit.visibleToEmpIds) && edit.visibleToEmpIds.includes(emp.id))
-                                .map((emp) => emp.nom)
-                                .join(", ") || "Aucun employé sélectionné"}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-
-                    <td style={tdTime}>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
-                        <input
-                          type="checkbox"
-                          checked={edit.projectLike === true}
-                          onChange={(e) => setAutresEdit(r.id, "projectLike", e.target.checked)}
+                    {edit.scope === "selected" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 420 }}>
+                        <MultiSelectEmployesDropdown
+                          employes={timeEmployes}
+                          selectedIds={Array.isArray(edit.visibleToEmpIds) ? edit.visibleToEmpIds : []}
+                          onToggle={(empId) => toggleAutreRowEmp(r.id, empId)}
+                          placeholder="Choisir les employés"
+                          compact={isPhone}
                         />
-                        <span>{edit.projectLike ? "Spéciale" : "Simple"}</span>
-                      </label>
-                    </td>
 
-                    <td style={tdTime}>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button type="button" onClick={() => saveAutreRow(r)} disabled={autresAdminLoading} style={btnPrimarySmall}>
-                          Enregistrer
-                        </button>
-                        <button type="button" onClick={() => deleteAutreRow(r)} disabled={autresAdminLoading} style={btnDangerSmall}>
-                          Supprimer
-                        </button>
+                        <div style={{ fontSize: 11, color: "#374151", fontWeight: 800, wordBreak: "break-word" }}>
+                          {timeEmployes
+                            .filter((emp) => Array.isArray(edit.visibleToEmpIds) && edit.visibleToEmpIds.includes(emp.id))
+                            .map((emp) => emp.nom)
+                            .join(", ") || "Aucun employé sélectionné"}
+                        </div>
                       </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                    )}
+                  </div>
+                </td>
 
-              {!autresAdminLoading && autresAdminRows.length === 0 && (
-                <tr>
-                  <td colSpan={6} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
-                    Aucune autre tâche pour l’instant.
-                  </td>
-                </tr>
+                <td style={tdTimeResponsive(isPhone)}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900, flexWrap: "wrap" }}>
+                    <input
+                      type="checkbox"
+                      checked={edit.projectLike === true}
+                      onChange={(e) => setAutresEdit(r.id, "projectLike", e.target.checked)}
+                    />
+                    <span>{edit.projectLike ? "Spéciale" : "Simple"}</span>
+                  </label>
+                </td>
+
+                <td style={tdTimeResponsive(isPhone)}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => saveAutreRow(r)} disabled={autresAdminLoading} style={btnPrimarySmallResponsive(isPhone)}>
+                      Enregistrer
+                    </button>
+                    <button type="button" onClick={() => deleteAutreRow(r)} disabled={autresAdminLoading} style={btnDangerSmallResponsive(isPhone)}>
+                      Supprimer
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+
+          {!autresAdminLoading && autresAdminRows.length === 0 && (
+            <tr>
+              <td colSpan={6} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+                Aucune autre tâche pour l’instant.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderAutresMobile = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {autresAdminRows.map((r) => {
+        const edit = autresRowEdits[r.id] || {
+          nom: r.nom,
+          ordre: r.ordre,
+          code: r.code,
+          scope: r.scope || "all",
+          visibleToEmpIds: Array.isArray(r.visibleToEmpIds) ? r.visibleToEmpIds : [],
+          projectLike: r.projectLike === true,
+        };
+
+        return (
+          <div key={r.id} style={cardMobile}>
+            <div style={cardMobileTitle}>{r.nom || "Autre tâche"}</div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div>
+                <label style={label}>Nom</label>
+                <input
+                  value={edit.nom ?? ""}
+                  onChange={(e) => setAutresEdit(r.id, "nom", e.target.value)}
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={mobileFieldGrid}>
+                <div>
+                  <label style={label}>Ordre</label>
+                  <input
+                    value={edit.ordre ?? ""}
+                    onChange={(e) => setAutresEdit(r.id, "ordre", e.target.value)}
+                    inputMode="numeric"
+                    style={{ ...input, width: "100%" }}
+                  />
+                </div>
+
+                <div>
+                  <label style={label}>Code</label>
+                  <input
+                    value={edit.code ?? ""}
+                    onChange={(e) => setAutresEdit(r.id, "code", e.target.value)}
+                    style={{ ...input, width: "100%" }}
+                    placeholder="(vide = aucun code)"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={label}>Visibilité</label>
+                <select
+                  value={edit.scope || "all"}
+                  onChange={(e) => setAutresEdit(r.id, "scope", e.target.value)}
+                  style={{ ...input, width: "100%" }}
+                >
+                  <option value="all">Tous</option>
+                  <option value="selected">Employés choisis</option>
+                </select>
+              </div>
+
+              {edit.scope === "selected" && (
+                <div>
+                  <label style={label}>Employés visibles</label>
+                  <MultiSelectEmployesDropdown
+                    employes={timeEmployes}
+                    selectedIds={Array.isArray(edit.visibleToEmpIds) ? edit.visibleToEmpIds : []}
+                    onToggle={(empId) => toggleAutreRowEmp(r.id, empId)}
+                    placeholder="Choisir les employés"
+                    compact
+                  />
+                  <div style={{ marginTop: 8, fontSize: 11, color: "#374151", fontWeight: 800, wordBreak: "break-word" }}>
+                    {timeEmployes
+                      .filter((emp) => Array.isArray(edit.visibleToEmpIds) && edit.visibleToEmpIds.includes(emp.id))
+                      .map((emp) => emp.nom)
+                      .join(", ") || "Aucun employé sélectionné"}
+                  </div>
+                </div>
               )}
-            </tbody>
-          </table>
-        </div>
 
-        {autresAdminLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Chargement…</div>}
-      </section>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 900, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={edit.projectLike === true}
+                  onChange={(e) => setAutresEdit(r.id, "projectLike", e.target.checked)}
+                />
+                <span>{edit.projectLike ? "Tâche spéciale" : "Tâche simple"}</span>
+              </label>
+
+              <div style={mobileActionsWrap}>
+                <button type="button" onClick={() => saveAutreRow(r)} disabled={autresAdminLoading} style={btnPrimaryFullMobile}>
+                  Enregistrer
+                </button>
+                <button type="button" onClick={() => deleteAutreRow(r)} disabled={autresAdminLoading} style={btnDangerFullMobile}>
+                  Supprimer
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {!autresAdminLoading && autresAdminRows.length === 0 && (
+        <div style={emptyMobile}>Aucune autre tâche pour l’instant.</div>
+      )}
+    </div>
+  );
+
+  /* ================== UI access ================== */
+  if (meLoading) return <div style={{ padding: 24 }}>Chargement…</div>;
+
+  if (!canShowAdmin) {
+    return (
+      <div style={pageWrap}>
+        <div style={pageInnerResponsive(windowWidth)}>
+          <div style={pageContentResponsive(isPhone)}>
+            <HeaderRow title="🛠️ Réglages Admin" />
+            <h2 style={{ marginTop: 0, fontWeight: 900 }}>Accès refusé</h2>
+            <div style={{ color: "#6b7280" }}>
+              Cette page est réservée aux administrateurs.
+              {isRH ? " (Compte RH détecté, mais pas admin.)" : ""}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!adminAccessGranted) {
+    return (
+      <div style={pageWrap}>
+        <div style={pageInnerResponsive(windowWidth)}>
+          <div style={pageContentResponsive(isPhone)}>
+            <HeaderRow title="🛠️ Réglages Admin" />
+
+            <div style={{ maxWidth: 520, margin: "0 auto", width: "100%" }}>
+              <section style={sectionResponsive(isPhone)}>
+                <h3 style={h3Bold}>Code d’accès</h3>
+
+                {adminCodeLoading && <div style={{ fontSize: 12, color: "#6b7280" }}>Chargement du code…</div>}
+                {adminCodeError && <div style={alertErr}>{adminCodeError}</div>}
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    alignItems: "end",
+                    flexDirection: isPhone ? "column" : "row",
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0, width: isPhone ? "100%" : "auto" }}>
+                    <label style={label}>Code</label>
+                    <input
+                      value={adminCodeInput}
+                      onChange={(e) => setAdminCodeInput(e.target.value)}
+                      type="password"
+                      style={{ ...input, width: "100%" }}
+                      disabled={adminCodeLoading}
+                      onKeyDown={(e) => e.key === "Enter" && tryUnlockAdmin()}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={tryUnlockAdmin}
+                    disabled={adminCodeLoading}
+                    style={isPhone ? btnPrimaryFullMobile : btnPrimary}
+                  >
+                    Déverrouiller
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const alarmScale = isPhone ? 0.9 : isSmallTablet ? 0.96 : 1;
+
+  return (
+    <div style={pageWrap}>
+      <div style={pageInnerResponsive(windowWidth)}>
+        <div style={pageContentResponsive(isPhone)}>
+          <HeaderRow title="🛠️ Réglages Admin" />
+
+          <TvPasswordModal
+            open={tvPwdModalOpen}
+            targetEmp={tvPwdTargetEmp}
+            pwd1={tvPwd1}
+            pwd2={tvPwd2}
+            setPwd1={setTvPwd1}
+            setPwd2={setTvPwd2}
+            onClose={() => {
+              if (tvPwdBusy) return;
+              setTvPwdModalOpen(false);
+              setTvPwdTargetEmp(null);
+              setTvPwd1("");
+              setTvPwd2("");
+              setTvPwdError("");
+            }}
+            onSave={saveTvPassword}
+            busy={tvPwdBusy}
+            error={tvPwdError}
+          />
+
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginBottom: 16 }}>
+            {hasDraftProjet && (
+              <button
+                type="button"
+                onClick={() => (window.location.hash = "#/projets")}
+                style={isPhone ? btnSecondaryFullMobile : btnSecondary}
+              >
+                ⬅️ Retour au projet en cours
+              </button>
+            )}
+          </div>
+
+          {/* ===================== 0) SÉCURITÉ ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Sécurité</h3>
+            <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 8 }}>
+              Pour déconnecter tout le monde (mise à jour, etc). Aucune donnée n’est supprimée.
+            </div>
+
+            {kickAllMsg && (
+              <div
+                style={{
+                  marginBottom: 8,
+                  padding: 8,
+                  borderRadius: 10,
+                  border: "2px solid #111",
+                  background: kickAllMsg.startsWith("✅") ? "#dcfce7" : "#fee2e2",
+                  fontWeight: 900,
+                  fontSize: isPhone ? 11 : 12,
+                  wordBreak: "break-word",
+                }}
+              >
+                {kickAllMsg}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={kickAllUsers}
+              disabled={kickAllLoading}
+              style={{
+                ...dangerBigButton,
+                width: isPhone ? "100%" : "auto",
+                fontSize: isPhone ? 12 : 13,
+                padding: isPhone ? "9px 10px" : "10px 14px",
+              }}
+            >
+              {kickAllLoading ? "..." : "🚫 Déconnecter tout le monde"}
+            </button>
+          </section>
+
+          {/* ===================== 1) GESTION DU TEMPS ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Gestion du temps (admin)</h3>
+
+            {timeError && <div style={alertErr}>{timeError}</div>}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isPhone ? "1fr" : isCompact ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))",
+                gap: 8,
+                marginBottom: 8,
+                alignItems: "end",
+              }}
+            >
+              <div>
+                <label style={label}>Date</label>
+                <input type="date" value={timeDate} onChange={(e) => setTimeDate(e.target.value)} style={{ ...input, width: "100%" }} />
+              </div>
+
+              <div>
+                <label style={label}>Type</label>
+                <select
+                  value={timeJobType}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setTimeJobType(v);
+                    setTimeProjId("");
+                    setTimeOtherId("");
+                  }}
+                  style={{ ...input, width: "100%" }}
+                >
+                  <option value="projet">Projet</option>
+                  <option value="autre">Autre tâche</option>
+                </select>
+              </div>
+
+              {timeJobType === "projet" ? (
+                <div>
+                  <label style={label}>Projet</label>
+                  <select value={timeProjId} onChange={(e) => setTimeProjId(e.target.value)} style={{ ...input, width: "100%" }}>
+                    <option value="">Sélectionner…</option>
+                    {timeProjets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nom}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label style={label}>Autre tâche</label>
+                  <select value={timeOtherId} onChange={(e) => setTimeOtherId(e.target.value)} style={{ ...input, width: "100%" }}>
+                    <option value="">Sélectionner…</option>
+                    {timeAutresProjets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nom}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label style={label}>Employé</label>
+                <select value={timeEmpId} onChange={(e) => setTimeEmpId(e.target.value)} style={{ ...input, width: "100%" }}>
+                  <option value="">Tous</option>
+                  {timeEmployes.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.nom}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {(() => {
+              const jobId = timeJobType === "projet" ? timeProjId : timeOtherId;
+              if (!timeDate || !jobId) {
+                return <div style={{ color: "#6b7280", fontSize: 12 }}>Choisis au minimum une date et un projet / autre tâche.</div>;
+              }
+
+              return (
+                <div style={{ marginTop: 8 }}>
+                  {timeLoading && <div style={{ color: "#6b7280", fontSize: 12 }}>Chargement…</div>}
+                  {isPhone ? renderTimeSegmentsMobile() : renderTimeSegmentsDesktop()}
+                </div>
+              );
+            })()}
+          </section>
+
+          {/* ===================== 1.25) AUTO-DÉPUNCH PLANIFIÉ ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Auto-dé-punch planifié</h3>
+
+            <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.45 }}>
+              La Cloud Function roulera aux <strong>15 minutes</strong> et appliquera ces règles.
+              Chaque règle dépunchera seulement les employés choisis, ainsi que leurs segments de projet / autre tâche exactement comme ton autoDepunch17.
+            </div>
+
+            {autoDpError && <div style={alertErr}>{autoDpError}</div>}
+            {autoDpSaved && !autoDpError && <div style={alertOk}>Règles enregistrées.</div>}
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: isPhone ? "stretch" : "center",
+                gap: 10,
+                flexWrap: "wrap",
+                flexDirection: isPhone ? "column" : "row",
+                marginBottom: 12,
+                padding: isPhone ? 9 : 10,
+                borderRadius: 10,
+                background: "#f8fafc",
+                border: "1px solid #cbd5e1",
+              }}
+            >
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontWeight: 900,
+                  fontSize: isPhone ? 12 : 13,
+                  lineHeight: 1.35,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!autoDpEnabled}
+                  onChange={(e) => saveAutoDpEnabledOnly(e.target.checked)}
+                  disabled={autoDpSaving || autoDpLoading}
+                />
+                <span>Activer l’auto-dé-punch planifié</span>
+              </label>
+
+              <div style={{ fontSize: isPhone ? 11 : 12, color: "#475569", fontWeight: 800, wordBreak: "break-word" }}>
+                Fuseau : America/Toronto — Intervalle : 15 min
+              </div>
+            </div>
+
+            <div
+              style={{
+                marginBottom: 14,
+                padding: isPhone ? 10 : 12,
+                border: "1px solid #111",
+                borderRadius: 12,
+                background: "#f9fafb",
+              }}
+            >
+              <div style={{ fontWeight: 900, marginBottom: 10, fontSize: isPhone ? 13 : 14 }}>Ajouter une règle</div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: isPhone ? "1fr" : "160px minmax(0,1fr) auto",
+                  gap: 8,
+                  alignItems: "end",
+                }}
+              >
+                <div style={{ width: "100%" }}>
+                  <label style={label}>Heure</label>
+                  <select
+                    value={newAutoDpTime}
+                    onChange={(e) => setNewAutoDpTime(e.target.value)}
+                    style={{ ...input, width: "100%" }}
+                  >
+                    {QUARTER_HOUR_OPTIONS.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ width: "100%", minWidth: 0 }}>
+                  <label style={label}>Employés</label>
+                  <MultiSelectEmployesDropdown
+                    employes={autoDepunchEligibleEmployes}
+                    selectedIds={newAutoDpEmpIds}
+                    onToggle={toggleNewAutoDpEmp}
+                    placeholder="Choisir les employés"
+                    disabled={autoDpSaving || autoDpLoading}
+                    compact={isPhone}
+                  />
+                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                    <button type="button" onClick={selectAllNewAutoDpEmp} style={btnSecondarySmallResponsive(isPhone)}>
+                      Tout le monde
+                    </button>
+                    <button type="button" onClick={clearAllNewAutoDpEmp} style={btnSecondarySmallResponsive(isPhone)}>
+                      Vider
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={addAutoDpRule}
+                  disabled={autoDpSaving || autoDpLoading}
+                  style={isPhone ? btnPrimaryFullMobile : btnPrimary}
+                >
+                  {autoDpSaving ? "..." : "Ajouter la règle"}
+                </button>
+              </div>
+
+              <div style={{ marginTop: 8, fontSize: isPhone ? 11 : 12, color: "#374151", fontWeight: 700, wordBreak: "break-word" }}>
+                Sélectionnés :{" "}
+                {autoDepunchEligibleEmployes
+                  .filter((emp) => newAutoDpEmpIds.includes(emp.id))
+                  .map((emp) => emp.nom)
+                  .join(", ") || "Aucun"}
+              </div>
+            </div>
+
+            {isPhone ? renderAutoDpMobile() : renderAutoDpDesktop()}
+
+            {autoDpLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Chargement…</div>}
+          </section>
+
+          {/* ===================== 1.5) ALARMES ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Alarmes</h3>
+
+            <div
+              style={{
+                width: "100%",
+                overflowX: "auto",
+              }}
+            >
+              <div
+                style={{
+                  transform: alarmScale !== 1 ? `scale(${alarmScale})` : "none",
+                  transformOrigin: "top left",
+                  width: alarmScale !== 1 ? `${100 / alarmScale}%` : "100%",
+                }}
+              >
+                <PageAlarmesAdmin />
+              </div>
+            </div>
+          </section>
+
+          {/* ===================== 2) FACTURATION ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Facturation</h3>
+            <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 8 }}>
+              Ces informations sont utilisées en haut de la facture et pour le prix unitaire de la main-d&apos;œuvre.
+            </div>
+
+            {factureError && <div style={alertErr}>{factureError}</div>}
+            {factureSaved && !factureError && <div style={alertOk}>Réglages de facturation enregistrés.</div>}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: isPhone ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                  gap: 8,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <label style={label}>Nom de l&apos;entreprise</label>
+                  <input value={factureNom} onChange={(e) => setFactureNom(e.target.value)} style={{ ...input, width: "100%" }} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <label style={label}>Sous-titre / description</label>
+                  <input value={factureSousTitre} onChange={(e) => setFactureSousTitre(e.target.value)} style={{ ...input, width: "100%" }} />
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: isPhone ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                  gap: 8,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <label style={label}>Téléphone</label>
+                  <input value={factureTel} onChange={(e) => setFactureTel(e.target.value)} style={{ ...input, width: "100%" }} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <label style={label}>Courriel</label>
+                  <input value={factureCourriel} onChange={(e) => setFactureCourriel(e.target.value)} style={{ ...input, width: "100%" }} />
+                </div>
+              </div>
+
+              <div style={{ maxWidth: isPhone ? "100%" : 260 }}>
+                <label style={label}>Taux sur la route</label>
+                <input
+                  value={factureTauxHoraire}
+                  onChange={(e) => setFactureTauxHoraire(e.target.value)}
+                  inputMode="decimal"
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={{ marginTop: 4 }}>
+                <button onClick={saveFacture} disabled={factureLoading} style={isPhone ? btnPrimaryFullMobile : btnPrimary}>
+                  {factureLoading ? "Chargement..." : "Enregistrer la facture"}
+                </button>
+              </div>
+
+              <div style={{ marginTop: 12, borderTop: "2px solid #111", paddingTop: 10 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Emails — destinataires facture</div>
+                <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 8 }}>
+                  1 email par ligne (ou séparé par virgules).
+                </div>
+
+                {invoiceEmailError && <div style={alertErr}>{invoiceEmailError}</div>}
+                {invoiceEmailSaved && !invoiceEmailError && <div style={alertOk}>Emails enregistrés.</div>}
+
+                <textarea
+                  value={invoiceToRaw}
+                  onChange={(e) => setInvoiceToRaw(e.target.value)}
+                  rows={4}
+                  style={{
+                    width: "100%",
+                    border: "2px solid #111",
+                    borderRadius: 10,
+                    padding: 10,
+                    fontWeight: 800,
+                    fontSize: isPhone ? 12 : 13,
+                    boxSizing: "border-box",
+                  }}
+                  placeholder={"ex: jlabrie@styro.ca\ncompta@domaine.com"}
+                  disabled={invoiceEmailLoading}
+                />
+
+                <div style={{ marginTop: 8 }}>
+                  <button onClick={saveInvoiceEmails} disabled={invoiceEmailLoading} style={isPhone ? btnPrimaryFullMobile : btnPrimary}>
+                    {invoiceEmailLoading ? "Chargement..." : "Enregistrer les emails"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* ===================== 2.5) APPROBATION FEUILLES DE DÉPENSES ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Approbation des feuilles de dépenses</h3>
+            <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 8 }}>
+              Pour l’instant, toutes les feuilles de dépenses sont envoyées en attente et peuvent être approuvées par <b>n’importe quel admin</b>.
+            </div>
+            <div
+              style={{
+                background: "#fef9c3",
+                border: "2px solid #facc15",
+                color: "#92400e",
+                borderRadius: 10,
+                padding: 10,
+                fontWeight: 900,
+                fontSize: isPhone ? 11 : 12,
+              }}
+            >
+              Statut actuel : ⌛ À approuver par un admin
+            </div>
+          </section>
+
+          {/* ===================== 3) TRAVAILLEURS ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Employés</h3>
+
+            <div
+              style={{
+                marginBottom: 10,
+                padding: 10,
+                borderRadius: 10,
+                background: "#f8fafc",
+                border: "1px solid #cbd5e1",
+                fontSize: isPhone ? 11 : 12,
+                color: "#334155",
+                fontWeight: 700,
+                lineHeight: 1.45,
+              }}
+            >
+              Le rôle <b>CompteTV</b> crée maintenant un vrai compte Auth avec mot de passe direct.
+              Il n’utilise pas de code d’activation.
+            </div>
+
+            {tvCreateMsg && <div style={alertOk}>{tvCreateMsg}</div>}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isPhone
+                  ? "1fr"
+                  : employeRoleInput === "tv"
+                  ? isCompact
+                    ? "repeat(2, minmax(0, 1fr))"
+                    : "2fr 2fr 1.2fr 1.5fr 1.5fr auto"
+                  : isCompact
+                  ? "repeat(2, minmax(0, 1fr))"
+                  : "2fr 2fr 1.2fr 1.5fr auto",
+                gap: 8,
+                marginBottom: 8,
+                alignItems: "end",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <label style={label}>Nom</label>
+                <input
+                  value={employeNomInput}
+                  onChange={(e) => setEmployeNomInput(e.target.value)}
+                  placeholder="Nom de l'employé"
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <label style={label}>Email</label>
+                <input
+                  value={employeEmailInput}
+                  onChange={(e) => setEmployeEmailInput(e.target.value)}
+                  placeholder="Email"
+                  style={{ ...input, width: "100%" }}
+                />
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <label style={label}>Rôle</label>
+                <select
+                  value={employeRoleInput}
+                  onChange={(e) => {
+                    setEmployeRoleInput(e.target.value);
+                    setTvCreateMsg("");
+                  }}
+                  style={{ ...input, width: "100%" }}
+                >
+                  <option value="user">User</option>
+                  <option value="admin">Admin</option>
+                  <option value="rh">Ressource humaine</option>
+                  <option value="tv">CompteTV</option>
+                </select>
+              </div>
+
+              {employeRoleInput === "tv" ? (
+                <>
+                  <div style={{ minWidth: 0 }}>
+                    <label style={label}>Mot de passe CompteTV</label>
+                    <input
+                      type="password"
+                      value={employeTvPasswordInput}
+                      onChange={(e) => setEmployeTvPasswordInput(e.target.value)}
+                      style={{ ...input, width: "100%" }}
+                      placeholder="Minimum 6 caractères"
+                    />
+                  </div>
+
+                  <div style={{ minWidth: 0 }}>
+                    <label style={label}>Confirmer mot de passe</label>
+                    <input
+                      type="password"
+                      value={employeTvPassword2Input}
+                      onChange={(e) => setEmployeTvPassword2Input(e.target.value)}
+                      style={{ ...input, width: "100%" }}
+                      placeholder="Retape le mot de passe"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div style={{ minWidth: 0 }}>
+                  <label style={label}>Code activation</label>
+                  <input
+                    value={employeCodeInput}
+                    onChange={(e) => setEmployeCodeInput(e.target.value)}
+                    style={{ ...input, width: "100%" }}
+                  />
+                </div>
+              )}
+
+              <button onClick={onAddEmploye} style={isPhone ? btnPrimaryFullMobile : btnPrimary} disabled={tvCreateBusy}>
+                {tvCreateBusy ? "..." : "Ajouter"}
+              </button>
+            </div>
+
+            {isPhone ? renderEmployesMobile() : renderEmployesDesktop()}
+          </section>
+
+          {/* ===================== 4) AUTRES TÂCHES (ADMIN) ===================== */}
+          <section style={sectionResponsive(isPhone)}>
+            <h3 style={h3Bold}>Autres tâches (admin)</h3>
+            {autresAdminError && <div style={alertErr}>{autresAdminError}</div>}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isPhone ? "1fr" : isCompact ? "repeat(2, minmax(0, 1fr))" : "2fr 110px 1.2fr 1.1fr auto auto",
+                gap: 8,
+                alignItems: "end",
+                marginBottom: 10,
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <label style={label}>Nom</label>
+                <input value={newAutreNom} onChange={(e) => setNewAutreNom(e.target.value)} style={{ ...input, width: "100%" }} />
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <label style={label}>Ordre</label>
+                <input value={newAutreOrdre} onChange={(e) => setNewAutreOrdre(e.target.value)} inputMode="numeric" style={{ ...input, width: "100%" }} />
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <label style={label}>Code (optionnel)</label>
+                <input value={newAutreCode} onChange={(e) => setNewAutreCode(e.target.value)} style={{ ...input, width: "100%" }} />
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <label style={label}>Visibilité</label>
+                <select value={newAutreScope} onChange={(e) => setNewAutreScope(e.target.value)} style={{ ...input, width: "100%" }}>
+                  <option value="all">Tous</option>
+                  <option value="selected">Employés choisis</option>
+                </select>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, minHeight: 40 }}>
+                <input
+                  id="newAutreProjectLike"
+                  type="checkbox"
+                  checked={!!newAutreProjectLike}
+                  onChange={(e) => setNewAutreProjectLike(e.target.checked)}
+                />
+                <label htmlFor="newAutreProjectLike" style={{ fontWeight: 900, fontSize: isPhone ? 12 : 13 }}>
+                  Tâche spéciale
+                </label>
+              </div>
+
+              <button onClick={addAutreRow} disabled={autresAdminLoading} style={isPhone ? btnPrimaryFullMobile : btnPrimary}>
+                Ajouter
+              </button>
+            </div>
+
+            {newAutreScope === "selected" && (
+              <div
+                style={{
+                  marginBottom: 12,
+                  border: "1px solid #111",
+                  borderRadius: 10,
+                  padding: 10,
+                  background: "#f9fafb",
+                }}
+              >
+                <div style={{ fontWeight: 900, marginBottom: 8, fontSize: isPhone ? 11 : 12 }}>
+                  Visible seulement pour :
+                </div>
+
+                <MultiSelectEmployesDropdown
+                  employes={timeEmployes}
+                  selectedIds={newAutreVisibleToEmpIds}
+                  onToggle={toggleNewAutreEmp}
+                  placeholder="Choisir les employés"
+                  compact={isPhone}
+                />
+
+                <div style={{ marginTop: 8, fontSize: isPhone ? 11 : 12, color: "#374151", fontWeight: 700, wordBreak: "break-word" }}>
+                  Sélectionnés :{" "}
+                  {timeEmployes
+                    .filter((emp) => newAutreVisibleToEmpIds.includes(emp.id))
+                    .map((emp) => emp.nom)
+                    .join(", ") || "Aucun"}
+                </div>
+              </div>
+            )}
+
+            {isPhone ? renderAutresMobile() : renderAutresDesktop()}
+
+            {autresAdminLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Chargement…</div>}
+          </section>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2748,10 +3327,70 @@ function isQuarterHourTime(v) {
 }
 
 /* ================== Styles locaux ================== */
-const section = { border: "1px solid #111", borderRadius: 12, padding: 12, marginBottom: 16, background: "#fff" };
-const h3Bold = { margin: "0 0 10px 0", fontWeight: 900 };
-const label = { display: "block", fontSize: 11, color: "#444", marginBottom: 4, fontWeight: 900 };
-const input = { width: 240, padding: "8px 10px", border: "1px solid #111", borderRadius: 8, background: "#fff" };
+const pageWrap = {
+  width: "100%",
+  display: "flex",
+  justifyContent: "center",
+  boxSizing: "border-box",
+};
+
+function pageInnerResponsive(windowWidth) {
+  return {
+    width: "100%",
+    maxWidth: windowWidth <= 640 ? "100%" : windowWidth <= 1100 ? "1180px" : "1380px",
+    boxSizing: "border-box",
+  };
+}
+
+function pageContentResponsive(isPhone) {
+  return {
+    padding: isPhone ? 12 : 20,
+    fontFamily: "Arial, system-ui, -apple-system",
+    width: "100%",
+    boxSizing: "border-box",
+  };
+}
+
+function sectionResponsive(isPhone) {
+  return {
+    border: "1px solid #111",
+    borderRadius: 12,
+    padding: isPhone ? 10 : 12,
+    marginBottom: 16,
+    background: "#fff",
+    width: "100%",
+    boxSizing: "border-box",
+    overflow: "hidden",
+  };
+}
+
+const h3Bold = {
+  margin: "0 0 10px 0",
+  fontWeight: 900,
+  fontSize: "clamp(18px, 3.2vw, 24px)",
+  lineHeight: 1.15,
+};
+
+const label = {
+  display: "block",
+  fontSize: 11,
+  color: "#444",
+  marginBottom: 4,
+  fontWeight: 900,
+};
+
+const input = {
+  width: 240,
+  maxWidth: "100%",
+  minWidth: 0,
+  padding: "8px 10px",
+  border: "1px solid #111",
+  borderRadius: 8,
+  background: "#fff",
+  boxSizing: "border-box",
+  fontSize: 13,
+};
+
 const btnPrimary = {
   border: "none",
   background: "#2563eb",
@@ -2760,19 +3399,36 @@ const btnPrimary = {
   padding: "8px 14px",
   cursor: "pointer",
   fontWeight: 900,
+  fontSize: 13,
   boxShadow: "0 8px 18px rgba(37,99,235,0.25)",
+  maxWidth: "100%",
+  boxSizing: "border-box",
 };
-const btnPrimarySmall = { ...btnPrimary, padding: "4px 10px", boxShadow: "none", fontSize: 12 };
-const btnDangerSmall = {
-  border: "1px solid #111",
-  background: "#fee2e2",
-  color: "#111",
-  borderRadius: 10,
-  padding: "6px 10px",
-  cursor: "pointer",
-  fontWeight: 900,
-  fontSize: 12,
-};
+
+function btnPrimarySmallResponsive(isPhone) {
+  return {
+    ...btnPrimary,
+    padding: isPhone ? "7px 9px" : "4px 10px",
+    boxShadow: "none",
+    fontSize: isPhone ? 11 : 12,
+    width: isPhone ? "100%" : "auto",
+  };
+}
+
+function btnDangerSmallResponsive(isPhone) {
+  return {
+    border: "1px solid #111",
+    background: "#fee2e2",
+    color: "#111",
+    borderRadius: 10,
+    padding: isPhone ? "7px 9px" : "6px 10px",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: isPhone ? 11 : 12,
+    width: isPhone ? "100%" : "auto",
+    boxSizing: "border-box",
+  };
+}
 
 const btnSecondary = {
   border: "1px solid #111",
@@ -2782,12 +3438,50 @@ const btnSecondary = {
   padding: "6px 12px",
   cursor: "pointer",
   fontWeight: 900,
+  fontSize: 13,
+  maxWidth: "100%",
+  boxSizing: "border-box",
 };
-const btnSecondarySmall = { ...btnSecondary, padding: "4px 10px", fontSize: 12 };
 
-const tableBlack = { width: "100%", borderCollapse: "collapse", fontSize: 12, border: "2px solid #111", borderRadius: 8 };
-const thTimeBold = { textAlign: "left", padding: 8, borderBottom: "2px solid #111", fontWeight: 900 };
-const tdTime = { padding: 8, borderBottom: "1px solid #111", verticalAlign: "top" };
+function btnSecondarySmallResponsive(isPhone) {
+  return {
+    ...btnSecondary,
+    padding: isPhone ? "7px 9px" : "4px 10px",
+    fontSize: isPhone ? 11 : 12,
+    width: isPhone ? "100%" : "auto",
+  };
+}
+
+function tableBlackResponsive(isPhone) {
+  return {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: isPhone ? 11 : 12,
+    border: "2px solid #111",
+    borderRadius: 8,
+    minWidth: isPhone ? 700 : 0,
+  };
+}
+
+function thTimeBoldResponsive(isPhone) {
+  return {
+    textAlign: "left",
+    padding: isPhone ? 6 : 8,
+    borderBottom: "2px solid #111",
+    fontWeight: 900,
+    fontSize: isPhone ? 11 : 12,
+    whiteSpace: "nowrap",
+  };
+}
+
+function tdTimeResponsive(isPhone) {
+  return {
+    padding: isPhone ? 6 : 8,
+    borderBottom: "1px solid #111",
+    verticalAlign: "top",
+    fontSize: isPhone ? 11 : 12,
+  };
+}
 
 const alertErr = {
   background: "#fee2e2",
@@ -2798,7 +3492,9 @@ const alertErr = {
   fontSize: 12,
   marginBottom: 8,
   fontWeight: 900,
+  wordBreak: "break-word",
 };
+
 const alertOk = {
   background: "#dcfce7",
   color: "#111",
@@ -2808,18 +3504,115 @@ const alertOk = {
   fontSize: 12,
   marginBottom: 8,
   fontWeight: 900,
+  wordBreak: "break-word",
 };
 
-const btnAccueil = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 14px",
-  borderRadius: 14,
-  border: "1px solid #eab308",
-  background: "#facc15",
-  color: "#111827",
-  textDecoration: "none",
+function btnAccueilResponsive(isPhone, stacked) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    padding: isPhone ? "8px 10px" : "9px 12px",
+    borderRadius: 14,
+    border: "1px solid #eab308",
+    background: "#facc15",
+    color: "#111827",
+    textDecoration: "none",
+    fontWeight: 900,
+    fontSize: isPhone ? 12 : 13,
+    boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+    maxWidth: stacked ? "100%" : "100%",
+    width: "fit-content",
+    minWidth: 0,
+    boxSizing: "border-box",
+    whiteSpace: "nowrap",
+  };
+}
+
+const dangerBigButton = {
+  border: "2px solid #111",
+  background: "#fee2e2",
+  color: "#111",
+  borderRadius: 12,
+  cursor: "pointer",
+  fontWeight: 1000,
+  boxSizing: "border-box",
+};
+
+const cardMobile = {
+  border: "1px solid #111",
+  borderRadius: 12,
+  padding: 10,
+  background: "#fff",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const cardMobileTitle = {
   fontWeight: 900,
-  boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+  fontSize: 14,
+  lineHeight: 1.2,
+  wordBreak: "break-word",
+};
+
+const mobileFieldGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+};
+
+const mobileActionsWrap = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+};
+
+const btnPrimaryFullMobile = {
+  ...btnPrimary,
+  width: "100%",
+  padding: "9px 10px",
+  fontSize: 12,
+};
+
+const btnSecondaryFullMobile = {
+  ...btnSecondary,
+  width: "100%",
+  padding: "9px 10px",
+  fontSize: 12,
+};
+
+const btnDangerFullMobile = {
+  border: "1px solid #111",
+  background: "#fee2e2",
+  color: "#111",
+  borderRadius: 10,
+  padding: "9px 10px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 12,
+  width: "100%",
+  boxSizing: "border-box",
+};
+
+const emptyMobile = {
+  border: "1px dashed #94a3b8",
+  borderRadius: 12,
+  padding: 12,
+  textAlign: "center",
+  color: "#6b7280",
+  fontWeight: 800,
+  fontSize: 12,
+  background: "#f8fafc",
+};
+
+const mobileInfoLine = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  wordBreak: "break-word",
+};
+
+const mobileLabelMini = {
+  fontWeight: 900,
 };

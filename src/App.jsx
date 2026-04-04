@@ -13,11 +13,7 @@ import PageReglagesAdmin from "./PageReglagesAdmin";
 import HistoriqueEmploye from "./HistoriqueEmploye";
 import FeuilleDepensesExcel from "./FeuilleDepensesExcel";
 import MessagesPage from "./MessagesPage";
-
-// ✅ AJOUT: page test OCR
 import Test from "./Test";
-
-// ✅ AJOUT: gate "Commencer la journée" (1x/jour + reset minuit + reload)
 import StartDayGate from "./StartDayGate";
 
 import {
@@ -33,7 +29,6 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 
-// ➜ Supporte aussi les sous-chemins (#/historique/<empId>, etc.)
 function getRouteFromHash() {
   const raw = window.location.hash.replace(/^#\//, "");
   const first = raw.split("/")[0];
@@ -313,37 +308,22 @@ function AlarmPopup({ open, text, onClose, autoClose = false, autoCloseMs = 1200
 export default function App() {
   const [route, setRoute] = useState(getRouteFromHash());
 
-  // 🔐 état d’auth
   const [user, setUser] = useState(undefined);
-
-  // ✅ Profil employé
   const [me, setMe] = useState(null);
   const [meLoading, setMeLoading] = useState(true);
 
-  // ✅ Notif clignotante (note RH pour le compte connecté) — TOUS BLOCS
   const [noteNotifOn, setNoteNotifOn] = useState(false);
-
-  // ✅ NOUVEAU: notif clignotante RH quand un admin ajoute un message dans la case jaune
   const [rhAdminReplyLikeNotifOn, setRhAdminReplyLikeNotifOn] = useState(false);
-
-  // ✅ NOUVEAU: notif messages mini messenger
   const [messageNotifOn, setMessageNotifOn] = useState(false);
   const [messageNotifFromName, setMessageNotifFromName] = useState("");
-
-  // ✅ meta cache des notes (Firestore)
   const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
-
-  /* ===================== 📣 BROADCAST GLOBAL ===================== */
 
   const [broadcastText, setBroadcastText] = useState("");
   const [broadcastUpdMs, setBroadcastUpdMs] = useState(0);
   const [broadcastSeenMs, setBroadcastSeenMs] = useState(0);
   const [broadcastNotifOn, setBroadcastNotifOn] = useState(false);
   const [broadcastUpdatedBy, setBroadcastUpdatedBy] = useState("");
-
   const [broadcastPopupOpen, setBroadcastPopupOpen] = useState(false);
-
-  // UI admin/RH
   const [broadcastEditOpen, setBroadcastEditOpen] = useState(false);
   const [broadcastDraft, setBroadcastDraft] = useState("");
   const [remboursementNotifOn, setRemboursementNotifOn] = useState(false);
@@ -353,9 +333,13 @@ export default function App() {
   const [alarmPopupOpen, setAlarmPopupOpen] = useState(false);
   const [alarmPopupText, setAlarmPopupText] = useState("");
 
-  // ✅ audio Safari/iPhone
   const audioCtxRef = useRef(null);
   const audioUnlockedRef = useRef(false);
+
+  const topbarRow1Ref = useRef(null);
+  const centerTextRef = useRef(null);
+  const logoutBtnRef = useRef(null);
+  const [moveTopToolsToSecondLine, setMoveTopToolsToSecondLine] = useState(false);
 
   function getTorontoNowParts(date = new Date()) {
     const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -471,7 +455,6 @@ export default function App() {
     }
   }
 
-  // ✅ Débloquer l'audio au premier geste utilisateur
   useEffect(() => {
     const tryUnlock = async () => {
       await unlockAudio();
@@ -488,7 +471,6 @@ export default function App() {
     };
   }, []);
 
-  // router
   useEffect(() => {
     const onHash = () => setRoute(getRouteFromHash());
     window.addEventListener("hashchange", onHash);
@@ -496,7 +478,6 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u || null);
@@ -504,7 +485,6 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // load "me" employe doc
   useEffect(() => {
     let unsub = null;
 
@@ -560,11 +540,8 @@ export default function App() {
   const broadcastNonVu = hasBroadcastText && (broadcastUpdMs || 0) > (broadcastSeenMs || 0);
   const myEmailLower = String(user?.email || "").trim().toLowerCase();
   const isBroadcastAuthor = !!myEmailLower && myEmailLower === broadcastUpdatedBy;
-
   const showBroadcastPopup =
     hasBroadcastText && (broadcastPopupOpen || (!isBroadcastAuthor && broadcastNonVu));
-
-  /* ===================== 🔐 SHUTDOWN GLOBAL (security) ===================== */
 
   useEffect(() => {
     if (!user) return;
@@ -590,8 +567,6 @@ export default function App() {
         const hasLocalVersion = localRaw !== null && localRaw !== undefined && localRaw !== "";
         const localV = Number(localRaw || 0) || 0;
 
-        // ✅ PREMIÈRE connexion sur cet appareil / ce navigateur :
-        // on initialise la version locale, mais on NE déconnecte PAS.
         if (!hasLocalVersion) {
           try {
             window.localStorage?.setItem(SECURITY_KEY, String(remoteV));
@@ -599,8 +574,6 @@ export default function App() {
           return;
         }
 
-        // ✅ Seulement si la version distante augmente APRÈS qu'on ait déjà une version locale,
-        // on considère que c'est un vrai "déconnecter tout le monde".
         if (remoteV > localV) {
           try {
             window.localStorage?.setItem(SECURITY_KEY, String(remoteV));
@@ -622,7 +595,6 @@ export default function App() {
           return;
         }
 
-        // Sync simple si jamais la valeur locale diffère
         if (remoteV !== localV) {
           try {
             window.localStorage?.setItem(SECURITY_KEY, String(remoteV));
@@ -635,7 +607,6 @@ export default function App() {
     return () => unsub();
   }, [user?.uid]);
 
-  // ✅ FIX double-login après "déconnecter tout le monde"
   useEffect(() => {
     if (!user) return;
 
@@ -712,11 +683,9 @@ export default function App() {
     };
   }, [user?.uid]);
 
-  // 🔒 redirects selon rôle
   useEffect(() => {
     if (meLoading) return;
 
-    // TV: seulement accueil
     if (isTV) {
       if (route !== "accueil") {
         window.location.hash = "#/accueil";
@@ -724,7 +693,6 @@ export default function App() {
       }
     }
 
-    // RH: seulement historique + feuille de dépenses + messages
     if (isRH) {
       const allowedRHRoutes = ["historique", "feuille-depenses", "messages"];
       if (!allowedRHRoutes.includes(route)) {
@@ -733,7 +701,6 @@ export default function App() {
       }
     }
 
-    // Non admin et non RH et non TV
     if (route === "reglages-admin" && !isAdmin) {
       window.location.hash = "#/reglages";
     }
@@ -751,8 +718,6 @@ export default function App() {
     await signOut(auth);
     window.location.hash = "#/accueil";
   };
-
-  /* ===================== 🔔 NOTIF NOTE RH ===================== */
 
   useEffect(() => {
     setNoteNotifOn(false);
@@ -780,7 +745,7 @@ export default function App() {
 
     const empId = me.id;
     const myUid = String(user?.uid || "").trim();
-    const myEmailLower = String(user?.email || "").trim().toLowerCase();
+    const myEmailLower2 = String(user?.email || "").trim().toLowerCase();
 
     const colRef = collection(db, "employes", empId, "payBlockNotes");
 
@@ -806,7 +771,7 @@ export default function App() {
           const matchesTarget =
             (targetEmpId && targetEmpId === me.id) ||
             (targetUid && targetUid === myUid) ||
-            (targetEmailLower && targetEmailLower === myEmailLower) ||
+            (targetEmailLower && targetEmailLower === myEmailLower2) ||
             (!targetEmpId && !targetUid && !targetEmailLower);
 
           if (!matchesTarget) return;
@@ -827,7 +792,6 @@ export default function App() {
     return () => unsub();
   }, [user, me?.id, isRH, isTV]);
 
-  /* ===================== 🔔 NOTIF RH ===================== */
   useEffect(() => {
     setRhAdminReplyLikeNotifOn(false);
   }, [user?.uid, me?.id, isRH]);
@@ -872,8 +836,6 @@ export default function App() {
 
     return () => unsub();
   }, [user?.uid, me?.id, isRH]);
-
-  /* ===================== 🧾 NOTIF RH ===================== */
 
   useEffect(() => {
     setRemboursementNotifOn(false);
@@ -956,8 +918,6 @@ export default function App() {
 
     return () => unsub();
   }, [user?.uid, me?.id, isAdmin]);
-
-  /* ===================== 📣 LISTENERS BROADCAST ===================== */
 
   useEffect(() => {
     if (!user) return;
@@ -1151,7 +1111,6 @@ export default function App() {
     return () => window.clearInterval(timerId);
   }, [user?.uid, alarmItems]);
 
-  /* ===================== 💬 NOTIF MESSAGES GLOBALE ===================== */
   useEffect(() => {
     setMessageNotifOn(false);
     setMessageNotifFromName("");
@@ -1207,7 +1166,69 @@ export default function App() {
     return () => unsub();
   }, [user?.uid, me?.id, isAdmin, isRH]);
 
-  /* ===================== UI ===================== */
+  useEffect(() => {
+    const measureTopbar = () => {
+      window.requestAnimationFrame(() => {
+        const row = topbarRow1Ref.current;
+        const center = centerTextRef.current;
+        const logout = logoutBtnRef.current;
+
+        if (!row || !center || !logout) return;
+
+        const rowRect = row.getBoundingClientRect();
+        const centerRect = center.getBoundingClientRect();
+        const logoutRect = logout.getBoundingClientRect();
+
+        const rightZoneStart = centerRect.right + 8;
+        const rightZoneEnd = logoutRect.left - 6;
+        const availableRightZone = Math.max(0, rightZoneEnd - rightZoneStart);
+
+        const MIN_TESTER_BTN = 86;
+        const MIN_MESSAGE_PILL = messageNotifOn ? 120 : 0;
+        const GAP_BETWEEN = messageNotifOn ? 4 : 0;
+
+        const minNeeded = MIN_TESTER_BTN + MIN_MESSAGE_PILL + GAP_BETWEEN;
+
+        const centerStillVisible =
+          centerRect.left >= rowRect.left + 6 &&
+          centerRect.right <= logoutRect.left - 6;
+
+        const shouldMove = !centerStillVisible || availableRightZone < minNeeded;
+
+        setMoveTopToolsToSecondLine((prev) => (prev !== shouldMove ? shouldMove : prev));
+      });
+    };
+
+    measureTopbar();
+
+    window.addEventListener("resize", measureTopbar);
+
+    let ro = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(measureTopbar);
+      if (topbarRow1Ref.current) ro.observe(topbarRow1Ref.current);
+      if (centerTextRef.current) ro.observe(centerTextRef.current);
+      if (logoutBtnRef.current) ro.observe(logoutBtnRef.current);
+    }
+
+    return () => {
+      window.removeEventListener("resize", measureTopbar);
+      if (ro) ro.disconnect();
+    };
+  }, [
+    user?.email,
+    isAdmin,
+    isRH,
+    isTV,
+    messageNotifOn,
+    messageNotifFromName,
+    noteNotifOn,
+    rhAdminReplyLikeNotifOn,
+    remboursementNotifOn,
+    remboursementAdminNotifOn,
+    broadcastNotifOn,
+  ]);
+
   if (user === undefined) {
     return <div style={{ padding: 24 }}>Chargement...</div>;
   }
@@ -1259,12 +1280,9 @@ export default function App() {
   ];
 
   const topBarBase = {
-    display: "grid",
-    gridTemplateColumns: "1fr auto 1fr",
-    alignItems: "center",
-    padding: 1,
     borderBottom: "1px solid #e5e7eb",
     background: "#fff",
+    padding: "4px 8px",
   };
 
   const topBarBlink =
@@ -1287,12 +1305,12 @@ export default function App() {
           boxShadow: "0 0 0 2px rgba(249,115,22,0.22) inset, 0 0 24px rgba(249,115,22,0.30)",
         }
       : broadcastNotifOn && !isTV
-        ? {
-            animation: "notifBlinkBLEU 0.70s infinite",
-            borderBottom: "2px solid #2563eb",
-            boxShadow: "0 0 0 2px rgba(37,99,235,0.18) inset, 0 0 22px rgba(37,99,235,0.28)",
-          }
-        : null;
+      ? {
+          animation: "notifBlinkBLEU 0.70s infinite",
+          borderBottom: "2px solid #2563eb",
+          boxShadow: "0 0 0 2px rgba(37,99,235,0.18) inset, 0 0 22px rgba(37,99,235,0.28)",
+        }
+      : null;
 
   const connectedStyle =
     noteNotifOn ||
@@ -1307,6 +1325,59 @@ export default function App() {
           textShadow: "0 2px 10px rgba(0,0,0,0.25)",
         }
       : { color: "#111827", fontWeight: 700 };
+
+  const renderTopInlineTools = (extraStyle = {}) => (
+    <div className="app-topbar-inline-tools" style={extraStyle}>
+      {isAdmin ? (
+        <button
+          onClick={() => {
+            setBroadcastDraft(String(broadcastText || ""));
+            setBroadcastEditOpen(true);
+          }}
+          className="app-small-btn"
+          style={{
+            border: "1px solid #cbd5e1",
+            background: "#fff",
+            color: "#0f172a",
+            flexShrink: 0,
+          }}
+        >
+          + Message
+        </button>
+      ) : null}
+
+      {messageNotifOn ? (
+        <span
+          className="app-pill app-message-pill"
+          style={{
+            border: "1px solid rgba(255,255,255,0.75)",
+            background: "rgba(255,255,255,0.18)",
+            color: "inherit",
+          }}
+        >
+          Message de: {messageNotifFromName || "Quelqu’un"}
+        </span>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={async () => {
+          await unlockAudio();
+          playAlarmSound();
+        }}
+        className="app-small-btn"
+        style={{
+          border: "1px solid #cbd5e1",
+          background: "#fff",
+          color: "#0f172a",
+          flexShrink: 0,
+        }}
+        title="Tester le son d’alarme"
+      >
+        🔊 Tester son
+      </button>
+    </div>
+  );
 
   return (
     <div>
@@ -1331,206 +1402,313 @@ export default function App() {
           50%  { background: #2563eb; }
           100% { background: #ffffff; }
         }
+
+        .app-topbar-row1 {
+          position: relative;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          min-height: 34px;
+          width: 100%;
+          gap: 6px;
+        }
+
+        .app-topbar-center-abs {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          transform: translate(-50%, -50%);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          text-align: center;
+          min-width: 0;
+          max-width: calc(100% - 118px);
+          pointer-events: none;
+          z-index: 1;
+          font-size: clamp(9px, 1.15vw, 12px);
+          line-height: 1.15;
+          padding: 0 4px;
+        }
+
+        .app-connected-text {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 100%;
+        }
+
+        .app-topbar-rightline {
+          margin-left: auto;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 6px;
+          min-width: 0;
+          position: relative;
+          z-index: 2;
+        }
+
+        .app-topbar-inline-tools {
+          display: inline-flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 4px;
+          min-width: 0;
+          flex-wrap: nowrap;
+          max-width: 100%;
+        }
+
+        .app-topbar-inline-tools-secondline {
+          width: 100%;
+          margin-top: 4px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          min-width: 0;
+        }
+
+        .app-pill {
+          border-radius: 999px;
+          font-size: clamp(9px, 1vw, 13px);
+          padding: clamp(3px, 0.45vw, 4px) clamp(7px, 0.8vw, 10px);
+          font-weight: 1000;
+          line-height: 1.1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .app-message-pill {
+          max-width: min(34vw, 340px);
+          min-width: 120px;
+          flex: 0 1 auto;
+          white-space: normal;
+          overflow: visible;
+          text-overflow: clip;
+          line-height: 1.15;
+          text-align: center;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding-top: 5px;
+          padding-bottom: 5px;
+          word-break: break-word;
+          overflow-wrap: anywhere;
+        }
+
+        .app-small-btn,
+        .app-broadcast-btn,
+        .app-logout-btn {
+          border-radius: 10px;
+          font-weight: 900;
+          cursor: pointer;
+          line-height: 1;
+        }
+
+        .app-small-btn {
+          padding: clamp(3px, 0.35vw, 5px) clamp(5px, 0.6vw, 9px);
+          font-size: clamp(8px, 0.9vw, 12px);
+          flex: 0 0 auto;
+          min-width: 0;
+          white-space: nowrap;
+        }
+
+        .app-broadcast-btn {
+          padding: clamp(4px, 0.45vw, 6px) clamp(8px, 0.9vw, 12px);
+          font-size: clamp(10px, 1.05vw, 14px);
+          font-weight: 900;
+          max-width: min(90vw, 900px);
+          white-space: normal;
+          overflow: visible;
+          text-overflow: clip;
+          line-height: 1.2;
+          word-break: break-word;
+          overflow-wrap: anywhere;
+          text-align: center;
+        }
+
+        .app-logout-btn {
+          padding: clamp(2px, 0.28vw, 5px) clamp(4px, 0.52vw, 8px);
+          font-size: clamp(7px, 0.8vw, 11px);
+          flex: 0 0 auto;
+          min-width: 0;
+          max-width: 100%;
+          white-space: nowrap;
+        }
+
+        .app-topbar-row2 {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          align-items: center;
+          gap: 6px;
+          margin-top: 4px;
+          width: 100%;
+        }
+
+        @media (max-width: 900px) {
+          .app-topbar-row1 {
+            min-height: 32px;
+            gap: 4px;
+          }
+
+          .app-topbar-center-abs {
+            max-width: calc(100% - 92px);
+            font-size: clamp(8px, 2.1vw, 10px);
+          }
+
+          .app-pill,
+          .app-small-btn,
+          .app-logout-btn {
+            font-size: clamp(8px, 2.2vw, 10px);
+          }
+
+          .app-message-pill {
+            max-width: min(46vw, 250px);
+            min-width: 100px;
+          }
+
+          .app-topbar-inline-tools {
+            gap: 3px;
+          }
+
+          .app-broadcast-btn {
+            max-width: min(96vw, 96vw);
+          }
+        }
+
+        @media (max-width: 560px) {
+          .app-topbar-center-abs {
+            max-width: calc(100% - 84px);
+          }
+
+          .app-logout-btn {
+            padding: 2px 5px;
+            font-size: 8px;
+          }
+
+          .app-message-pill {
+            max-width: min(58vw, 220px);
+            min-width: 90px;
+          }
+
+          .app-broadcast-btn {
+            max-width: 96vw;
+          }
+        }
       `}</style>
 
-      <div style={{ ...topBarBase, ...(topBarBlink || {}) }}>
-        <div />
-
-        <div
-          style={{
-            justifySelf: "center",
-            fontSize: 12,
-            lineHeight: 1.2,
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            flexWrap: "wrap",
-            ...connectedStyle,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span>
+      <div className="app-topbar" style={{ ...topBarBase, ...(topBarBlink || {}) }}>
+        <div ref={topbarRow1Ref} className="app-topbar-row1">
+          <div ref={centerTextRef} className="app-topbar-center-abs" style={connectedStyle}>
+            <span className="app-connected-text">
               Connecté: {user.email}
               {isAdmin ? " — Admin" : isRH ? " — RH" : isTV ? " — Compte TV" : ""}
             </span>
-
-            {messageNotifOn ? (
-              <span
-                style={{
-                  border: "1px solid rgba(255,255,255,0.75)",
-                  background: "rgba(255,255,255,0.18)",
-                  color: "inherit",
-                  borderRadius: 999,
-                  fontSize: 13,
-                  padding: "4px 10px",
-                  fontWeight: 1000,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Message de: {messageNotifFromName || "Quelqu’un"}
-              </span>
-            ) : null}
-
-            {isRH && rhAdminReplyLikeNotifOn ? (
-              <span
-                style={{
-                  border: "1px solid rgba(255,255,255,0.75)",
-                  background: "rgba(255,255,255,0.18)",
-                  color: "inherit",
-                  borderRadius: 999,
-                  fontSize: 13,
-                  padding: "4px 10px",
-                  fontWeight: 1000,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Nouveau message admin dans la réponse employé
-              </span>
-            ) : null}
-
-            {isAdmin && remboursementAdminNotifOn ? (
-              <span
-                style={{
-                  border: "1px solid rgba(255,255,255,0.75)",
-                  background: "rgba(255,255,255,0.18)",
-                  color: "inherit",
-                  borderRadius: 999,
-                  fontSize: 13,
-                  padding: "4px 10px",
-                  fontWeight: 1000,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Un remboursement est à approuver
-              </span>
-            ) : null}
-
-            {isRH && remboursementNotifOn ? (
-              <span
-                style={{
-                  border: "1px solid rgba(255,255,255,0.75)",
-                  background: "rgba(255,255,255,0.18)",
-                  color: "inherit",
-                  borderRadius: 999,
-                  fontSize: 13,
-                  padding: "4px 10px",
-                  fontWeight: 1000,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Un remboursement approuvé est à télécharger
-              </span>
-            ) : null}
           </div>
+
+          <div className="app-topbar-rightline">
+            {!moveTopToolsToSecondLine ? renderTopInlineTools(connectedStyle) : null}
+
+            <button
+              ref={logoutBtnRef}
+              onClick={handleLogout}
+              className="app-logout-btn"
+              style={{
+                border:
+                  noteNotifOn || rhAdminReplyLikeNotifOn
+                    ? "2px solid #ff0000"
+                    : messageNotifOn
+                    ? "2px solid #16a34a"
+                    : remboursementNotifOn || remboursementAdminNotifOn
+                    ? "2px solid #f97316"
+                    : "1px solid #cbd5e1",
+                background: "#ffffff",
+              }}
+            >
+              Se déconnecter
+            </button>
+          </div>
+        </div>
+
+        {moveTopToolsToSecondLine ? (
+          <div className="app-topbar-inline-tools-secondline" style={connectedStyle}>
+            {renderTopInlineTools()}
+          </div>
+        ) : null}
+
+        <div className="app-topbar-row2" style={connectedStyle}>
+          {isRH && rhAdminReplyLikeNotifOn ? (
+            <span
+              className="app-pill"
+              style={{
+                border: "1px solid rgba(255,255,255,0.75)",
+                background: "rgba(255,255,255,0.18)",
+                color: "inherit",
+              }}
+            >
+              Nouveau message admin dans la réponse employé
+            </span>
+          ) : null}
+
+          {isAdmin && remboursementAdminNotifOn ? (
+            <span
+              className="app-pill"
+              style={{
+                border: "1px solid rgba(255,255,255,0.75)",
+                background: "rgba(255,255,255,0.18)",
+                color: "inherit",
+              }}
+            >
+              Un remboursement est à approuver
+            </span>
+          ) : null}
+
+          {isRH && remboursementNotifOn ? (
+            <span
+              className="app-pill"
+              style={{
+                border: "1px solid rgba(255,255,255,0.75)",
+                background: "rgba(255,255,255,0.18)",
+                color: "inherit",
+              }}
+            >
+              Un remboursement approuvé est à télécharger
+            </span>
+          ) : null}
 
           {!isTV && hasBroadcastText ? (
             <button
               type="button"
               onClick={() => setBroadcastPopupOpen(true)}
               title={broadcastText}
+              className="app-broadcast-btn"
               style={{
                 border: broadcastNonVu ? "1px solid rgba(255,255,255,0.75)" : "1px solid #cbd5e1",
                 background: broadcastNonVu ? "rgba(255,255,255,0.18)" : "#eff6ff",
                 color: broadcastNonVu ? "inherit" : "#1e3a8a",
-                borderRadius: 999,
-                fontSize: 16,
-                padding: "6px 12px",
-                fontWeight: 900,
-                cursor: "pointer",
-                maxWidth: 560,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
+                whiteSpace: "normal",
               }}
             >
               📣 {broadcastText}
             </button>
           ) : null}
 
-          {isAdmin ? (
-            <>
-              <button
-                onClick={() => {
-                  setBroadcastDraft(String(broadcastText || ""));
-                  setBroadcastEditOpen(true);
-                }}
-                style={{
-                  border: "1px solid #cbd5e1",
-                  background: "#fff",
-                  color: "#0f172a",
-                  borderRadius: 10,
-                  padding: "4px 10px",
-                  fontWeight: 900,
-                  cursor: "pointer",
-                }}
-              >
-                + Message
-              </button>
-
-              {hasBroadcastText ? (
-                <button
-                  onClick={adminClearBroadcast}
-                  style={{
-                    border: "1px solid #fecaca",
-                    background: "#fff1f2",
-                    color: "#b91c1c",
-                    borderRadius: 10,
-                    padding: "4px 10px",
-                    fontWeight: 900,
-                    cursor: "pointer",
-                  }}
-                  title="Supprimer le message global"
-                >
-                  Supprimer
-                </button>
-              ) : null}
-            </>
+          {isAdmin && hasBroadcastText ? (
+            <button
+              onClick={adminClearBroadcast}
+              className="app-small-btn"
+              style={{
+                border: "1px solid #fecaca",
+                background: "#fff1f2",
+                color: "#b91c1c",
+              }}
+              title="Supprimer le message global"
+            >
+              Supprimer
+            </button>
           ) : null}
-
-          <button
-            type="button"
-            onClick={async () => {
-              await unlockAudio();
-              playAlarmSound();
-            }}
-            style={{
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#0f172a",
-              borderRadius: 10,
-              padding: "4px 10px",
-              fontWeight: 900,
-              cursor: "pointer",
-            }}
-            title="Tester le son d’alarme"
-          >
-            🔊 Tester son
-          </button>
-        </div>
-
-        <div style={{ justifySelf: "end" }}>
-          <button
-            onClick={handleLogout}
-            style={{
-              border:
-                noteNotifOn || rhAdminReplyLikeNotifOn
-                  ? "2px solid #ff0000"
-                  : messageNotifOn
-                  ? "2px solid #16a34a"
-                  : remboursementNotifOn || remboursementAdminNotifOn
-                  ? "2px solid #f97316"
-                  : "1px solid #cbd5e1",
-              background: "#ffffff",
-              borderRadius: 7,
-              padding: "1px 6px",
-              fontWeight: 800,
-              fontSize: 11,
-              lineHeight: 1,
-              cursor: "pointer",
-            }}
-          >
-            Se déconnecter
-          </button>
         </div>
       </div>
 
@@ -1661,19 +1839,11 @@ export default function App() {
       {route === "reglages-admin" && isAdmin && <PageReglagesAdmin />}
 
       {route === "messages" && (isAdmin || isRH) && !isTV && (
-        <MessagesPage
-          isAdmin={isAdmin}
-          isRH={isRH}
-          meEmpId={me?.id || ""}
-        />
+        <MessagesPage isAdmin={isAdmin} isRH={isRH} meEmpId={me?.id || ""} />
       )}
 
       {route === "historique" && !isTV && (
-        <HistoriqueEmploye
-          isAdmin={isAdmin}
-          isRH={isRH}
-          meEmpId={me?.id || ""}
-        />
+        <HistoriqueEmploye isAdmin={isAdmin} isRH={isRH} meEmpId={me?.id || ""} />
       )}
 
       {route === "feuille-depenses" && !isTV && (

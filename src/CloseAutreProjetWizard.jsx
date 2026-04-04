@@ -743,6 +743,14 @@ export default function CloseAutreProjetWizard({ projet, open, onCancel, onClose
         padding: 16,
       }}
     >
+      <style>{`
+        @media (max-width: 900px) {
+          .close-autre-projet-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
+
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -847,7 +855,15 @@ export default function CloseAutreProjetWizard({ projet, open, onCancel, onClose
                   Résumé de fermeture
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                <div
+                  className="close-autre-projet-grid"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 8,
+                    marginBottom: 12,
+                  }}
+                >
                   <DetailKV k="Nom" v={projet.nom || "—"} />
                   <DetailKV k="Type" v={projet.projectLike ? "Tâche spéciale" : "Tâche simple"} />
                   <DetailKV k="Créée le" v={fmtDate(projet.createdAt)} />
