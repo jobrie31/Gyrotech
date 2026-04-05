@@ -35,12 +35,8 @@ import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { CloseProjectWizard } from "./PageProjetsFermes";
 import {
   PopupCreateProjet,
-  ClosedProjectsPopup,
   normalizeOuiNon,
   getMissingRequiredProjectFields,
-  deleteProjectDeep,
-  deleteAutreProjetDeep,
-  reopenClosedEntity,
 } from "./PageActions";
 
 /* ---------------------- Utils ---------------------- */
@@ -325,7 +321,6 @@ function usePresenceTodayP(projId, setError) {
 }
 
 function useProjectLifetimeStats(projId, setError) {
-  const [firstEverStart, setFirstEverStart] = useState(null);
   const [totalClosedMs, setTotalClosedMs] = useState(0);
 
   useEffect(() => {
@@ -337,25 +332,22 @@ function useProjectLifetimeStats(projId, setError) {
       async (daysSnap) => {
         try {
           const today = todayKey();
-          let first = null;
           let totalClosed = 0;
 
           for (const d of daysSnap.docs) {
             const isToday = d.id === today;
             const segSnap = await getDocs(query(collection(d.ref, "segments"), orderBy("start", "asc")));
+
             segSnap.forEach((seg) => {
               const s = seg.data();
               const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
               const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
               if (!st) return;
-
-              if (!first || st < first) first = st;
               if (isToday || !en) return;
               totalClosed += Math.max(0, en.getTime() - st.getTime());
             });
           }
 
-          setFirstEverStart(first);
           setTotalClosedMs(totalClosed);
         } catch (err) {
           console.error(err);
@@ -368,7 +360,7 @@ function useProjectLifetimeStats(projId, setError) {
     return () => unsub();
   }, [projId, setError]);
 
-  return { firstEverStart, totalClosedMs };
+  return { totalClosedMs };
 }
 
 /* ---------------------- UI helpers ---------------------- */
@@ -417,11 +409,7 @@ function DocsButton({ count, onClick, title = "Documents du projet", style, chil
   const c = Number(count || 0);
   return (
     <div style={{ position: "relative", display: "flex", width: "100%" }}>
-      <button
-        onClick={onClick}
-        style={{ ...style, width: "100%" }}
-        title={title}
-      >
+      <button onClick={onClick} style={{ ...style, width: "100%" }} title={title}>
         {children}
       </button>
       {c > 0 && (
@@ -605,7 +593,9 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
 
         <div style={{ fontWeight: 1000, marginBottom: 10, fontSize: 18 }}>Heures par jour & employé</div>
 
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 16 }}>
+        <table
+          style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 16 }}
+        >
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={thH}>Jour</th>
@@ -616,11 +606,15 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={3} style={{ padding: 14, color: "#666" }}>Chargement…</td>
+                <td colSpan={3} style={{ padding: 14, color: "#666" }}>
+                  Chargement…
+                </td>
               </tr>
             ) : histRows.length === 0 ? (
               <tr>
-                <td colSpan={3} style={{ padding: 14, color: "#666", textAlign: "center" }}>Aucun historique.</td>
+                <td colSpan={3} style={{ padding: 14, color: "#666", textAlign: "center" }}>
+                  Aucun historique.
+                </td>
               </tr>
             ) : (
               histRows.map((r, i) => (
@@ -635,7 +629,9 @@ function PopupHistoriqueProjet({ open, onClose, projet }) {
         </table>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onClose} style={btnGhost}>Fermer</button>
+          <button onClick={onClose} style={btnGhost}>
+            Fermer
+          </button>
         </div>
       </div>
     </div>
@@ -802,7 +798,12 @@ function PopupDocsManager({ open, onClose, projet }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>DOCS – {title}</div>
-          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}>×</button>
+          <button
+            onClick={onClose}
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
+            ×
+          </button>
         </div>
 
         {error ? <ErrorBanner error={error} onClose={() => setError(null)} /> : null}
@@ -823,7 +824,9 @@ function PopupDocsManager({ open, onClose, projet }) {
 
         <div style={{ fontWeight: 900, margin: "6px 0 10px", fontSize: 18 }}>Documents du projet</div>
 
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}>
+        <table
+          style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #eee", borderRadius: 14, fontSize: 18 }}
+        >
           <thead>
             <tr style={{ background: "#e5e7eb" }}>
               <th style={thCenter}>Nom</th>
@@ -859,7 +862,9 @@ function PopupDocsManager({ open, onClose, projet }) {
                   </td>
                   <td style={tdCenter}>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
-                      <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>Ouvrir</a>
+                      <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
+                        Ouvrir
+                      </a>
 
                       <button
                         onClick={() => navigator.clipboard?.writeText(f.url)}
@@ -881,7 +886,9 @@ function PopupDocsManager({ open, onClose, projet }) {
         </table>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onClose} style={btnGhost}>Fermer</button>
+          <button onClick={onClose} style={btnGhost}>
+            Fermer
+          </button>
         </div>
       </div>
     </div>
@@ -924,7 +931,12 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 1000, fontSize: 24 }}>Fermer le Bon de Travail</div>
-          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}>×</button>
+          <button
+            onClick={onClose}
+            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+          >
+            ×
+          </button>
         </div>
 
         <div style={{ fontSize: 18, color: "#111827", marginBottom: 12 }}>
@@ -951,7 +963,14 @@ function PopupFermerBT({ open, projet, onClose, onCreateInvoice }) {
         <button
           type="button"
           onClick={onCreateInvoice}
-          style={{ ...btnPrimary, width: "100%", padding: "14px 16px", fontSize: 18, fontWeight: 1000, borderRadius: 16 }}
+          style={{
+            ...btnPrimary,
+            width: "100%",
+            padding: "14px 16px",
+            fontSize: 18,
+            fontWeight: 1000,
+            borderRadius: 16,
+          }}
         >
           Fermer le BT et créer le Bon de Travail
         </button>
@@ -1036,9 +1055,7 @@ function PopupDetailsProjetSimple({
 
   const clientsFiltered = useMemo(() => {
     const q = String(live?.clientNom || "").trim().toLowerCase();
-    const base = [...clients].sort((a, b) =>
-      String(a?.name || "").localeCompare(String(b?.name || ""), "fr-CA")
-    );
+    const base = [...clients].sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), "fr-CA"));
     if (!q) return base.slice(0, 8);
     return base.filter((c) => String(c?.name || "").toLowerCase().includes(q)).slice(0, 8);
   }, [clients, live?.clientNom]);
@@ -1682,7 +1699,9 @@ function LigneProjet({
   setError,
 }) {
   const { hasOpen, totalMs: todayTotalMs } = usePresenceTodayP(proj.id, setError);
-  const { firstEverStart, totalClosedMs } = useProjectLifetimeStats(proj.id, setError);
+  const { totalClosedMs } = useProjectLifetimeStats(proj.id, setError);
+
+  const ouvertureProjet = proj.btOpenedAt || proj.createdAt || null;
 
   const statutLabel = hasOpen ? "En cours" : "—";
   const statutColor = hasOpen ? "#166534" : "#6b7280";
@@ -1725,7 +1744,7 @@ function LigneProjet({
       </td>
 
       <td style={tdCenter}>
-        <CellTextTwoLines text={fmtDate(firstEverStart)} />
+        <CellTextTwoLines text={fmtDate(ouvertureProjet)} />
       </td>
 
       <td style={tdCenter}>
@@ -1733,9 +1752,7 @@ function LigneProjet({
       </td>
 
       <td style={tdCenter}>
-        <CellTextOneLine
-          text={proj?.tempsEstimeHeures != null ? fmtHours(proj.tempsEstimeHeures) : "—"}
-        />
+        <CellTextOneLine text={proj?.tempsEstimeHeures != null ? fmtHours(proj.tempsEstimeHeures) : "—"} />
       </td>
 
       <td
@@ -1826,7 +1843,6 @@ export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createProjet, setCreateProjet] = useState(null);
-  const [closedPopupOpen, setClosedPopupOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -1864,8 +1880,7 @@ export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
     const missing = getMissingRequiredProjectFields(p);
     if (missing.length > 0) {
       window.alert(
-        "Impossible de fermer le projet.\n\nCertains champs ne sont pas remplis :\n- " +
-          missing.join("\n- ")
+        "Impossible de fermer le projet.\n\nCertains champs ne sont pas remplis :\n- " + missing.join("\n- ")
       );
       return;
     }
@@ -1904,39 +1919,6 @@ export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
     setMaterialProjId(id);
   };
 
-  const handleDeleteClosed = async (item) => {
-    const isAutre = item?.entityType === "autre";
-    const label = isAutre ? "cette tâche spéciale" : "ce projet";
-
-    const ok = window.confirm(`Supprimer ${label} définitivement ?`);
-    if (!ok) return;
-
-    try {
-      if (isAutre) await deleteAutreProjetDeep(item.id);
-      else await deleteProjectDeep(item.id);
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    }
-  };
-
-  const handleReopenClosed = async (item) => {
-    const isAutre = item?.entityType === "autre";
-    const ok = window.confirm(
-      isAutre
-        ? "Voulez-vous réouvrir cette tâche spéciale ?"
-        : "Voulez-vous réouvrir ce projet ?"
-    );
-    if (!ok) return;
-
-    try {
-      await reopenClosedEntity(item);
-    } catch (e) {
-      console.error(e);
-      setError(e?.message || String(e));
-    }
-  };
-
   return (
     <>
       <style>{`
@@ -1949,32 +1931,6 @@ export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
 
       <div style={{ padding: 0, width: "100%" }}>
         <ErrorBanner error={error} onClose={() => setError(null)} />
-
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-          <button
-            type="button"
-            onClick={() => setClosedPopupOpen(true)}
-            style={{
-              ...btnSecondary,
-              height: "clamp(34px, 5.6vw, 44px)",
-              padding: "0 clamp(6px, 0.9vw, 10px)",
-              fontSize: "clamp(10px, 1.45vw, 14px)",
-              fontWeight: 800,
-              minWidth: 0,
-              maxWidth: "100%",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              borderRadius: 12,
-              lineHeight: 1,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            Projets fermés
-          </button>
-        </div>
 
         <div style={{ width: "100%", overflowX: "auto" }}>
           <table
@@ -2122,139 +2078,132 @@ export default function PageProjets({ onOpenMaterial, isAdmin = false }) {
           onClosed={handleWizardClosed}
           startAtSummary={!!closeWizard.startAtSummary}
         />
-
-        <ClosedProjectsPopup
-          open={closedPopupOpen}
-          onClose={() => setClosedPopupOpen(false)}
-          onReopen={handleReopenClosed}
-          onDelete={handleDeleteClosed}
-        />
       </div>
     </>
   );
-  }
+}
 
-  /* ---------------------- Styles ---------------------- */
-  const infoCard = {
-    border: "1px solid #e5e7eb",
-    borderRadius: 14,
-    padding: 12,
-    background: "#f8fafc",
-  };
-  const infoCardLabel = { color: "#64748b", fontWeight: 900 };
-  const infoCardValue = { fontWeight: 1000, fontSize: 18 };
+/* ---------------------- Styles ---------------------- */
+const infoCard = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 14,
+  padding: 12,
+  background: "#f8fafc",
+};
+const infoCardLabel = { color: "#64748b", fontWeight: 900 };
+const infoCardValue = { fontWeight: 1000, fontSize: 18 };
 
-  const thCenter = {
-    textAlign: "center",
-    padding: "clamp(3px, 0.7vw, 10px) clamp(4px, 0.9vw, 12px)",
-    borderBottom: "1px solid #d1d5db",
-    whiteSpace: "nowrap",
-    wordBreak: "keep-all",
-    overflowWrap: "normal",
-    hyphens: "none",
-    fontWeight: 800,
-    fontSize: "clamp(7px, 1.1vw, 18px)",
-    lineHeight: 1.08,
-    color: "#111827",
-  };
+const thCenter = {
+  textAlign: "center",
+  padding: "clamp(3px, 0.7vw, 10px) clamp(4px, 0.9vw, 12px)",
+  borderBottom: "1px solid #d1d5db",
+  whiteSpace: "nowrap",
+  wordBreak: "keep-all",
+  overflowWrap: "normal",
+  hyphens: "none",
+  fontWeight: 800,
+  fontSize: "clamp(7px, 1.1vw, 18px)",
+  lineHeight: 1.08,
+  color: "#111827",
+};
 
-  const tdCenter = {
-    textAlign: "center",
-    padding: "clamp(2px, 0.45vw, 8px) clamp(3px, 0.55vw, 8px)",
-    borderBottom: "1px solid #eee",
-    verticalAlign: "middle",
-    lineHeight: 1.05,
-  };
+const tdCenter = {
+  textAlign: "center",
+  padding: "clamp(2px, 0.45vw, 8px) clamp(3px, 0.55vw, 8px)",
+  borderBottom: "1px solid #eee",
+  verticalAlign: "middle",
+  lineHeight: 1.05,
+};
 
-  const actionBtnCompact = {
-    padding: "clamp(4px, 0.6vw, 10px) clamp(4px, 0.8vw, 12px)",
-    fontSize: "clamp(4px, 0.9vw, 16px)",
-    borderRadius: "clamp(8px, 0.8vw, 12px)",
-    minWidth: 0,
-    width: "100%",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "clip",
-    lineHeight: 1,
-    letterSpacing: "-0.04em",
-  };
+const actionBtnCompact = {
+  padding: "clamp(4px, 0.6vw, 10px) clamp(4px, 0.8vw, 12px)",
+  fontSize: "clamp(4px, 0.9vw, 16px)",
+  borderRadius: "clamp(8px, 0.8vw, 12px)",
+  minWidth: 0,
+  width: "100%",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "clip",
+  lineHeight: 1,
+  letterSpacing: "-0.04em",
+};
 
-  const input = {
-    width: "100%",
-    padding: "10px 12px",
-    border: "1px solid #cbd5e1",
-    borderRadius: 12,
-    background: "#fff",
-    fontSize: 18,
-    fontWeight: 900,
-  };
+const input = {
+  width: "100%",
+  padding: "10px 12px",
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  background: "#fff",
+  fontSize: 18,
+  fontWeight: 900,
+};
 
-  const btnPrimary = {
-    border: "none",
-    background: "#2563eb",
-    color: "#fff",
-    borderRadius: 14,
-    padding: "10px 16px",
-    cursor: "pointer",
-    fontWeight: 1000,
-    fontSize: 16,
-    boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
-  };
+const btnPrimary = {
+  border: "none",
+  background: "#2563eb",
+  color: "#fff",
+  borderRadius: 14,
+  padding: "10px 16px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 16,
+  boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
+};
 
-  const btnSecondary = {
-    border: "1px solid #cbd5e1",
-    background: "#f8fafc",
-    borderRadius: 12,
-    padding: "8px 10px",
-    cursor: "pointer",
-    fontWeight: 900,
-    fontSize: 14,
-    textDecoration: "none",
-    color: "#111",
-  };
+const btnSecondary = {
+  border: "1px solid #cbd5e1",
+  background: "#f8fafc",
+  borderRadius: 12,
+  padding: "8px 10px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 14,
+  textDecoration: "none",
+  color: "#111",
+};
 
-  const btnGhost = {
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    borderRadius: 14,
-    padding: "10px 14px",
-    cursor: "pointer",
-    fontWeight: 900,
-    fontSize: 16,
-  };
+const btnGhost = {
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 16,
+};
 
-  const btnBlue = {
-    border: "none",
-    background: "#0ea5e9",
-    color: "#fff",
-    borderRadius: 12,
-    padding: "8px 10px",
-    cursor: "pointer",
-    fontWeight: 1000,
-    fontSize: 14,
-  };
+const btnBlue = {
+  border: "none",
+  background: "#0ea5e9",
+  color: "#fff",
+  borderRadius: 12,
+  padding: "8px 10px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 14,
+};
 
-  const btnDocs = { ...btnBlue, background: "#faa72bff" };
+const btnDocs = { ...btnBlue, background: "#faa72bff" };
 
-  const btnDanger = {
-    border: "1px solid #ef4444",
-    background: "#fee2e2",
-    color: "#b91c1c",
-    borderRadius: 14,
-    padding: "10px 14px",
-    cursor: "pointer",
-    fontWeight: 1000,
-    fontSize: 16,
-  };
+const btnDanger = {
+  border: "1px solid #ef4444",
+  background: "#fee2e2",
+  color: "#b91c1c",
+  borderRadius: 14,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: 16,
+};
 
-  const btnCloseBT = {
-    border: "1px solid #16a34a",
-    background: "#dcfce7",
-    color: "#166534",
-    borderRadius: 12,
-    padding: "8px 10px",
-    cursor: "pointer",
-    fontWeight: 1000,
-    fontSize: "clamp(4px, 0.82vw, 14px)",
-    letterSpacing: "-0.05em",
-  };
+const btnCloseBT = {
+  border: "1px solid #16a34a",
+  background: "#dcfce7",
+  color: "#166534",
+  borderRadius: 12,
+  padding: "8px 10px",
+  cursor: "pointer",
+  fontWeight: 1000,
+  fontSize: "clamp(4px, 0.82vw, 14px)",
+  letterSpacing: "-0.05em",
+};

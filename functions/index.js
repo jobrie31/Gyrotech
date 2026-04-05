@@ -6,6 +6,8 @@
  * - Auto-dé-punch planifié par règles Firestore (every 15 minutes)
  * - SHUTDOWN GLOBAL: kickAllUsers (revokeRefreshTokens) + sessionVersion++
  * - DEBUG: logs détaillés pour syncProjectSegOnEmpClose
+ * - CLEANUP: suppression auto des projets fermés complètement après deleteAt
+ * - CLEANUP: suppression auto des autresProjets spéciaux fermés complètement après deleteAt
  */
 
 const { setGlobalOptions } = require("firebase-functions/v2");
@@ -773,8 +775,8 @@ exports.sendOtherTaskCloseEmail = onCall(
       toEmails = s.includes(",")
         ? s.split(",").map((x) => x.trim()).filter(Boolean)
         : s
-        ? [s]
-        : [];
+          ? [s]
+          : [];
     }
 
     if (!toEmails.length) {
@@ -1225,8 +1227,6 @@ exports.autoDepunchScheduledRules = onSchedule(
               return false;
             }
 
-            // Logique identique à autoDepunch17 :
-            // si le punch commence APRES l'heure de la règle, on ne le ferme pas
             if (startMs > cutoffMs) {
               logger.info("autoDepunchScheduledRules skip emp seg: started after cutoff", {
                 ruleId,
@@ -1365,6 +1365,390 @@ exports.autoDepunchScheduledRules = onSchedule(
       totalClosedEmpSegs,
       totalClosedProjSegs,
       totalClosedOtherSegs,
+    });
+  }
+);
+
+/* =========================
+   CLEANUP helpers
+   ========================= */
+
+function toDateSafeAdmin(v) {
+  try {
+    if (!v) return null;
+    if (typeof v.toDate === "function") return v.toDate();
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
+  }
+}
+
+async function deleteCollectionDocs(colRef, batchSize = 400) {
+  while (true) {
+    const snap = await colRef.limit(batchSize).get();
+    if (snap.empty) break;
+
+    const batch = admin.firestore().batch();
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+
+    if (snap.size < batchSize) break;
+  }
+}
+
+/* =========================
+   CLEANUP projets
+   ========================= */
+async function deleteProjectDeepAdmin(projId) {
+  if (!projId) return;
+
+  const db = admin.firestore();
+  const bucket = admin.storage().bucket();
+
+  logger.info("deleteProjectDeepAdmin START", { projId });
+
+  try {
+    await deleteCollectionDocs(
+      db.collection("projets").doc(projId).collection("usagesMateriels")
+    );
+  } catch (e) {
+    logger.error("deleteProjectDeepAdmin usagesMateriels error", {
+      projId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await deleteCollectionDocs(
+      db.collection("projets").doc(projId).collection("materiel")
+    );
+  } catch (e) {
+    logger.error("deleteProjectDeepAdmin materiel error", {
+      projId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    const timecardsSnap = await db
+      .collection("projets")
+      .doc(projId)
+      .collection("timecards")
+      .get();
+
+    for (const dayDoc of timecardsSnap.docs) {
+      try {
+        await deleteCollectionDocs(dayDoc.ref.collection("segments"));
+      } catch (e) {
+        logger.error("deleteProjectDeepAdmin segments error", {
+          projId,
+          day: dayDoc.id,
+          message: e?.message || String(e),
+        });
+      }
+
+      try {
+        await dayDoc.ref.delete();
+      } catch (e) {
+        logger.error("deleteProjectDeepAdmin timecard day delete error", {
+          projId,
+          day: dayDoc.id,
+          message: e?.message || String(e),
+        });
+      }
+    }
+  } catch (e) {
+    logger.error("deleteProjectDeepAdmin timecards error", {
+      projId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await bucket.deleteFiles({
+      prefix: `projets/${projId}/pdfs/`,
+      force: true,
+    });
+  } catch (e) {
+    logger.error("deleteProjectDeepAdmin storage pdfs error", {
+      projId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await bucket.file(`factures/${projId}.pdf`).delete({ ignoreNotFound: true });
+  } catch (e) {
+    logger.error("deleteProjectDeepAdmin facture delete error", {
+      projId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await db.collection("projets").doc(projId).delete();
+  } catch (e) {
+    logger.error("deleteProjectDeepAdmin projet doc delete error", {
+      projId,
+      message: e?.message || String(e),
+    });
+    throw e;
+  }
+
+  logger.info("deleteProjectDeepAdmin DONE", { projId });
+}
+
+/* =========================
+   CLEANUP autresProjets spéciaux
+   ========================= */
+async function deleteAutreProjetDeepAdmin(otherId) {
+  if (!otherId) return;
+
+  const db = admin.firestore();
+  const bucket = admin.storage().bucket();
+
+  logger.info("deleteAutreProjetDeepAdmin START", { otherId });
+
+  try {
+    await deleteCollectionDocs(
+      db.collection("autresProjets").doc(otherId).collection("usagesMateriels")
+    );
+  } catch (e) {
+    logger.error("deleteAutreProjetDeepAdmin usagesMateriels error", {
+      otherId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await deleteCollectionDocs(
+      db.collection("autresProjets").doc(otherId).collection("materiel")
+    );
+  } catch (e) {
+    logger.error("deleteAutreProjetDeepAdmin materiel error", {
+      otherId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    const timecardsSnap = await db
+      .collection("autresProjets")
+      .doc(otherId)
+      .collection("timecards")
+      .get();
+
+    for (const dayDoc of timecardsSnap.docs) {
+      try {
+        await deleteCollectionDocs(dayDoc.ref.collection("segments"));
+      } catch (e) {
+        logger.error("deleteAutreProjetDeepAdmin segments error", {
+          otherId,
+          day: dayDoc.id,
+          message: e?.message || String(e),
+        });
+      }
+
+      try {
+        await dayDoc.ref.delete();
+      } catch (e) {
+        logger.error("deleteAutreProjetDeepAdmin timecard day delete error", {
+          otherId,
+          day: dayDoc.id,
+          message: e?.message || String(e),
+        });
+      }
+    }
+  } catch (e) {
+    logger.error("deleteAutreProjetDeepAdmin timecards error", {
+      otherId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await bucket.deleteFiles({
+      prefix: `autresProjets/${otherId}/pdfs/`,
+      force: true,
+    });
+  } catch (e) {
+    logger.error("deleteAutreProjetDeepAdmin storage pdfs error", {
+      otherId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await bucket.file(`autresProjetsFermes/${otherId}.pdf`).delete({ ignoreNotFound: true });
+  } catch (e) {
+    logger.error("deleteAutreProjetDeepAdmin fermeture pdf delete error", {
+      otherId,
+      message: e?.message || String(e),
+    });
+  }
+
+  try {
+    await db.collection("autresProjets").doc(otherId).delete();
+  } catch (e) {
+    logger.error("deleteAutreProjetDeepAdmin doc delete error", {
+      otherId,
+      message: e?.message || String(e),
+    });
+    throw e;
+  }
+
+  logger.info("deleteAutreProjetDeepAdmin DONE", { otherId });
+}
+
+/* =========================
+   CLEANUP scheduler
+   - roule 1x / jour
+   - supprime projets fermés complètement dont deleteAt est passé
+   - supprime autresProjets spéciaux fermés complètement dont deleteAt est passé
+   ========================= */
+exports.cleanupOldClosedProjects = onSchedule(
+  {
+    schedule: "10 3 * * *",
+    timeZone: "America/Montreal",
+    region: "northamerica-northeast1",
+    timeoutSeconds: 540,
+    memory: "1GiB",
+  },
+  async () => {
+    const db = admin.firestore();
+    const now = new Date();
+
+    logger.info("cleanupOldClosedProjects START", {
+      nowIso: now.toISOString(),
+    });
+
+    let scanned = 0;
+    let deleted = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    /* ===== projets ===== */
+    const projetsSnap = await db.collection("projets").get();
+
+    for (const docSnap of projetsSnap.docs) {
+      scanned++;
+
+      const projId = docSnap.id;
+      const data = docSnap.data() || {};
+
+      try {
+        const isFullClosed = data.fermeComplet === true;
+        const isClosed = data.ouvert === false;
+
+        if (!isFullClosed || !isClosed) {
+          skipped++;
+          continue;
+        }
+
+        let deleteDate = toDateSafeAdmin(data.deleteAt);
+
+        if (!deleteDate) {
+          const fermeAt = toDateSafeAdmin(data.fermeCompletAt);
+          if (fermeAt) {
+            deleteDate = new Date(fermeAt.getTime() + 60 * 24 * 60 * 60 * 1000);
+          }
+        }
+
+        if (!deleteDate) {
+          skipped++;
+          logger.warn("cleanupOldClosedProjects skip missing delete date", { projId });
+          continue;
+        }
+
+        if (deleteDate > now) {
+          skipped++;
+          continue;
+        }
+
+        await deleteProjectDeepAdmin(projId);
+        deleted++;
+
+        logger.info("cleanupOldClosedProjects deleted", {
+          projId,
+          deleteDateIso: deleteDate.toISOString(),
+        });
+      } catch (e) {
+        errors++;
+        logger.error("cleanupOldClosedProjects FAILED", {
+          projId,
+          message: e?.message || String(e),
+          stack: e?.stack || null,
+        });
+      }
+    }
+
+    /* ===== autresProjets spéciaux ===== */
+    const autresSnap = await db.collection("autresProjets").get();
+
+    for (const docSnap of autresSnap.docs) {
+      scanned++;
+
+      const otherId = docSnap.id;
+      const data = docSnap.data() || {};
+
+      try {
+        const isSpecial = data.projectLike === true;
+        const isClosed = data.ouvert === false;
+        const isFullClosed = data.fermetureConfirmee === true;
+        const isPdfEmail = String(data.documentFermetureType || "") === "pdf_email";
+
+        if (!isSpecial || !isClosed || !isFullClosed || !isPdfEmail) {
+          skipped++;
+          continue;
+        }
+
+        let deleteDate = toDateSafeAdmin(data.deleteAt);
+
+        if (!deleteDate) {
+          const closedBase =
+            toDateSafeAdmin(data.documentFermetureEnvoyeAt) ||
+            toDateSafeAdmin(data.closedAt) ||
+            toDateSafeAdmin(data.updatedAt);
+
+          if (closedBase) {
+            deleteDate = new Date(closedBase.getTime() + 60 * 24 * 60 * 60 * 1000);
+          }
+        }
+
+        if (!deleteDate) {
+          skipped++;
+          logger.warn("cleanupOldClosedProjects skip missing delete date autreProjet", { otherId });
+          continue;
+        }
+
+        if (deleteDate > now) {
+          skipped++;
+          continue;
+        }
+
+        await deleteAutreProjetDeepAdmin(otherId);
+        deleted++;
+
+        logger.info("cleanupOldClosedProjects deleted autreProjet", {
+          otherId,
+          deleteDateIso: deleteDate.toISOString(),
+        });
+      } catch (e) {
+        errors++;
+        logger.error("cleanupOldClosedProjects FAILED autreProjet", {
+          otherId,
+          message: e?.message || String(e),
+          stack: e?.stack || null,
+        });
+      }
+    }
+
+    logger.info("cleanupOldClosedProjects DONE", {
+      scanned,
+      deleted,
+      skipped,
+      errors,
     });
   }
 );

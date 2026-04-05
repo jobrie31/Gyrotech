@@ -21,7 +21,13 @@ import PageProjets from "./PageProjets";
 import ProjectMaterielPanel from "./ProjectMaterielPanel";
 import { styles, Card, Button, PageContainer } from "./UIPro";
 import AutresProjetsSection from "./AutresProjetsSection";
-import { PopupCreateProjet } from "./PageActions";
+import {
+  PopupCreateProjet,
+  ClosedProjectsPopup,
+  deleteProjectDeep,
+  deleteAutreProjetDeep,
+  reopenClosedEntity,
+} from "./PageActions";
 import TableauEmployesTV from "./TableauEmployesTV";
 
 const APP_BUILD = "3.0";
@@ -90,6 +96,12 @@ function getProjetBT(p) {
     p?.numBT ??
     "";
   return String(bt ?? "").trim();
+}
+function getProjetBTSortValue(p) {
+  const raw = getProjetBT(p);
+  const digits = String(raw || "").replace(/[^\d.-]/g, "");
+  const n = Number(digits);
+  return Number.isFinite(n) ? n : null;
 }
 function getProjetLabel(p) {
   const nom = String(p?.nom || p?.clientNom || "(sans nom)").trim() || "(sans nom)";
@@ -245,8 +257,34 @@ function useOpenProjets(setError) {
           const nom = getProjetNom(data);
           list.push({ id: d.id, ...data, nom, ouvert: isOpen });
         });
+
         list = list.filter((p) => p.ouvert === true);
-        list.sort((a, b) => (a.nom || "").localeCompare(b.nom || ""));
+
+        list.sort((a, b) => {
+          const aBT = getProjetBTSortValue(a);
+          const bBT = getProjetBTSortValue(b);
+
+          const aHasBT = aBT !== null;
+          const bHasBT = bBT !== null;
+
+          if (aHasBT && bHasBT && aBT !== bBT) {
+            return bBT - aBT;
+          }
+
+          if (aHasBT && !bHasBT) return -1;
+          if (!aHasBT && bHasBT) return 1;
+
+          const aBTText = getProjetBT(a);
+          const bBTText = getProjetBT(b);
+          const btTextCompare = bBTText.localeCompare(aBTText, "fr-CA", {
+            numeric: true,
+            sensitivity: "base",
+          });
+          if (btTextCompare !== 0) return btTextCompare;
+
+          return (a.nom || "").localeCompare(b.nom || "", "fr-CA");
+        });
+
         setRows(list);
       },
       (err) => setError(err?.message || String(err))
@@ -656,8 +694,7 @@ async function doDepunchWithProject(emp) {
   const openEmpSegs = await getOpenEmpSegments(emp.id, key);
 
   const jobTokens = Array.from(
-    new Set(
-      openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0))
+    new Set(openEmpSegs.map((d) => d.data()?.jobId).filter((v) => typeof v === "string" && v.length > 0))
   );
 
   const batch = writeBatch(db);
@@ -2044,6 +2081,7 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
 
   const [materialProjId, setMaterialProjId] = useState(null);
   const [createProjetOpen, setCreateProjetOpen] = useState(false);
+  const [closedPopupOpen, setClosedPopupOpen] = useState(false);
 
   useEffect(() => {
     if (isTV) return;
@@ -2071,6 +2109,39 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
       window.removeEventListener("open-create-projet", handleOpenCreateProjet);
     };
   }, [isTV]);
+
+  const handleDeleteClosed = async (item) => {
+    const isAutre = item?.entityType === "autre";
+    const label = isAutre ? "cette tâche spéciale" : "ce projet";
+
+    const ok = window.confirm(`Supprimer ${label} définitivement ?`);
+    if (!ok) return;
+
+    try {
+      if (isAutre) await deleteAutreProjetDeep(item.id);
+      else await deleteProjectDeep(item.id);
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    }
+  };
+
+  const handleReopenClosed = async (item) => {
+    const isAutre = item?.entityType === "autre";
+    const ok = window.confirm(
+      isAutre
+        ? "Voulez-vous réouvrir cette tâche spéciale ?"
+        : "Voulez-vous réouvrir ce projet ?"
+    );
+    if (!ok) return;
+
+    try {
+      await reopenClosedEntity(item);
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || String(e));
+    }
+  };
 
   const [pressed, setPressed] = useState(false);
   void pressed;
@@ -2188,7 +2259,7 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
           ) : (
             <>
               <Card
-                title="👥 Employé(e)"
+                title={<span style={{ fontSize: 20, fontWeight: 900 }}>👥 Employé(e)</span>}
                 right={<div style={{ display: "flex", gap: 22, alignItems: "center", minWidth: 0 }} />}
                 style={{ width: "100%" }}
               >
@@ -2245,11 +2316,47 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
                 </div>
               </Card>
 
-              <Card title="📁 Projets" style={{ width: "100%" }}>
+              <Card
+                title={<span style={{ fontSize: 20, fontWeight: 900 }}>📁 Projets</span>}
+                right={
+                  <div style={{ display: "flex", justifyContent: "flex-end", width: "100%" }}>
+                    <button
+                      type="button"
+                      onClick={() => setClosedPopupOpen(true)}
+                      style={{
+                        border: "1px solid #cbd5e1",
+                        background: "#f8fafc",
+                        borderRadius: 12,
+                        height: "clamp(34px, 5.6vw, 44px)",
+                        padding: "0 clamp(6px, 0.9vw, 10px)",
+                        cursor: "pointer",
+                        fontWeight: 800,
+                        fontSize: "clamp(10px, 1.45vw, 14px)",
+                        minWidth: 0,
+                        maxWidth: "100%",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        lineHeight: 1,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "#111",
+                      }}
+                    >
+                      Projets fermés
+                    </button>
+                  </div>
+                }
+                style={{ width: "100%" }}
+              >
                 <PageProjets onOpenMaterial={(id) => setMaterialProjId(id)} />
               </Card>
 
-              <Card title="📁 Autres tâches" style={{ width: "100%" }}>
+              <Card
+                title={<span style={{ fontSize: 20, fontWeight: 900 }}>📁 Autres tâches</span>}
+                style={{ width: "100%" }}
+              >
                 <AutresProjetsSection allowEdit={false} showHeader={false} />
               </Card>
             </>
@@ -2277,6 +2384,15 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
           onSaved={() => {
             setCreateProjetOpen(false);
           }}
+        />
+      )}
+
+      {!isTV && (
+        <ClosedProjectsPopup
+          open={closedPopupOpen}
+          onClose={() => setClosedPopupOpen(false)}
+          onReopen={handleReopenClosed}
+          onDelete={handleDeleteClosed}
         />
       )}
 

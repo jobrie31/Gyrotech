@@ -102,7 +102,7 @@ function MultiSelectEmployesDropdown({
             width: "100%",
             maxHeight: 260,
             overflowY: "auto",
-            background: "#fff",
+            background: "#e5e7eb",
             border: "1px solid #111",
             borderRadius: 10,
             boxShadow: "0 10px 24px rgba(0,0,0,0.12)",
@@ -131,12 +131,15 @@ function MultiSelectEmployesDropdown({
                   cursor: "pointer",
                   fontWeight: 700,
                   fontSize: compact ? 12 : 13,
+                  background: "#ffffff",
+                  marginBottom: 6,
+                  border: "1px solid #cbd5e1",
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = "#f3f4f6";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.background = "#ffffff";
                 }}
               >
                 <input
@@ -221,7 +224,7 @@ function TvPasswordModal({
         onClick={(e) => e.stopPropagation()}
         style={{
           width: "min(560px, 96vw)",
-          background: "#fff",
+          background: "#f3f4f6",
           borderRadius: 14,
           padding: 16,
           border: "2px solid #111",
@@ -337,9 +340,6 @@ export default function PageReglagesAdmin() {
   const isSmallTablet = windowWidth <= 900;
   const isCompact = windowWidth <= 1100;
 
-  /* ============================================================
-     ✅ Détection utilisateur courant + admin
-  ============================================================ */
   const [authUser, setAuthUser] = useState(null);
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setAuthUser(u || null));
@@ -413,9 +413,6 @@ export default function PageReglagesAdmin() {
     }
   }, []);
 
-  /* ============================================================
-     🔒 Code d'accès à la page Réglages Admin
-  ============================================================ */
   const [expectedAdminCode, setExpectedAdminCode] = useState("");
   const [adminCodeInput, setAdminCodeInput] = useState("");
   const [adminCodeLoading, setAdminCodeLoading] = useState(true);
@@ -482,7 +479,6 @@ export default function PageReglagesAdmin() {
 
   const canUseAdminPage = canShowAdmin && adminAccessGranted;
 
-  /* ================== 🔐 SÉCURITÉ (ADMIN) ================== */
   const [kickAllLoading, setKickAllLoading] = useState(false);
   const [kickAllMsg, setKickAllMsg] = useState("");
 
@@ -516,7 +512,6 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  /* ================== ⚙️ Facture ================== */
   const [factureNom, setFactureNom] = useState("Gyrotech");
   const [factureSousTitre, setFactureSousTitre] = useState("Service mobile – Diagnostic & réparation");
   const [factureTel, setFactureTel] = useState("");
@@ -658,7 +653,6 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  /* ================== TRAVAILLEURS (ADMIN) ================== */
   const [employes, setEmployes] = useState([]);
   const [employeNomInput, setEmployeNomInput] = useState("");
   const [employeEmailInput, setEmployeEmailInput] = useState("");
@@ -894,7 +888,6 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  /* ================== GESTION DU TEMPS (ADMIN) ================== */
   const [timeDate, setTimeDate] = useState("");
   const [timeJobType, setTimeJobType] = useState("projet");
   const [timeProjId, setTimeProjId] = useState("");
@@ -1197,7 +1190,6 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  /* ================== AUTO-DÉPUNCH PLANIFIÉ (ADMIN) ================== */
   const [autoDpLoading, setAutoDpLoading] = useState(true);
   const [autoDpSaving, setAutoDpSaving] = useState(false);
   const [autoDpError, setAutoDpError] = useState("");
@@ -1469,7 +1461,6 @@ export default function PageReglagesAdmin() {
     await saveAutoDpConfig(nextRules, autoDpEnabled);
   };
 
-  /* ================== AUTRES TÂCHES (ADMIN) ================== */
   const [autresAdminRows, setAutresAdminRows] = useState([]);
   const [autresAdminLoading, setAutresAdminLoading] = useState(false);
   const [autresAdminError, setAutresAdminError] = useState("");
@@ -1710,7 +1701,6 @@ export default function PageReglagesAdmin() {
     }
   };
 
-  /* ================== HEADER ================== */
   const HeaderRow = ({ title = "🛠️ Réglages Admin" }) => {
     if (isPhone) {
       return (
@@ -1789,7 +1779,7 @@ export default function PageReglagesAdmin() {
     <div style={{ overflowX: "auto", marginTop: 4 }}>
       <table style={tableBlackResponsive(isPhone)}>
         <thead>
-          <tr style={{ background: "#f9fafb" }}>
+          <tr style={{ background: "#d1d5db" }}>
             <th style={thTimeBoldResponsive(isPhone)}>Début</th>
             <th style={thTimeBoldResponsive(isPhone)}>Fin</th>
             <th style={thTimeBoldResponsive(isPhone)}>Employé</th>
@@ -1837,7 +1827,7 @@ export default function PageReglagesAdmin() {
           })}
           {!timeLoading && displayedSegments.length === 0 && (
             <tr>
-              <td colSpan={4} style={{ padding: 8, color: "#6b7280", textAlign: "center" }}>
+              <td colSpan={4} style={{ padding: 8, color: "#6b7280", textAlign: "center", background: "#eef2f7" }}>
                 Aucun bloc de temps pour ces critères.
               </td>
             </tr>
@@ -1903,7 +1893,7 @@ export default function PageReglagesAdmin() {
     <div style={{ overflowX: "auto" }}>
       <table style={tableBlackResponsive(isPhone)}>
         <thead>
-          <tr style={{ background: "#f9fafb" }}>
+          <tr style={{ background: "#d1d5db" }}>
             <th style={thTimeBoldResponsive(isPhone)}>Actif</th>
             <th style={thTimeBoldResponsive(isPhone)}>Heure</th>
             <th style={thTimeBoldResponsive(isPhone)}>Employés</th>
@@ -2011,7 +2001,7 @@ export default function PageReglagesAdmin() {
 
           {!autoDpLoading && autoDpRules.length === 0 && (
             <tr>
-              <td colSpan={4} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+              <td colSpan={4} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800, background: "#eef2f7" }}>
                 Aucune règle pour l’instant.
               </td>
             </tr>
@@ -2128,7 +2118,7 @@ export default function PageReglagesAdmin() {
     <div style={{ overflowX: "auto" }}>
       <table style={tableBlackResponsive(isPhone)}>
         <thead>
-          <tr style={{ background: "#f9fafb" }}>
+          <tr style={{ background: "#d1d5db" }}>
             <th style={thTimeBoldResponsive(isPhone)}>Nom</th>
             <th style={thTimeBoldResponsive(isPhone)}>Email</th>
             <th style={thTimeBoldResponsive(isPhone)}>Statut</th>
@@ -2209,7 +2199,7 @@ export default function PageReglagesAdmin() {
 
           {employes.length === 0 && (
             <tr>
-              <td colSpan={5} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+              <td colSpan={5} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800, background: "#eef2f7" }}>
                 Aucun employé pour l’instant.
               </td>
             </tr>
@@ -2298,7 +2288,7 @@ export default function PageReglagesAdmin() {
     <div style={{ overflowX: "auto" }}>
       <table style={tableBlackResponsive(isPhone)}>
         <thead>
-          <tr style={{ background: "#f9fafb" }}>
+          <tr style={{ background: "#d1d5db" }}>
             <th style={thTimeBoldResponsive(isPhone)}>Nom</th>
             <th style={thTimeBoldResponsive(isPhone)}>Ordre</th>
             <th style={thTimeBoldResponsive(isPhone)}>Code</th>
@@ -2402,7 +2392,7 @@ export default function PageReglagesAdmin() {
 
           {!autresAdminLoading && autresAdminRows.length === 0 && (
             <tr>
-              <td colSpan={6} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800 }}>
+              <td colSpan={6} style={{ padding: 10, textAlign: "center", color: "#6b7280", fontWeight: 800, background: "#eef2f7" }}>
                 Aucune autre tâche pour l’instant.
               </td>
             </tr>
@@ -2519,7 +2509,6 @@ export default function PageReglagesAdmin() {
     </div>
   );
 
-  /* ================== UI access ================== */
   if (meLoading) return <div style={{ padding: 24 }}>Chargement…</div>;
 
   if (!canShowAdmin) {
@@ -2631,7 +2620,6 @@ export default function PageReglagesAdmin() {
             )}
           </div>
 
-          {/* ===================== 0) SÉCURITÉ ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Sécurité</h3>
             <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 8 }}>
@@ -2670,7 +2658,6 @@ export default function PageReglagesAdmin() {
             </button>
           </section>
 
-          {/* ===================== 1) GESTION DU TEMPS ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Gestion du temps (admin)</h3>
 
@@ -2761,7 +2748,6 @@ export default function PageReglagesAdmin() {
             })()}
           </section>
 
-          {/* ===================== 1.25) AUTO-DÉPUNCH PLANIFIÉ ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Auto-dé-punch planifié</h3>
 
@@ -2783,7 +2769,7 @@ export default function PageReglagesAdmin() {
                 marginBottom: 12,
                 padding: isPhone ? 9 : 10,
                 borderRadius: 10,
-                background: "#f8fafc",
+                background: "#dbe0e6",
                 border: "1px solid #cbd5e1",
               }}
             >
@@ -2817,7 +2803,7 @@ export default function PageReglagesAdmin() {
                 padding: isPhone ? 10 : 12,
                 border: "1px solid #111",
                 borderRadius: 12,
-                background: "#f9fafb",
+                background: "#dbe0e6",
               }}
             >
               <div style={{ fontWeight: 900, marginBottom: 10, fontSize: isPhone ? 13 : 14 }}>Ajouter une règle</div>
@@ -2889,7 +2875,6 @@ export default function PageReglagesAdmin() {
             {autoDpLoading && <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>Chargement…</div>}
           </section>
 
-          {/* ===================== 1.5) ALARMES ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Alarmes</h3>
 
@@ -2897,6 +2882,10 @@ export default function PageReglagesAdmin() {
               style={{
                 width: "100%",
                 overflowX: "auto",
+                background: "#dbe0e6",
+                borderRadius: 10,
+                padding: 8,
+                boxSizing: "border-box",
               }}
             >
               <div
@@ -2911,7 +2900,6 @@ export default function PageReglagesAdmin() {
             </div>
           </section>
 
-          {/* ===================== 2) FACTURATION ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Facturation</h3>
             <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 8 }}>
@@ -2993,6 +2981,7 @@ export default function PageReglagesAdmin() {
                     fontWeight: 800,
                     fontSize: isPhone ? 12 : 13,
                     boxSizing: "border-box",
+                    background: "#ffffff",
                   }}
                   placeholder={"ex: jlabrie@styro.ca\ncompta@domaine.com"}
                   disabled={invoiceEmailLoading}
@@ -3007,7 +2996,6 @@ export default function PageReglagesAdmin() {
             </div>
           </section>
 
-          {/* ===================== 2.5) APPROBATION FEUILLES DE DÉPENSES ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Approbation des feuilles de dépenses</h3>
             <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 8 }}>
@@ -3028,7 +3016,6 @@ export default function PageReglagesAdmin() {
             </div>
           </section>
 
-          {/* ===================== 3) TRAVAILLEURS ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Employés</h3>
 
@@ -3037,7 +3024,7 @@ export default function PageReglagesAdmin() {
                 marginBottom: 10,
                 padding: 10,
                 borderRadius: 10,
-                background: "#f8fafc",
+                background: "#dbe0e6",
                 border: "1px solid #cbd5e1",
                 fontSize: isPhone ? 11 : 12,
                 color: "#334155",
@@ -3148,7 +3135,6 @@ export default function PageReglagesAdmin() {
             {isPhone ? renderEmployesMobile() : renderEmployesDesktop()}
           </section>
 
-          {/* ===================== 4) AUTRES TÂCHES (ADMIN) ===================== */}
           <section style={sectionResponsive(isPhone)}>
             <h3 style={h3Bold}>Autres tâches (admin)</h3>
             {autresAdminError && <div style={alertErr}>{autresAdminError}</div>}
@@ -3209,7 +3195,7 @@ export default function PageReglagesAdmin() {
                   border: "1px solid #111",
                   borderRadius: 10,
                   padding: 10,
-                  background: "#f9fafb",
+                  background: "#dbe0e6",
                 }}
               >
                 <div style={{ fontWeight: 900, marginBottom: 8, fontSize: isPhone ? 11 : 12 }}>
@@ -3244,7 +3230,6 @@ export default function PageReglagesAdmin() {
   );
 }
 
-/* ================== Helpers temps ================== */
 function toMillis(v) {
   try {
     if (!v) return 0;
@@ -3326,7 +3311,6 @@ function isQuarterHourTime(v) {
   return mm % 15 === 0;
 }
 
-/* ================== Styles locaux ================== */
 const pageWrap = {
   width: "100%",
   display: "flex",
@@ -3357,7 +3341,7 @@ function sectionResponsive(isPhone) {
     borderRadius: 12,
     padding: isPhone ? 10 : 12,
     marginBottom: 16,
-    background: "#fff",
+    background: "#e5e7eb",
     width: "100%",
     boxSizing: "border-box",
     overflow: "hidden",
@@ -3460,6 +3444,7 @@ function tableBlackResponsive(isPhone) {
     border: "2px solid #111",
     borderRadius: 8,
     minWidth: isPhone ? 700 : 0,
+    background: "#e5e7eb",
   };
 }
 
@@ -3480,6 +3465,7 @@ function tdTimeResponsive(isPhone) {
     borderBottom: "1px solid #111",
     verticalAlign: "top",
     fontSize: isPhone ? 11 : 12,
+    background: "#f3f4f6",
   };
 }
 
@@ -3544,7 +3530,7 @@ const cardMobile = {
   border: "1px solid #111",
   borderRadius: 12,
   padding: 10,
-  background: "#fff",
+  background: "#e5e7eb",
   display: "flex",
   flexDirection: "column",
   gap: 10,
@@ -3604,7 +3590,7 @@ const emptyMobile = {
   color: "#6b7280",
   fontWeight: 800,
   fontSize: 12,
-  background: "#f8fafc",
+  background: "#dbe0e6",
 };
 
 const mobileInfoLine = {

@@ -1183,11 +1183,11 @@ export default function App() {
         const rightZoneEnd = logoutRect.left - 6;
         const availableRightZone = Math.max(0, rightZoneEnd - rightZoneStart);
 
-        const MIN_TESTER_BTN = 86;
         const MIN_MESSAGE_PILL = messageNotifOn ? 120 : 0;
-        const GAP_BETWEEN = messageNotifOn ? 4 : 0;
+        const MIN_ADD_MESSAGE_BTN = isAdmin ? 86 : 0;
+        const GAP_BETWEEN = messageNotifOn && isAdmin ? 4 : 0;
 
-        const minNeeded = MIN_TESTER_BTN + MIN_MESSAGE_PILL + GAP_BETWEEN;
+        const minNeeded = MIN_ADD_MESSAGE_BTN + MIN_MESSAGE_PILL + GAP_BETWEEN;
 
         const centerStillVisible =
           centerRect.left >= rowRect.left + 6 &&
@@ -1358,24 +1358,6 @@ export default function App() {
           Message de: {messageNotifFromName || "Quelqu’un"}
         </span>
       ) : null}
-
-      <button
-        type="button"
-        onClick={async () => {
-          await unlockAudio();
-          playAlarmSound();
-        }}
-        className="app-small-btn"
-        style={{
-          border: "1px solid #cbd5e1",
-          background: "#fff",
-          color: "#0f172a",
-          flexShrink: 0,
-        }}
-        title="Tester le son d’alarme"
-      >
-        🔊 Tester son
-      </button>
     </div>
   );
 
