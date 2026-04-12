@@ -1658,32 +1658,42 @@ function LigneEmploye({
               borderTop: "1px solid rgba(255,255,255,0.35)",
             }}
           >
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                minHeight: compactProjectMinHeight,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                textAlign: "center",
-                padding: compactProjectPadding,
-                borderRadius: compactProjectRadius,
-                background: "rgba(255,255,255,0.82)",
-                border: "1px solid rgba(255,255,255,0.55)",
-                fontWeight: 1000,
-                fontSize: compactProjectFontSize,
-                color: "#111827",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                lineHeight: 1.1,
-                minWidth: 0,
-              }}
-              title={currentDisplayLabel}
-            >
-              {currentDisplayLabel}
-            </div>
+            {present ? (
+              <div
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  minHeight: compactProjectMinHeight,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  textAlign: "center",
+                  padding: compactProjectPadding,
+                  borderRadius: compactProjectRadius,
+                  background: "rgba(255,255,255,0.82)",
+                  border: "1px solid rgba(255,255,255,0.55)",
+                  fontWeight: 1000,
+                  fontSize: compactProjectFontSize,
+                  color: "#111827",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  lineHeight: 1.1,
+                  minWidth: 0,
+                }}
+                title={currentDisplayLabel}
+              >
+                {currentDisplayLabel}
+              </div>
+            ) : (
+              <div
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  minHeight: compactProjectMinHeight,
+                }}
+              />
+            )}
           </div>
         </div>
 

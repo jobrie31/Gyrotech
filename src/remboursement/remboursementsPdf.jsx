@@ -1,3 +1,20 @@
+// src/remboursement/remboursementsPdf.jsx
+// -----------------------------------------------------------------------------
+// CE CODE CONTIENT :
+// - La génération du PDF complet d’un remboursement
+// - L’intégration des pièces jointes (images / PDF)
+// - La suppression des pièces jointes stockées dans Firebase Storage
+// - Les helpers internes nécessaires à la génération du PDF
+//
+// MODIFICATIONS FAITES ICI :
+// - PDF en format paysage
+// - Retrait de la colonne "Taux"
+// - Retrait de la colonne "Type"
+// - Le taux est affiché en haut
+// - Le calcul du montant se fait directement avec globalTaux
+// - Structure alignée avec FeuilleDepensesExcel.jsx
+// -----------------------------------------------------------------------------
+
 import html2canvas from "html2canvas";
 import { PDFDocument, rgb } from "pdf-lib";
 import {
@@ -7,31 +24,14 @@ import {
   getMetadata,
   deleteObject,
 } from "firebase/storage";
-import { storage } from "./firebaseConfig";
+import { storage } from "../firebaseConfig";
+import {
+  fmtMoney,
+  parseNumberLoose,
+  remboursementPdfFolder,
+} from "./feuilleDepensesUtils";
 
 /* ---------------------- Utils internes ---------------------- */
-function fmtMoney(n) {
-  const x = Number(n || 0);
-  return x.toLocaleString("fr-CA", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function parseNumberLoose(v) {
-  const s = String(v ?? "").trim().replace(",", ".");
-  if (!s) return null;
-  const n = Number(s);
-  if (!isFinite(n)) return null;
-  return n;
-}
-
-function remboursementPdfFolder(year, pp, id) {
-  return `depensesRemboursements/${String(year)}/${String(pp)}/items/${String(
-    id
-  )}/pdfs`;
-}
-
 async function blobToUint8Array(blob) {
   const ab = await blob.arrayBuffer();
   return new Uint8Array(ab);
@@ -121,6 +121,7 @@ async function listStoredAttachmentsForRecord(year, pp, id) {
     (res.items || []).map(async (itemRef) => {
       const url = await getDownloadURL(itemRef);
       let contentType = "";
+
       try {
         const meta = await getMetadata(itemRef);
         contentType = meta?.contentType || "";
@@ -164,10 +165,10 @@ function makeSnapshotHtml(rec) {
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
 
+  const taux = parseNumberLoose(rec?.globalTaux) || 0;
+
   const amountForRow = (r) => {
     const km = parseNumberLoose(r?.km) || 0;
-    const taux =
-      parseNumberLoose(r?.taux) ?? parseNumberLoose(rec?.globalTaux) ?? 0;
     return km * taux;
   };
 
@@ -175,16 +176,14 @@ function makeSnapshotHtml(rec) {
     .map(
       (r) => `
         <tr>
-          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;">${safe(r?.date)}</td>
-          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;">${safe(r?.lieuDepart)}</td>
-          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;">${safe(r?.clientOuLieu)}</td>
-          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;">${safe(r?.adresse)}</td>
+          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;text-align:center;">${safe(r?.date)}</td>
+          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;text-align:center;">${safe(r?.lieuDepart)}</td>
+          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;text-align:center;">${safe(r?.clientOuLieu)}</td>
+          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;text-align:center;">${safe(r?.adresse)}</td>
           <td style="border:1px solid #94a3b8;padding:8px;text-align:right;vertical-align:top;">${safe(r?.km)}</td>
-          <td style="border:1px solid #94a3b8;padding:8px;text-align:right;vertical-align:top;">${safe(r?.taux)}</td>
           <td style="border:1px solid #94a3b8;padding:8px;text-align:right;vertical-align:top;">${safe(amountForRow(r) ? fmtMoney(amountForRow(r)) : "")}</td>
           <td style="border:1px solid #94a3b8;padding:8px;text-align:right;vertical-align:top;">${safe(r?.depenses)}</td>
-          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;">${safe(r?.typeDeplacement)}</td>
-          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;">${safe(r?.contrat)}</td>
+          <td style="border:1px solid #94a3b8;padding:8px;vertical-align:top;text-align:center;">${safe(r?.contrat)}</td>
         </tr>
       `
     )
@@ -202,35 +201,67 @@ function makeSnapshotHtml(rec) {
         </div>
 
         <div style="padding:16px 18px 6px 18px;">
-          <div style="display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:12px;">
-            <div style="font-size:24px;font-weight:900;"><b>Employé :</b> ${safe(rec?.employeNom || "—")}</div>
-            <div style="font-size:16px;"><b>Date réf. :</b> ${safe(rec?.dateRef || "—")}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
+            <div style="font-size:24px;font-weight:900;">
+              <b>Employé :</b> ${safe(rec?.employeNom || "—")}
+            </div>
+
+            <div style="font-size:18px;font-weight:900;border:1px solid #cbd5e1;border-radius:12px;padding:8px 14px;background:#fff;">
+              <b>Taux :</b> ${safe(fmtMoney(taux))} $/km
+            </div>
+
+            <div style="font-size:16px;">
+              <b>Date réf. :</b> ${safe(rec?.dateRef || "—")}
+            </div>
           </div>
 
-          <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:16px;">
+          <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:15px;">
+            <colgroup>
+              <col style="width:9%;" />
+              <col style="width:13%;" />
+              <col style="width:29%;" />
+              <col style="width:20%;" />
+              <col style="width:8%;" />
+              <col style="width:7%;" />
+              <col style="width:6%;" />
+              <col style="width:8%;" />
+            </colgroup>
+
             <thead>
               <tr>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Date</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Lieu/Départ</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Client / lieu</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Adresse</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">KM</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Taux</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Montant</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Dépenses</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Type</th>
-                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;">Contrat</th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">
+                  <div>Date</div>
+                  <div style="color:#b91c1c;font-size:11px;font-weight:900;margin-top:2px;">AAAA-MM-JJ</div>
+                </th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">Lieu/Départ</th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">Nom du client ou lieu du déplacement</th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">
+                  <div>Adresse du client ou du lieu</div>
+                  <div style="color:#b91c1c;font-size:11px;font-weight:900;margin-top:2px;"># Porte, Ville, Prov. C.P</div>
+                </th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">
+                  <div>Distance parcourus</div>
+                  <div style="color:#b91c1c;font-size:11px;font-weight:900;margin-top:2px;">KM</div>
+                </th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">Montant</th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">
+                  <div>Dépenses</div>
+                  <div style="color:#b91c1c;font-size:11px;font-weight:900;margin-top:2px;">+ Taxes</div>
+                </th>
+                <th style="border:1px solid #94a3b8;padding:8px;background:#f1f5f9;text-align:center;vertical-align:middle;">
+                  <div>Contrat client obtenu si oui</div>
+                  <div style="color:#b91c1c;font-size:11px;font-weight:900;margin-top:2px;">$</div>
+                </th>
               </tr>
             </thead>
+
             <tbody>
               ${rowsHtml || ""}
               <tr>
                 <td colspan="4" style="border:1px solid #94a3b8;padding:10px;background:#eef2ff;font-weight:900;text-align:center;">TOTAL</td>
                 <td style="border:1px solid #94a3b8;padding:10px;background:#eef2ff;font-weight:900;text-align:right;">${safe(fmtMoney(totals?.kmTotal || 0))}</td>
-                <td style="border:1px solid #94a3b8;padding:10px;background:#eef2ff;"></td>
                 <td style="border:1px solid #94a3b8;padding:10px;background:#eef2ff;font-weight:900;text-align:right;">${safe(fmtMoney(totals?.montantTotal || 0))}</td>
                 <td style="border:1px solid #94a3b8;padding:10px;background:#eef2ff;font-weight:900;text-align:right;">${safe(fmtMoney(totals?.depensesTotal || 0))}</td>
-                <td style="border:1px solid #94a3b8;padding:10px;background:#eef2ff;"></td>
                 <td style="border:1px solid #94a3b8;padding:10px;background:#eef2ff;font-weight:900;text-align:right;">${safe(fmtMoney(totals?.remboursement || 0))} $</td>
               </tr>
             </tbody>
@@ -286,8 +317,9 @@ async function renderSnapshotToPngDataUrl(rec) {
 async function buildDownloadPdfForRemboursement(rec, attachments = []) {
   const pdfDoc = await PDFDocument.create();
 
-  const pageWidth = 595.28;
-  const pageHeight = 841.89;
+  // A4 paysage
+  const pageWidth = 841.89;
+  const pageHeight = 595.28;
   const margin = 24;
   const maxW = pageWidth - margin * 2;
   const maxH = pageHeight - margin * 2;
@@ -369,7 +401,7 @@ export async function downloadRemboursementPdf(rec) {
     .replace(/[^\w\-]+/g, "_")}_${rec.year}_${rec.pp}_${rec.dateRef || "sans_date"}.pdf`;
 
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
-
   const saved = await downloadBlob(blob, fileName);
+
   return saved;
 }

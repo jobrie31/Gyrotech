@@ -143,12 +143,6 @@ export default function Login() {
     }
   }
 
-  const loginSubtitle =
-    "Connecte-toi avec ton courriel et ton mot de passe.";
-
-  const activateSubtitle =
-    "Entre ton courriel, ton code, puis choisis ton mot de passe.";
-
   return (
     <div className="login-page">
       <form
@@ -158,10 +152,6 @@ export default function Login() {
         <h1 className="login-title">
           {mode === "login" ? "Connexion" : "Activer mon compte"}
         </h1>
-
-        <p className="login-subtitle">
-          {mode === "login" ? loginSubtitle : activateSubtitle}
-        </p>
 
         <label className="login-field">
           <span>Courriel</span>

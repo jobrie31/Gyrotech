@@ -47,10 +47,36 @@ function getConversationId(a, b) {
   return [String(a || "").trim(), String(b || "").trim()].sort().join("__");
 }
 
+function normalizeRoleFromEmp(emp) {
+  const roleRaw = String(emp?.role || "").trim().toLowerCase();
+
+  if (roleRaw === "admin") return "admin";
+  if (roleRaw === "rh") return "rh";
+  if (roleRaw === "tv") return "tv";
+  if (roleRaw === "user") return "user";
+
+  if (emp?.isAdmin === true) return "admin";
+  if (emp?.isRH === true) return "rh";
+  if (emp?.isTV === true) return "tv";
+
+  return "user";
+}
+
+function getRoleLabel(emp) {
+  const role = normalizeRoleFromEmp(emp);
+  if (role === "admin") return "Admin";
+  if (role === "rh") return "RH";
+  if (role === "tv") return "TV";
+  return "Employé";
+}
+
+function byNameAsc(a, b) {
+  return getEmpDisplayName(a).localeCompare(getEmpDisplayName(b), "fr-CA");
+}
+
 /* ---------------- modal ---------------- */
 function CenterModal({ title, children, onClose, width = 460 }) {
-  const isSmall =
-    typeof window !== "undefined" ? window.innerWidth <= 640 : false;
+  const isSmall = typeof window !== "undefined" ? window.innerWidth <= 640 : false;
 
   return createPortal(
     <div
@@ -256,11 +282,86 @@ function TopBar({ title, rightSlot = null }) {
   );
 }
 
+function GroupSection({
+  title,
+  isOpen,
+  onToggle,
+  count,
+  unreadCount,
+  children,
+  isPhone,
+}) {
+  return (
+    <div
+      style={{
+        border: "1px solid #e2e8f0",
+        borderRadius: 14,
+        overflow: "hidden",
+        background: "#fff",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          border: "none",
+          background: unreadCount > 0 ? "#ecfdf5" : "#f8fafc",
+          padding: isPhone ? "10px 10px" : "12px 12px",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          textAlign: "left",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontWeight: 1000,
+              color: "#0f172a",
+              fontSize: isPhone ? 14 : 15,
+            }}
+          >
+            {isOpen ? "▾" : "▸"} {title}
+          </div>
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 11,
+              fontWeight: 800,
+              color: unreadCount > 0 ? "#166534" : "#64748b",
+            }}
+          >
+            {count} personne{count > 1 ? "s" : ""}
+            {unreadCount > 0 ? ` • ${unreadCount} non lu${unreadCount > 1 ? "s" : ""}` : ""}
+          </div>
+        </div>
+      </button>
+
+      {isOpen ? (
+        <div
+          style={{
+            padding: 8,
+            display: "grid",
+            gap: 8,
+            borderTop: "1px solid #e2e8f0",
+          }}
+        >
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /* ---------------- component ---------------- */
 export default function MessagesPage({
   isAdmin = false,
   isRH = false,
   meEmpId = "",
+  initialConversationId = "",
   onMessageNotifChange = null,
   onMessageNotifClear = null,
 }) {
@@ -276,7 +377,6 @@ export default function MessagesPage({
 
   const isPhone = windowWidth <= 640;
   const isTablet = windowWidth <= 900;
-  const isCompact = windowWidth <= 1100;
 
   const [user, setUser] = useState(null);
   const [error, setError] = useState("");
@@ -298,6 +398,14 @@ export default function MessagesPage({
   const [sectionTitle, setSectionTitle] = useState("");
   const [creatingSection, setCreatingSection] = useState(false);
 
+  const [openGroups, setOpenGroups] = useState({
+    admin: true,
+    rh: true,
+    user: true,
+  });
+
+  const [initialConversationApplied, setInitialConversationApplied] = useState(false);
+
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -309,6 +417,8 @@ export default function MessagesPage({
     if (!isAdmin) {
       setUnlocked(true);
       setCodeLoading(false);
+      setCodeInput("");
+      setCodeErr("");
       return;
     }
     setUnlocked(false);
@@ -354,14 +464,17 @@ export default function MessagesPage({
       collection(db, "employes"),
       (snap) => {
         const list = [];
+
         snap.forEach((d) => {
           const x = { id: d.id, ...d.data() };
-          if (x?.isAdmin === true || x?.isRH === true) list.push(x);
+          const role = normalizeRoleFromEmp(x);
+
+          if (role !== "tv") {
+            list.push(x);
+          }
         });
 
-        list.sort((a, b) =>
-          getEmpDisplayName(a).localeCompare(getEmpDisplayName(b), "fr-CA")
-        );
+        list.sort(byNameAsc);
         setEmployes(list);
       },
       (e) => setError(e?.message || String(e))
@@ -375,9 +488,61 @@ export default function MessagesPage({
     return employes.find((e) => e.id === meEmpId) || null;
   }, [employes, meEmpId]);
 
+  const myRole = useMemo(() => normalizeRoleFromEmp(me), [me]);
+
   const contacts = useMemo(() => {
-    return employes.filter((e) => e.id !== meEmpId);
-  }, [employes, meEmpId]);
+    const others = employes.filter((e) => e.id !== meEmpId);
+
+    if (myRole === "admin") {
+      return others.filter((e) => normalizeRoleFromEmp(e) !== "tv");
+    }
+
+    if (myRole === "rh") {
+      return others.filter((e) => {
+        const r = normalizeRoleFromEmp(e);
+        return r === "admin" || r === "rh";
+      });
+    }
+
+    return others.filter((e) => normalizeRoleFromEmp(e) === "admin");
+  }, [employes, meEmpId, myRole]);
+
+  useEffect(() => {
+    if (selectedEmpId && !contacts.some((e) => e.id === selectedEmpId)) {
+      setSelectedEmpId("");
+    }
+  }, [contacts, selectedEmpId]);
+
+  useEffect(() => {
+    if (!initialConversationId) return;
+    if (!meEmpId) return;
+    if (!contacts.length) return;
+    if (initialConversationApplied) return;
+
+    const cid = String(initialConversationId || "").trim();
+    if (!cid) {
+      setInitialConversationApplied(true);
+      return;
+    }
+
+    const parts = cid.split("__").map((x) => String(x || "").trim()).filter(Boolean);
+    if (parts.length !== 2) {
+      setInitialConversationApplied(true);
+      return;
+    }
+
+    const targetEmpId = parts.find((id) => id !== meEmpId) || "";
+    if (!targetEmpId) {
+      setInitialConversationApplied(true);
+      return;
+    }
+
+    if (contacts.some((e) => e.id === targetEmpId)) {
+      setSelectedEmpId(targetEmpId);
+    }
+
+    setInitialConversationApplied(true);
+  }, [initialConversationId, meEmpId, contacts, initialConversationApplied]);
 
   const selectedEmp = useMemo(
     () => contacts.find((e) => e.id === selectedEmpId) || null,
@@ -444,7 +609,7 @@ export default function MessagesPage({
   }, [contacts, meEmpId, unlocked]);
 
   const unreadInfo = useMemo(() => {
-    if (!meEmpId) return { hasUnread: false, fromName: "" };
+    if (!meEmpId) return { hasUnread: false, fromName: "", conversationId: "" };
 
     for (const c of contacts) {
       const meta = conversationMetaMap?.[c.id];
@@ -453,16 +618,19 @@ export default function MessagesPage({
       const lastAtMs = safeToMs(meta.lastMessageAt);
       const lastByEmpId = String(meta.lastMessageByEmpId || "").trim();
       const fromName = String(meta.lastMessageBy || "").trim();
-
       const seenBy = meta?.seenBy || {};
       const mySeenAtMs = safeToMs(seenBy?.[meEmpId]);
 
       if (lastAtMs && lastByEmpId && lastByEmpId !== meEmpId && lastAtMs > mySeenAtMs) {
-        return { hasUnread: true, fromName: fromName || getEmpDisplayName(c) };
+        return {
+          hasUnread: true,
+          fromName: fromName || getEmpDisplayName(c),
+          conversationId: getConversationId(meEmpId, c.id),
+        };
       }
     }
 
-    return { hasUnread: false, fromName: "" };
+    return { hasUnread: false, fromName: "", conversationId: "" };
   }, [conversationMetaMap, contacts, meEmpId]);
 
   useEffect(() => {
@@ -514,6 +682,72 @@ export default function MessagesPage({
 
     return () => clearTimeout(t);
   }, [selectedEmpId, unlocked, messages.length]);
+
+  const contactDecorated = useMemo(() => {
+    return contacts.map((emp) => {
+      const meta = conversationMetaMap?.[emp.id] || null;
+      const lastAtMs = safeToMs(meta?.lastMessageAt);
+      const lastByEmpId = String(meta?.lastMessageByEmpId || "").trim();
+      const mySeenAtMs = safeToMs(meta?.seenBy?.[meEmpId]);
+
+      const isUnread =
+        !!lastAtMs &&
+        !!lastByEmpId &&
+        lastByEmpId !== meEmpId &&
+        lastAtMs > mySeenAtMs;
+
+      return {
+        ...emp,
+        _isUnread: isUnread,
+        _lastAtMs: lastAtMs,
+      };
+    });
+  }, [contacts, conversationMetaMap, meEmpId]);
+
+  const groupedContacts = useMemo(() => {
+    const adminList = [];
+    const rhList = [];
+    const userList = [];
+
+    contactDecorated.forEach((emp) => {
+      const role = normalizeRoleFromEmp(emp);
+      if (role === "admin") adminList.push(emp);
+      else if (role === "rh") rhList.push(emp);
+      else userList.push(emp);
+    });
+
+    const sortInside = (arr) =>
+      [...arr].sort((a, b) => {
+        if (a._isUnread !== b._isUnread) return a._isUnread ? -1 : 1;
+        return getEmpDisplayName(a).localeCompare(getEmpDisplayName(b), "fr-CA");
+      });
+
+    return {
+      admin: sortInside(adminList),
+      rh: sortInside(rhList),
+      user: sortInside(userList),
+    };
+  }, [contactDecorated]);
+
+  const groupUnreadCounts = useMemo(() => {
+    return {
+      admin: groupedContacts.admin.filter((x) => x._isUnread).length,
+      rh: groupedContacts.rh.filter((x) => x._isUnread).length,
+      user: groupedContacts.user.filter((x) => x._isUnread).length,
+    };
+  }, [groupedContacts]);
+
+  useEffect(() => {
+    if (groupUnreadCounts.admin > 0) {
+      setOpenGroups((p) => ({ ...p, admin: true }));
+    }
+    if (groupUnreadCounts.rh > 0) {
+      setOpenGroups((p) => ({ ...p, rh: true }));
+    }
+    if (groupUnreadCounts.user > 0) {
+      setOpenGroups((p) => ({ ...p, user: true }));
+    }
+  }, [groupUnreadCounts.admin, groupUnreadCounts.rh, groupUnreadCounts.user]);
 
   const sendMessage = async () => {
     const text = String(draft || "").trim();
@@ -611,7 +845,7 @@ export default function MessagesPage({
     }
   };
 
-  if (!isAdmin && !isRH) return null;
+  if (myRole === "tv") return null;
 
   if (isAdmin && !unlocked) {
     return (
@@ -757,91 +991,208 @@ export default function MessagesPage({
                 marginBottom: 10,
               }}
             >
-              Admins / RH
+              Contacts autorisés
             </div>
 
-            <div style={{ display: "grid", gap: 8 }}>
-              {contacts.map((emp) => {
-                const active = emp.id === selectedEmpId;
-                const meta = conversationMetaMap?.[emp.id] || null;
+            <div style={{ display: "grid", gap: 10 }}>
+              {groupedContacts.admin.length > 0 ? (
+                <GroupSection
+                  title="Admins"
+                  isOpen={openGroups.admin}
+                  onToggle={() => setOpenGroups((p) => ({ ...p, admin: !p.admin }))}
+                  count={groupedContacts.admin.length}
+                  unreadCount={groupUnreadCounts.admin}
+                  isPhone={isPhone}
+                >
+                  {groupedContacts.admin.map((emp) => {
+                    const active = emp.id === selectedEmpId;
+                    const isUnread = !!emp._isUnread;
 
-                const lastText = String(meta?.lastMessageText || "").trim();
-                const lastBy = String(meta?.lastMessageBy || "").trim();
-                const lastAtMs = safeToMs(meta?.lastMessageAt);
-                const lastByEmpId = String(meta?.lastMessageByEmpId || "").trim();
-                const mySeenAtMs = safeToMs(meta?.seenBy?.[meEmpId]);
-
-                const isUnread =
-                  !!lastAtMs &&
-                  !!lastByEmpId &&
-                  lastByEmpId !== meEmpId &&
-                  lastAtMs > mySeenAtMs;
-
-                return (
-                  <button
-                    key={emp.id}
-                    type="button"
-                    onClick={() => setSelectedEmpId(emp.id)}
-                    style={{
-                      textAlign: "left",
-                      border: active
-                        ? "2px solid #2563eb"
-                        : isUnread
-                        ? "2px solid #16a34a"
-                        : "1px solid #e2e8f0",
-                      background: active ? "#eff6ff" : isUnread ? "#f0fdf4" : "#fff",
-                      borderRadius: 14,
-                      padding: isPhone ? "10px 10px" : "12px 12px",
-                      cursor: "pointer",
-                      width: "100%",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 1000,
-                        color: "#0f172a",
-                        fontSize: isPhone ? 14 : 15,
-                        lineHeight: 1.2,
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      {getEmpDisplayName(emp)}
-                    </div>
-
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 800,
-                        color: "#64748b",
-                        marginTop: 2,
-                      }}
-                    >
-                      {emp?.isAdmin ? "Admin" : emp?.isRH ? "RH" : ""}
-                    </div>
-
-                    {lastText ? (
-                      <div
+                    return (
+                      <button
+                        key={emp.id}
+                        type="button"
+                        onClick={() => setSelectedEmpId(emp.id)}
                         style={{
-                          marginTop: 8,
-                          fontSize: isPhone ? 11 : 12,
-                          color: isUnread ? "#166534" : "#475569",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          fontWeight: isUnread ? 1000 : 500,
+                          textAlign: "left",
+                          border: active
+                            ? "2px solid #2563eb"
+                            : isUnread
+                            ? "2px solid #16a34a"
+                            : "1px solid #e2e8f0",
+                          background: active ? "#eff6ff" : isUnread ? "#f0fdf4" : "#fff",
+                          borderRadius: 14,
+                          padding: isPhone ? "10px 10px" : "12px 12px",
+                          cursor: "pointer",
+                          width: "100%",
+                          boxSizing: "border-box",
                         }}
                       >
-                        {lastBy}: {lastText}
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 8, fontSize: isPhone ? 11 : 12, color: "#94a3b8" }}>
-                        Aucun message
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
+                        <div
+                          style={{
+                            fontWeight: 1000,
+                            color: isUnread ? "#166534" : "#0f172a",
+                            fontSize: isPhone ? 14 : 15,
+                            lineHeight: 1.2,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {getEmpDisplayName(emp)}
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 800,
+                            color: isUnread ? "#166534" : "#64748b",
+                            marginTop: 2,
+                          }}
+                        >
+                          {getRoleLabel(emp)}
+                          {isUnread ? " • Nouveau message" : ""}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </GroupSection>
+              ) : null}
+
+              {groupedContacts.rh.length > 0 ? (
+                <GroupSection
+                  title="RH"
+                  isOpen={openGroups.rh}
+                  onToggle={() => setOpenGroups((p) => ({ ...p, rh: !p.rh }))}
+                  count={groupedContacts.rh.length}
+                  unreadCount={groupUnreadCounts.rh}
+                  isPhone={isPhone}
+                >
+                  {groupedContacts.rh.map((emp) => {
+                    const active = emp.id === selectedEmpId;
+                    const isUnread = !!emp._isUnread;
+
+                    return (
+                      <button
+                        key={emp.id}
+                        type="button"
+                        onClick={() => setSelectedEmpId(emp.id)}
+                        style={{
+                          textAlign: "left",
+                          border: active
+                            ? "2px solid #2563eb"
+                            : isUnread
+                            ? "2px solid #16a34a"
+                            : "1px solid #e2e8f0",
+                          background: active ? "#eff6ff" : isUnread ? "#f0fdf4" : "#fff",
+                          borderRadius: 14,
+                          padding: isPhone ? "10px 10px" : "12px 12px",
+                          cursor: "pointer",
+                          width: "100%",
+                          boxSizing: "border-box",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 1000,
+                            color: isUnread ? "#166534" : "#0f172a",
+                            fontSize: isPhone ? 14 : 15,
+                            lineHeight: 1.2,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {getEmpDisplayName(emp)}
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 800,
+                            color: isUnread ? "#166534" : "#64748b",
+                            marginTop: 2,
+                          }}
+                        >
+                          {getRoleLabel(emp)}
+                          {isUnread ? " • Nouveau message" : ""}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </GroupSection>
+              ) : null}
+
+              {groupedContacts.user.length > 0 ? (
+                <GroupSection
+                  title="Employés"
+                  isOpen={openGroups.user}
+                  onToggle={() => setOpenGroups((p) => ({ ...p, user: !p.user }))}
+                  count={groupedContacts.user.length}
+                  unreadCount={groupUnreadCounts.user}
+                  isPhone={isPhone}
+                >
+                  {groupedContacts.user.map((emp) => {
+                    const active = emp.id === selectedEmpId;
+                    const isUnread = !!emp._isUnread;
+
+                    return (
+                      <button
+                        key={emp.id}
+                        type="button"
+                        onClick={() => setSelectedEmpId(emp.id)}
+                        style={{
+                          textAlign: "left",
+                          border: active
+                            ? "2px solid #2563eb"
+                            : isUnread
+                            ? "2px solid #16a34a"
+                            : "1px solid #e2e8f0",
+                          background: active ? "#eff6ff" : isUnread ? "#f0fdf4" : "#fff",
+                          borderRadius: 14,
+                          padding: isPhone ? "10px 10px" : "12px 12px",
+                          cursor: "pointer",
+                          width: "100%",
+                          boxSizing: "border-box",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 1000,
+                            color: isUnread ? "#166534" : "#0f172a",
+                            fontSize: isPhone ? 14 : 15,
+                            lineHeight: 1.2,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {getEmpDisplayName(emp)}
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 800,
+                            color: isUnread ? "#166534" : "#64748b",
+                            marginTop: 2,
+                          }}
+                        >
+                          {getRoleLabel(emp)}
+                          {isUnread ? " • Nouveau message" : ""}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </GroupSection>
+              ) : null}
+
+              {contacts.length === 0 ? (
+                <div
+                  style={{
+                    color: "#64748b",
+                    fontWeight: 800,
+                    fontSize: isPhone ? 12 : 13,
+                    padding: "8px 4px",
+                  }}
+                >
+                  Aucun contact disponible.
+                </div>
+              ) : null}
             </div>
           </Card>
 
@@ -874,7 +1225,7 @@ export default function MessagesPage({
                     {getEmpDisplayName(selectedEmp)}
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>
-                    {selectedEmp?.isAdmin ? "Admin" : selectedEmp?.isRH ? "RH" : ""}
+                    {getRoleLabel(selectedEmp)}
                   </div>
                 </div>
 

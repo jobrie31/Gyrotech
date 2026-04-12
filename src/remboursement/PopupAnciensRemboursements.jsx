@@ -1,13 +1,13 @@
-import React from "react";
+// src/remboursement/PopupAnciensRemboursements.jsx
+// -----------------------------------------------------------------------------
+// CE CODE CONTIENT :
+// - Le popup des anciens remboursements
+// - L’affichage des remboursements complétés
+// - Les boutons Ouvrir / Télécharger / Supprimer
+// -----------------------------------------------------------------------------
 
-/* ---------------------- Utils locaux ---------------------- */
-function fmtMoney(n) {
-  const x = Number(n || 0);
-  return x.toLocaleString("fr-CA", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
+import React from "react";
+import { fmtMoney } from "./feuilleDepensesUtils";
 
 export default function PopupAnciensRemboursements({
   open,
@@ -63,7 +63,14 @@ export default function PopupAnciensRemboursements({
             <div style={{ fontWeight: 1000, fontSize: 24 }}>
               Anciens remboursements
             </div>
-            <div style={{ color: "#64748b", fontWeight: 800, fontSize: 13, marginTop: 4 }}>
+            <div
+              style={{
+                color: "#64748b",
+                fontWeight: 800,
+                fontSize: 13,
+                marginTop: 4,
+              }}
+            >
               Remboursements complétés après téléchargement par un RH
             </div>
           </div>
@@ -115,6 +122,7 @@ export default function PopupAnciensRemboursements({
                 <th style={th}>Action</th>
               </tr>
             </thead>
+
             <tbody>
               {remboursements.map((r) => {
                 const completedBy = String(r?.completedByName || "").trim();
@@ -225,7 +233,9 @@ export default function PopupAnciensRemboursements({
           </table>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+        <div
+          style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}
+        >
           <button
             onClick={onClose}
             style={{

@@ -1644,7 +1644,7 @@ function CellTextOneLine({ text, title, weight = 700, color = "#111827" }) {
         minWidth: 0,
         fontSize: "clamp(5px, 1.15vw, 19px)",
         fontWeight: weight,
-        lineHeight: 1.08,
+        lineHeight: 1.2,
         color,
         whiteSpace: "nowrap",
         wordBreak: "keep-all",
@@ -1653,6 +1653,8 @@ function CellTextOneLine({ text, title, weight = 700, color = "#111827" }) {
         overflow: "hidden",
         textOverflow: "clip",
         textAlign: "center",
+        paddingTop: "2px",
+        paddingBottom: "2px",
       }}
     >
       {text || "—"}
@@ -1669,7 +1671,7 @@ function CellTextTwoLines({ text, title, weight = 700, color = "#111827" }) {
         minWidth: 0,
         fontSize: "clamp(5px, 1.15vw, 19px)",
         fontWeight: weight,
-        lineHeight: 1.08,
+        lineHeight: 1.2,
         color,
         textAlign: "center",
         whiteSpace: "normal",
@@ -1680,6 +1682,8 @@ function CellTextTwoLines({ text, title, weight = 700, color = "#111827" }) {
         WebkitBoxOrient: "vertical",
         WebkitLineClamp: 2,
         overflow: "hidden",
+        paddingTop: "2px",
+        paddingBottom: "2px",
       }}
     >
       {text || "—"}
@@ -2095,7 +2099,7 @@ const infoCardValue = { fontWeight: 1000, fontSize: 18 };
 
 const thCenter = {
   textAlign: "center",
-  padding: "clamp(3px, 0.7vw, 10px) clamp(4px, 0.9vw, 12px)",
+  padding: "clamp(5px, 0.9vw, 12px) clamp(4px, 0.9vw, 12px)",
   borderBottom: "1px solid #d1d5db",
   whiteSpace: "nowrap",
   wordBreak: "keep-all",
@@ -2103,20 +2107,21 @@ const thCenter = {
   hyphens: "none",
   fontWeight: 800,
   fontSize: "clamp(7px, 1.1vw, 18px)",
-  lineHeight: 1.08,
+  lineHeight: 1.2,
   color: "#111827",
+  verticalAlign: "middle",
 };
 
 const tdCenter = {
   textAlign: "center",
-  padding: "clamp(2px, 0.45vw, 8px) clamp(3px, 0.55vw, 8px)",
+  padding: "clamp(4px, 0.7vw, 10px) clamp(3px, 0.55vw, 8px)",
   borderBottom: "1px solid #eee",
   verticalAlign: "middle",
-  lineHeight: 1.05,
+  lineHeight: 1.2,
 };
 
 const actionBtnCompact = {
-  padding: "clamp(4px, 0.6vw, 10px) clamp(4px, 0.8vw, 12px)",
+  padding: "clamp(5px, 0.7vw, 10px) clamp(4px, 0.8vw, 12px)",
   fontSize: "clamp(4px, 0.9vw, 16px)",
   borderRadius: "clamp(8px, 0.8vw, 12px)",
   minWidth: 0,
@@ -2124,7 +2129,7 @@ const actionBtnCompact = {
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "clip",
-  lineHeight: 1,
+  lineHeight: 1.15,
   letterSpacing: "-0.04em",
 };
 
@@ -2206,4 +2211,5 @@ const btnCloseBT = {
   fontWeight: 1000,
   fontSize: "clamp(4px, 0.82vw, 14px)",
   letterSpacing: "-0.05em",
+  lineHeight: 1.15,
 };

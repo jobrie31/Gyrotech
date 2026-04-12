@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, db } from "./firebaseConfig";
 
@@ -29,11 +29,7 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 
-function getRouteFromHash() {
-  const raw = window.location.hash.replace(/^#\//, "");
-  const first = raw.split("/")[0];
-  return first || "accueil";
-}
+import { getRouteInfoFromHash, goToHash } from "./app/alertHelpers";
 
 /* ---------------------- utils ---------------------- */
 function safeToMs(ts) {
@@ -306,7 +302,9 @@ function AlarmPopup({ open, text, onClose, autoClose = false, autoCloseMs = 1200
 }
 
 export default function App() {
-  const [route, setRoute] = useState(getRouteFromHash());
+  const [routeInfo, setRouteInfo] = useState(getRouteInfoFromHash());
+  const route = routeInfo.route;
+  const routeParam = routeInfo.param || "";
 
   const [user, setUser] = useState(undefined);
   const [me, setMe] = useState(null);
@@ -314,8 +312,11 @@ export default function App() {
 
   const [noteNotifOn, setNoteNotifOn] = useState(false);
   const [rhAdminReplyLikeNotifOn, setRhAdminReplyLikeNotifOn] = useState(false);
+
   const [messageNotifOn, setMessageNotifOn] = useState(false);
   const [messageNotifFromName, setMessageNotifFromName] = useState("");
+  const [messageNotifConversationId, setMessageNotifConversationId] = useState("");
+
   const [notesMetaByBlock, setNotesMetaByBlock] = useState({});
 
   const [broadcastText, setBroadcastText] = useState("");
@@ -326,6 +327,7 @@ export default function App() {
   const [broadcastPopupOpen, setBroadcastPopupOpen] = useState(false);
   const [broadcastEditOpen, setBroadcastEditOpen] = useState(false);
   const [broadcastDraft, setBroadcastDraft] = useState("");
+
   const [remboursementNotifOn, setRemboursementNotifOn] = useState(false);
   const [remboursementAdminNotifOn, setRemboursementAdminNotifOn] = useState(false);
 
@@ -472,10 +474,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const onHash = () => setRoute(getRouteFromHash());
+    const onHash = () => setRouteInfo(getRouteInfoFromHash());
+    const onForceRefresh = () => setRouteInfo(getRouteInfoFromHash());
+
     window.addEventListener("hashchange", onHash);
+    window.addEventListener("app_force_route_refresh", onForceRefresh);
+
     onHash();
-    return () => window.removeEventListener("hashchange", onHash);
+
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("app_force_route_refresh", onForceRefresh);
+    };
   }, []);
 
   useEffect(() => {
@@ -503,7 +513,11 @@ export default function App() {
         let snap = await getDocs(q1);
 
         if (snap.empty && emailLower) {
-          q1 = query(collection(db, "employes"), where("emailLower", "==", emailLower), limit(1));
+          q1 = query(
+            collection(db, "employes"),
+            where("emailLower", "==", emailLower),
+            limit(1)
+          );
           snap = await getDocs(q1);
         }
 
@@ -587,10 +601,10 @@ export default function App() {
           }
 
           try {
-            window.location.hash = "#/accueil";
+            goToHash("accueil");
             window.location.reload();
           } catch {
-            window.location.hash = "#/accueil";
+            goToHash("accueil");
           }
           return;
         }
@@ -608,87 +622,11 @@ export default function App() {
   }, [user?.uid]);
 
   useEffect(() => {
-    if (!user) return;
-
-    let alive = true;
-    const startedAt = Date.now();
-
-    const reallyKickOut = async () => {
-      try {
-        window.localStorage?.setItem("sessionKickMsg", "1");
-      } catch {}
-
-      try {
-        await signOut(auth);
-      } catch (e) {
-        console.error("signOut after token check failed:", e);
-      }
-
-      try {
-        window.location.href = "/#/accueil";
-        window.location.reload();
-      } catch {
-        window.location.hash = "#/accueil";
-      }
-    };
-
-    const forceCheck = async () => {
-      if (!alive) return;
-
-      try {
-        await user.getIdToken(true);
-      } catch (e1) {
-        console.error("forceCheck getIdToken(true) failed (1st try):", e1);
-
-        if (!alive) return;
-
-        try {
-          await new Promise((resolve) => setTimeout(resolve, 1200));
-          if (!alive) return;
-
-          await user.getIdToken(true);
-          return;
-        } catch (e2) {
-          console.error("forceCheck getIdToken(true) failed (2nd try):", e2);
-
-          if (!alive) return;
-          await reallyKickOut();
-        }
-      }
-    };
-
-    const onVis = () => {
-      if (document.visibilityState !== "visible") return;
-      if (Date.now() - startedAt < 5000) return;
-      forceCheck();
-    };
-
-    document.addEventListener("visibilitychange", onVis);
-
-    const firstTimer = window.setTimeout(() => {
-      if (!alive) return;
-      forceCheck();
-    }, 5000);
-
-    const intervalTimer = window.setInterval(() => {
-      if (!alive) return;
-      forceCheck();
-    }, 30 * 1000);
-
-    return () => {
-      alive = false;
-      document.removeEventListener("visibilitychange", onVis);
-      window.clearTimeout(firstTimer);
-      window.clearInterval(intervalTimer);
-    };
-  }, [user?.uid]);
-
-  useEffect(() => {
     if (meLoading) return;
 
     if (isTV) {
       if (route !== "accueil") {
-        window.location.hash = "#/accueil";
+        goToHash("accueil");
         return;
       }
     }
@@ -696,27 +634,29 @@ export default function App() {
     if (isRH) {
       const allowedRHRoutes = ["historique", "feuille-depenses", "messages"];
       if (!allowedRHRoutes.includes(route)) {
-        window.location.hash = "#/historique";
+        goToHash("historique");
         return;
       }
     }
 
     if (route === "reglages-admin" && !isAdmin) {
-      window.location.hash = "#/reglages";
+      goToHash("reglages");
+      return;
     }
 
     if (route === "test-ocr" && !isAdmin) {
-      window.location.hash = "#/accueil";
+      goToHash("accueil");
+      return;
     }
 
-    if (route === "messages" && !isAdmin && !isRH) {
-      window.location.hash = "#/accueil";
+    if (route === "messages" && isTV) {
+      goToHash("accueil");
     }
   }, [route, meLoading, isAdmin, isRH, isTV]);
 
   const handleLogout = async () => {
     await signOut(auth);
-    window.location.hash = "#/accueil";
+    goToHash("accueil");
   };
 
   useEffect(() => {
@@ -1114,12 +1054,13 @@ export default function App() {
   useEffect(() => {
     setMessageNotifOn(false);
     setMessageNotifFromName("");
+    setMessageNotifConversationId("");
   }, [user?.uid, me?.id]);
 
   useEffect(() => {
     if (!user) return;
     if (!me?.id) return;
-    if (!isAdmin && !isRH) return;
+    if (isTV) return;
 
     const qMessages = query(
       collection(db, "messagesRHAdmin"),
@@ -1131,6 +1072,7 @@ export default function App() {
       (snap) => {
         let hasUnread = false;
         let fromName = "";
+        let conversationId = "";
 
         snap.forEach((d) => {
           if (hasUnread) return;
@@ -1144,6 +1086,7 @@ export default function App() {
 
           if (lastAtMs && lastByEmpId && lastByEmpId !== me.id && lastAtMs > mySeenAtMs) {
             hasUnread = true;
+            conversationId = d.id;
 
             const participantNames = data.participantNames || {};
             fromName =
@@ -1155,16 +1098,65 @@ export default function App() {
 
         setMessageNotifOn(hasUnread);
         setMessageNotifFromName(fromName);
+        setMessageNotifConversationId(conversationId);
       },
       (err) => {
         console.error("global messages notif snapshot error:", err);
         setMessageNotifOn(false);
         setMessageNotifFromName("");
+        setMessageNotifConversationId("");
       }
     );
 
     return () => unsub();
-  }, [user?.uid, me?.id, isAdmin, isRH]);
+  }, [user?.uid, me?.id, isTV]);
+
+  const topAlert = useMemo(() => {
+    if (!isTV && (noteNotifOn || (isRH && rhAdminReplyLikeNotifOn))) {
+      return {
+        type: "note",
+        label: noteNotifOn ? "Note de la comptable" : "Réponse employé",
+        onClick: () => goToHash("historique"),
+      };
+    }
+
+    if (!isTV && messageNotifOn) {
+      return {
+        type: "message",
+        label: `Message de: ${messageNotifFromName || "Quelqu’un"}`,
+        onClick: () => goToHash("messages", messageNotifConversationId || ""),
+      };
+    }
+
+    if (!isTV && isAdmin && remboursementAdminNotifOn) {
+      return {
+        type: "remboursement-admin",
+        label: "Un remboursement est à approuver",
+        onClick: () => goToHash("feuille-depenses"),
+      };
+    }
+
+    if (!isTV && isRH && remboursementNotifOn) {
+      return {
+        type: "remboursement-rh",
+        label: "Un remboursement approuvé est à télécharger",
+        onClick: () => goToHash("feuille-depenses"),
+      };
+    }
+
+    return null;
+  }, [
+    isTV,
+    noteNotifOn,
+    isRH,
+    rhAdminReplyLikeNotifOn,
+    messageNotifOn,
+    messageNotifFromName,
+    messageNotifConversationId,
+    isAdmin,
+    remboursementAdminNotifOn,
+    remboursementNotifOn,
+  ]);
 
   useEffect(() => {
     const measureTopbar = () => {
@@ -1183,11 +1175,11 @@ export default function App() {
         const rightZoneEnd = logoutRect.left - 6;
         const availableRightZone = Math.max(0, rightZoneEnd - rightZoneStart);
 
-        const MIN_MESSAGE_PILL = messageNotifOn ? 120 : 0;
+        const MIN_ALERT_PILL = topAlert ? 140 : 0;
         const MIN_ADD_MESSAGE_BTN = isAdmin ? 86 : 0;
-        const GAP_BETWEEN = messageNotifOn && isAdmin ? 4 : 0;
+        const GAP_BETWEEN = topAlert && isAdmin ? 4 : 0;
 
-        const minNeeded = MIN_ADD_MESSAGE_BTN + MIN_MESSAGE_PILL + GAP_BETWEEN;
+        const minNeeded = MIN_ADD_MESSAGE_BTN + MIN_ALERT_PILL + GAP_BETWEEN;
 
         const centerStillVisible =
           centerRect.left >= rowRect.left + 6 &&
@@ -1220,10 +1212,10 @@ export default function App() {
     isAdmin,
     isRH,
     isTV,
-    messageNotifOn,
-    messageNotifFromName,
+    topAlert,
     noteNotifOn,
     rhAdminReplyLikeNotifOn,
+    messageNotifOn,
     remboursementNotifOn,
     remboursementAdminNotifOn,
     broadcastNotifOn,
@@ -1263,6 +1255,7 @@ export default function App() {
       { key: "accueil", label: "Accueil" },
       { key: "materiels", label: "Matériels" },
       { key: "reglages", label: "Réglages" },
+      { key: "messages", label: "Messages" },
       { key: "historique", label: "Mes heures" },
     ];
   }
@@ -1288,13 +1281,13 @@ export default function App() {
   const topBarBlink =
     noteNotifOn || rhAdminReplyLikeNotifOn
       ? {
-          animation: "notifBlinkVIF 0.55s infinite",
+          animation: "notifBlinkVIF 1.00s infinite",
           borderBottom: "2px solid #ff0000",
           boxShadow: "0 0 0 2px rgba(255,0,0,0.20) inset, 0 0 26px rgba(255,0,0,0.35)",
         }
       : messageNotifOn
       ? {
-          animation: "notifBlinkVERT 0.70s infinite",
+          animation: "notifBlinkVERT 1.10s infinite",
           borderBottom: "2px solid #16a34a",
           boxShadow: "0 0 0 2px rgba(22,163,74,0.20) inset, 0 0 26px rgba(22,163,74,0.30)",
         }
@@ -1328,35 +1321,21 @@ export default function App() {
 
   const renderTopInlineTools = (extraStyle = {}) => (
     <div className="app-topbar-inline-tools" style={extraStyle}>
-      {isAdmin ? (
+      {topAlert ? (
         <button
-          onClick={() => {
-            setBroadcastDraft(String(broadcastText || ""));
-            setBroadcastEditOpen(true);
-          }}
-          className="app-small-btn"
-          style={{
-            border: "1px solid #cbd5e1",
-            background: "#fff",
-            color: "#0f172a",
-            flexShrink: 0,
-          }}
-        >
-          + Message
-        </button>
-      ) : null}
-
-      {messageNotifOn ? (
-        <span
-          className="app-pill app-message-pill"
+          type="button"
+          onClick={topAlert.onClick}
+          className="app-pill app-alert-pill"
+          title={topAlert.label}
           style={{
             border: "1px solid rgba(255,255,255,0.75)",
             background: "rgba(255,255,255,0.18)",
             color: "inherit",
+            cursor: "pointer",
           }}
         >
-          Message de: {messageNotifFromName || "Quelqu’un"}
-        </span>
+          {topAlert.label}
+        </button>
       ) : null}
     </div>
   );
@@ -1461,9 +1440,9 @@ export default function App() {
           text-overflow: ellipsis;
         }
 
-        .app-message-pill {
-          max-width: min(34vw, 340px);
-          min-width: 120px;
+        .app-alert-pill {
+          max-width: min(38vw, 380px);
+          min-width: 140px;
           flex: 0 1 auto;
           white-space: normal;
           overflow: visible;
@@ -1546,9 +1525,9 @@ export default function App() {
             font-size: clamp(8px, 2.2vw, 10px);
           }
 
-          .app-message-pill {
-            max-width: min(46vw, 250px);
-            min-width: 100px;
+          .app-alert-pill {
+            max-width: min(48vw, 260px);
+            min-width: 110px;
           }
 
           .app-topbar-inline-tools {
@@ -1570,9 +1549,9 @@ export default function App() {
             font-size: 8px;
           }
 
-          .app-message-pill {
-            max-width: min(58vw, 220px);
-            min-width: 90px;
+          .app-alert-pill {
+            max-width: min(60vw, 230px);
+            min-width: 95px;
           }
 
           .app-broadcast-btn {
@@ -1583,7 +1562,32 @@ export default function App() {
 
       <div className="app-topbar" style={{ ...topBarBase, ...(topBarBlink || {}) }}>
         <div ref={topbarRow1Ref} className="app-topbar-row1">
-          <div ref={centerTextRef} className="app-topbar-center-abs" style={connectedStyle}>
+          <div
+            ref={centerTextRef}
+            className="app-topbar-center-abs"
+            style={connectedStyle}
+          >
+            {isAdmin ? (
+              <button
+                onClick={() => {
+                  setBroadcastDraft(String(broadcastText || ""));
+                  setBroadcastEditOpen(true);
+                }}
+                className="app-small-btn"
+                style={{
+                  position: "absolute",
+                  right: "100%",
+                  marginRight: 10,
+                  border: "1px solid #cbd5e1",
+                  background: "#fff",
+                  color: "#0f172a",
+                  pointerEvents: "auto",
+                }}
+              >
+                + Message à tous
+              </button>
+            ) : null}
+
             <span className="app-connected-text">
               Connecté: {user.email}
               {isAdmin ? " — Admin" : isRH ? " — RH" : isTV ? " — Compte TV" : ""}
@@ -1621,45 +1625,6 @@ export default function App() {
         ) : null}
 
         <div className="app-topbar-row2" style={connectedStyle}>
-          {isRH && rhAdminReplyLikeNotifOn ? (
-            <span
-              className="app-pill"
-              style={{
-                border: "1px solid rgba(255,255,255,0.75)",
-                background: "rgba(255,255,255,0.18)",
-                color: "inherit",
-              }}
-            >
-              Nouveau message admin dans la réponse employé
-            </span>
-          ) : null}
-
-          {isAdmin && remboursementAdminNotifOn ? (
-            <span
-              className="app-pill"
-              style={{
-                border: "1px solid rgba(255,255,255,0.75)",
-                background: "rgba(255,255,255,0.18)",
-                color: "inherit",
-              }}
-            >
-              Un remboursement est à approuver
-            </span>
-          ) : null}
-
-          {isRH && remboursementNotifOn ? (
-            <span
-              className="app-pill"
-              style={{
-                border: "1px solid rgba(255,255,255,0.75)",
-                background: "rgba(255,255,255,0.18)",
-                color: "inherit",
-              }}
-            >
-              Un remboursement approuvé est à télécharger
-            </span>
-          ) : null}
-
           {!isTV && hasBroadcastText ? (
             <button
               type="button"
@@ -1819,15 +1784,17 @@ export default function App() {
       {route === "materiels" && !isRH && !isTV && <PageMateriels />}
       {route === "reglages" && !isRH && !isTV && <PageReglages />}
       {route === "reglages-admin" && isAdmin && <PageReglagesAdmin />}
-
-      {route === "messages" && (isAdmin || isRH) && !isTV && (
-        <MessagesPage isAdmin={isAdmin} isRH={isRH} meEmpId={me?.id || ""} />
+      {route === "messages" && !isTV && (
+        <MessagesPage
+          isAdmin={isAdmin}
+          isRH={isRH}
+          meEmpId={me?.id || ""}
+          initialConversationId={routeParam || ""}
+        />
       )}
-
       {route === "historique" && !isTV && (
         <HistoriqueEmploye isAdmin={isAdmin} isRH={isRH} meEmpId={me?.id || ""} />
       )}
-
       {route === "feuille-depenses" && !isTV && (
         <FeuilleDepensesExcel
           isAdmin={isAdmin}
@@ -1835,9 +1802,7 @@ export default function App() {
           initialEmploye={me?.nom || "Jo"}
         />
       )}
-
       {route === "test-ocr" && isAdmin && <Test />}
-
       {!validRoutes.includes(route) && (
         <PageAccueil
           isTV={isTV}
