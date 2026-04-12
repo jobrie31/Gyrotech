@@ -316,7 +316,11 @@ export const smallInputBase = {
   boxSizing: "border-box",
 };
 
-export const table = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
+export const table = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: 13,
+};
 
 export const th = {
   border: "1px solid #cbd5e1",

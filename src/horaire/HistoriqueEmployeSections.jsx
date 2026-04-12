@@ -49,6 +49,86 @@ function formatNomPrenom(emp) {
   return nomComplet || "—";
 }
 
+function AutoGrowTextarea({
+  value,
+  onChange,
+  onBlur,
+  placeholder,
+  minRows = 2,
+  style = {},
+  ...rest
+}) {
+  const ref = React.useRef(null);
+
+  const resize = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    el.style.height = "0px";
+    el.style.overflow = "hidden";
+
+    const computed = window.getComputedStyle(el);
+    const lineHeight = parseFloat(computed.lineHeight) || 16;
+    const paddingTop = parseFloat(computed.paddingTop) || 0;
+    const paddingBottom = parseFloat(computed.paddingBottom) || 0;
+    const borderTop = parseFloat(computed.borderTopWidth) || 0;
+    const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+
+    const minHeight =
+      lineHeight * minRows + paddingTop + paddingBottom + borderTop + borderBottom;
+
+    const nextHeight = Math.max(el.scrollHeight, minHeight);
+    el.style.height = `${nextHeight}px`;
+  }, [minRows]);
+
+  React.useLayoutEffect(() => {
+    resize();
+  }, [value, resize]);
+
+  React.useEffect(() => {
+    const run = () => {
+      requestAnimationFrame(() => {
+        resize();
+      });
+    };
+
+    window.addEventListener("resize", run);
+    window.addEventListener("hist:autogrow", run);
+
+    return () => {
+      window.removeEventListener("resize", run);
+      window.removeEventListener("hist:autogrow", run);
+    };
+  }, [resize]);
+
+  return (
+    <textarea
+      ref={ref}
+      data-autogrow-textarea="true"
+      rows={minRows}
+      value={value}
+      onChange={(e) => {
+        onChange?.(e);
+        requestAnimationFrame(resize);
+      }}
+      onInput={resize}
+      onBlur={(e) => {
+        resize();
+        onBlur?.(e);
+      }}
+      placeholder={placeholder}
+      style={{
+        overflow: "hidden",
+        resize: "none",
+        lineHeight: "1.15",
+        boxSizing: "border-box",
+        ...style,
+      }}
+      {...rest}
+    />
+  );
+}
+
 export function PasswordGate({
   isPhone,
   pwErr,
@@ -221,7 +301,7 @@ export function buildRightSlot({
     <div
       style={{
         display: "flex",
-        alignItems: "center",
+        alignItems: "flex-start",
         justifyContent: isPhone ? "stretch" : "flex-end",
         gap: 10,
         flexWrap: "wrap",
@@ -257,18 +337,6 @@ export function buildRightSlot({
       >
         🧾 Feuille dépenses
       </button>
-
-      <div
-        style={{
-          fontSize: 12,
-          color: "#6b7280",
-          whiteSpace: isPhone ? "normal" : "nowrap",
-          textAlign: isPhone ? "center" : "right",
-          width: isPhone ? "100%" : "auto",
-        }}
-      >
-        {isRH ? "RH" : isAdmin ? "Admin" : ""}
-      </div>
     </div>
   );
 }
@@ -662,8 +730,8 @@ export function NonPrivilegedView(props) {
                       padding: 10,
                     }}
                   >
-                    <textarea
-                      rows={3}
+                    <AutoGrowTextarea
+                      minRows={3}
                       value={myReply}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -678,8 +746,7 @@ export function NonPrivilegedView(props) {
                         background: "#fffde7",
                         borderRadius: 12,
                         padding: "10px 12px",
-                        fontSize: isPhone ? 13 : 13,
-                        resize: "vertical",
+                        fontSize: 13,
                         boxSizing: "border-box",
                       }}
                     />
@@ -832,6 +899,182 @@ export function PrivilegedView(props) {
           50%  { background: #ff0000; color: #ffffff; }
           100% { background: #ffffff; color: #0f172a; }
         }
+
+        @media (max-width: 1200px) {
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] {
+            font-size: 12px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] th,
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] td {
+            padding: 5px 6px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] textarea {
+            font-size: 12px !important;
+            padding: 6px 8px !important;
+          }
+        }
+
+        @media (max-width: 980px) {
+          [data-hist-summary-wrap="true"] {
+            overflow-x: auto !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] {
+            font-size: 11px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] th,
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] td {
+            padding: 4px 5px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] textarea {
+            font-size: 11px !important;
+            padding: 5px 6px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] button {
+            font-size: 11px !important;
+            padding: 4px 6px !important;
+          }
+
+          [data-hist-summary-col-employee="true"] a {
+            word-break: break-word !important;
+          }
+
+          [data-hist-summary-col-note="true"] {
+            min-width: 220px !important;
+          }
+
+          [data-hist-summary-note-inner="true"] {
+            gap: 6px !important;
+          }
+
+          [data-hist-summary-note-editor="true"] {
+            min-width: 150px !important;
+          }
+        }
+
+        @media (max-width: 700px) {
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] {
+            font-size: 10px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] th,
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] td {
+            padding: 3px 4px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] textarea {
+            font-size: 10px !important;
+            padding: 4px 5px !important;
+            min-height: 44px !important;
+          }
+
+          [data-hist-summary-wrap="true"] [data-hist-summary-table="true"] button {
+            font-size: 10px !important;
+            padding: 3px 5px !important;
+          }
+
+          [data-hist-summary-col-note="true"] {
+            min-width: 180px !important;
+          }
+
+          [data-hist-summary-note-editor="true"] {
+            min-width: 120px !important;
+          }
+        }
+
+        @media print {
+          [data-print-hide="true"] {
+            display: none !important;
+          }
+
+          [data-print-keep="true"] {
+            display: block !important;
+          }
+
+          [data-hist-summary-wrap="true"] {
+            overflow: visible !important;
+            width: 100% !important;
+            max-width: none !important;
+            min-width: 0 !important;
+          }
+
+          [data-hist-summary-table="true"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+            table-layout: fixed !important;
+            border-collapse: collapse !important;
+            font-size: 8.4px !important;
+            line-height: 1.12 !important;
+          }
+
+          [data-hist-summary-table="true"] * {
+            line-height: 1.12 !important;
+          }
+
+          [data-hist-summary-table="true"] colgroup col {
+            width: auto !important;
+          }
+
+          [data-hist-summary-table="true"] th,
+          [data-hist-summary-table="true"] td {
+            white-space: normal !important;
+            word-break: break-word !important;
+            overflow-wrap: anywhere !important;
+            padding: 2px 3px !important;
+            vertical-align: top !important;
+            font-size: 8.4px !important;
+          }
+
+          [data-hist-summary-col-note="true"] {
+            min-width: 0 !important;
+            width: auto !important;
+            max-width: none !important;
+          }
+
+          [data-hist-summary-note-inner="true"] {
+            min-width: 0 !important;
+            width: 100% !important;
+            display: flex !important;
+            gap: 4px !important;
+            align-items: flex-start !important;
+            flex-wrap: nowrap !important;
+          }
+
+          [data-hist-summary-note-editor="true"] {
+            min-width: 0 !important;
+            width: 100% !important;
+            max-width: none !important;
+            flex: 1 1 auto !important;
+          }
+
+          [data-hist-summary-table="true"] textarea[data-autogrow-textarea="true"] {
+            min-width: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            font-size: 8.2px !important;
+            padding: 2px 4px !important;
+            line-height: 1.1 !important;
+            min-height: 34px !important;
+            resize: none !important;
+            overflow: hidden !important;
+            white-space: pre-wrap !important;
+          }
+
+          [data-hist-summary-table="true"] button {
+            font-size: 8px !important;
+            padding: 2px 4px !important;
+          }
+
+          [data-hide-on-print="true"] {
+            display: none !important;
+          }
+        }
       `}</style>
 
       <TopBar
@@ -842,163 +1085,169 @@ export function PrivilegedView(props) {
 
       <PageContainer>
         <ErrorBanner error={error} isPhone={isPhone} />
-        {navBar}
+
+        <div data-print-keep="true">
+          {navBar}
+        </div>
 
         {hasPersonalInbox && (
-          <>
-            <AlertsCard
-              title="🚨 Mes notes RH non vues"
-              subtitle="Clique un bloc pour naviguer directement dessus."
-              total={myUnseenNoteCount}
-              blocks={myAlertBlocksNotes}
-              isPhone={isPhone}
-              setAnchorDate={setAnchorDate}
-            />
+          <div data-print-hide="true">
+            <>
+              <AlertsCard
+                title="🚨 Mes notes RH non vues"
+                subtitle="Clique un bloc pour naviguer directement dessus."
+                total={myUnseenNoteCount}
+                blocks={myAlertBlocksNotes}
+                isPhone={isPhone}
+                setAnchorDate={setAnchorDate}
+              />
 
-            <Card>
-              <div style={{ display: "grid", gap: 10 }}>
-                <div>
-                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>Réponse de la comptabilité</div>
-                  <div
-                    style={{
-                      border: "1px solid #e2e8f0",
-                      borderRadius: 12,
-                      background: "#f8fafc",
-                      padding: "10px 12px",
-                      whiteSpace: "pre-wrap",
-                      fontSize: 13,
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    {myNote || "—"}
-                  </div>
-
-                  {hasMyNoteText ? (
-                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <label
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 8,
-                          fontWeight: 1000,
-                          fontSize: 12,
-                          color: myNoteSeen ? "#166534" : "#b91c1c",
-                          userSelect: "none",
-                        }}
-                        title="Coche Vu pour arrêter l’alerte"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={myNoteSeen}
-                          onChange={(e) => setNoteSeenFS(derivedMeEmpId, payBlockKey, e.target.checked)}
-                        />
-                        Vu
-                        {!myNoteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
-                      </label>
-
-                      {myNoteSeen && myNoteSeenAt ? (
-                        <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
-                          Je l'ai vue le {fmtDateTimeFR(myNoteSeenAt)}
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div>
-                  <div style={{ fontWeight: 1000, marginBottom: 6 }}>
-                    Espace pour communiquer avec la comptabilité de TON horaire seulement
-                  </div>
-
-                  <div
-                    style={{
-                      border: "1px solid #eab308",
-                      background: "#fef08a",
-                      borderRadius: 12,
-                      padding: 10,
-                    }}
-                  >
-                    <textarea
-                      rows={3}
-                      value={myReply}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setReplyDraft(derivedMeEmpId, v);
-                        scheduleAutoSaveReply(derivedMeEmpId, v);
-                      }}
-                      onBlur={(e) => saveReplyForEmp(derivedMeEmpId, e.target.value)}
-                      placeholder="Écrire ma note pour la comptabilité…"
+              <Card>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>Réponse de la comptabilité</div>
+                    <div
                       style={{
-                        width: "100%",
-                        border: "1px solid #eab308",
-                        background: "#fffde7",
+                        border: "1px solid #e2e8f0",
                         borderRadius: 12,
+                        background: "#f8fafc",
                         padding: "10px 12px",
+                        whiteSpace: "pre-wrap",
                         fontSize: 13,
-                        resize: "vertical",
-                        boxSizing: "border-box",
+                        wordBreak: "break-word",
                       }}
-                    />
+                    >
+                      {myNote || "—"}
+                    </div>
 
-                    {myAdminReplyLikeText ? (
-                      <div
-                        style={{
-                          marginTop: 8,
-                          paddingTop: 8,
-                          borderTop: "1px solid rgba(146,64,14,0.20)",
-                          whiteSpace: "pre-wrap",
-                          fontWeight: 1000,
-                          fontSize: 13,
-                          lineHeight: 1.25,
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        {myAdminReplyLikeText}
-                        {myAdminReplyLike?.author ? ` — ${myAdminReplyLike.author}` : ""}
+                    {hasMyNoteText ? (
+                      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                            fontWeight: 1000,
+                            fontSize: 12,
+                            color: myNoteSeen ? "#166534" : "#b91c1c",
+                            userSelect: "none",
+                          }}
+                          title="Coche Vu pour arrêter l’alerte"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={myNoteSeen}
+                            onChange={(e) => setNoteSeenFS(derivedMeEmpId, payBlockKey, e.target.checked)}
+                          />
+                          Vu
+                          {!myNoteSeen ? <span style={{ fontWeight: 1000 }}>(nouveau)</span> : null}
+                        </label>
+
+                        {myNoteSeen && myNoteSeenAt ? (
+                          <span style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                            Je l'ai vue le {fmtDateTimeFR(myNoteSeenAt)}
+                          </span>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
 
-                  <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    {hasMyYellowContent ? (
-                      <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
-                        {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
-                      </span>
-                    ) : null}
+                  <div>
+                    <div style={{ fontWeight: 1000, marginBottom: 6 }}>
+                      Espace pour communiquer avec la comptabilité de TON horaire seulement
+                    </div>
 
                     <div
                       style={{
-                        ...saveHintRow,
-                        color: myReplyStatusObj.err
-                          ? "#b91c1c"
-                          : myReplyStatusObj.saving
-                          ? "#7c2d12"
-                          : "#166534",
-                        opacity: myReplyStatusText ? 1 : 0.55,
+                        border: "1px solid #eab308",
+                        background: "#fef08a",
+                        borderRadius: 12,
+                        padding: 10,
                       }}
                     >
-                      {myReplyStatusText || " "}
+                      <AutoGrowTextarea
+                        minRows={3}
+                        value={myReply}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setReplyDraft(derivedMeEmpId, v);
+                          scheduleAutoSaveReply(derivedMeEmpId, v);
+                        }}
+                        onBlur={(e) => saveReplyForEmp(derivedMeEmpId, e.target.value)}
+                        placeholder="Écrire ma note pour la comptabilité…"
+                        style={{
+                          width: "100%",
+                          border: "1px solid #eab308",
+                          background: "#fffde7",
+                          borderRadius: 12,
+                          padding: "10px 12px",
+                          fontSize: 13,
+                          boxSizing: "border-box",
+                        }}
+                      />
+
+                      {myAdminReplyLikeText ? (
+                        <div
+                          style={{
+                            marginTop: 8,
+                            paddingTop: 8,
+                            borderTop: "1px solid rgba(146,64,14,0.20)",
+                            whiteSpace: "pre-wrap",
+                            fontWeight: 1000,
+                            fontSize: 13,
+                            lineHeight: 1.25,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {myAdminReplyLikeText}
+                          {myAdminReplyLike?.author ? ` — ${myAdminReplyLike.author}` : ""}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      {hasMyYellowContent ? (
+                        <span style={{ fontSize: 12, fontWeight: 900, color: myReplySeenByRH ? "#166534" : "#b91c1c" }}>
+                          {myReplySeenByRH && myReplySeenAt ? `RH a vu le ${fmtDateTimeFR(myReplySeenAt)}` : "RH n’a pas encore vu"}
+                        </span>
+                      ) : null}
+
+                      <div
+                        style={{
+                          ...saveHintRow,
+                          color: myReplyStatusObj.err
+                            ? "#b91c1c"
+                            : myReplyStatusObj.saving
+                            ? "#7c2d12"
+                            : "#166534",
+                          opacity: myReplyStatusText ? 1 : 0.55,
+                        }}
+                      >
+                        {myReplyStatusText || " "}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            </Card>
-          </>
+              </Card>
+            </>
+          </div>
         )}
 
         {isRH && adminUnseenReplyCount > 0 ? (
-          <AlertsCard
-            title="🚨 Alertes — réponses non vues"
-            subtitle="Clique un bloc pour naviguer directement dessus."
-            total={adminUnseenReplyCount}
-            blocks={alertBlocks}
-            isPhone={isPhone}
-            setAnchorDate={setAnchorDate}
-          />
+          <div data-print-hide="true">
+            <AlertsCard
+              title="🚨 Alertes — réponses non vues"
+              subtitle="Clique un bloc pour naviguer directement dessus."
+              total={adminUnseenReplyCount}
+              blocks={alertBlocks}
+              isPhone={isPhone}
+              setAnchorDate={setAnchorDate}
+            />
+          </div>
         ) : null}
 
         <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
-          <Card>
+          <Card data-print-keep="true">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontWeight: 1000, fontSize: isPhone ? 20 : 24 }}>Heures des employés</div>
@@ -1021,8 +1270,26 @@ export function PrivilegedView(props) {
               <div style={{ marginTop: 10, fontWeight: 900, color: "#b91c1c" }}>{summaryErr}</div>
             )}
 
-            <div style={{ marginTop: 12, overflowX: "auto" }}>
-              <table style={table}>
+            <div
+              style={{ marginTop: 12, overflowX: "auto", width: "100%", maxWidth: "100%" }}
+              data-hist-summary-wrap="true"
+            >
+              <table
+                style={{
+                  ...table,
+                  width: "100%",
+                  minWidth: 0,
+                  tableLayout: "fixed",
+                }}
+                data-hist-summary-table="true"
+              >
+                <colgroup>
+                  <col style={{ width: "20%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "55%" }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th style={th}>Employé</th>
@@ -1078,7 +1345,15 @@ export function PrivilegedView(props) {
 
                       return (
                         <tr key={r.id}>
-                          <td style={{ ...tdLeft, whiteSpace: "normal" }}>
+                          <td
+                            style={{
+                              ...tdLeft,
+                              whiteSpace: "normal",
+                              verticalAlign: "top",
+                              paddingTop: 10,
+                            }}
+                            data-hist-summary-col-employee="true"
+                          >
                             <a
                               href={`#/historique/${r.id}`}
                               style={{
@@ -1098,13 +1373,17 @@ export function PrivilegedView(props) {
                             </a>
 
                             {isRH && globalUnseenForEmp ? (
-                              <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <div
+                                style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}
+                                data-hide-on-print="true"
+                              >
                                 <span style={pill("#fff7f7", "#ef4444", "#b91c1c")}>
                                   Alerte: {payBlockLabelFromKey(globalUnseenForEmp.blockKey)}
                                 </span>
                                 <button
                                   type="button"
                                   style={{ ...linkBtn, border: "1px solid #ef4444" }}
+                                  data-hide-on-print="true"
                                   onClick={() => {
                                     const dt = parseISOInput(globalUnseenForEmp.blockKey);
                                     if (dt) setAnchorDate(dt);
@@ -1120,13 +1399,36 @@ export function PrivilegedView(props) {
                           <td style={td}>{fmtHoursComma(r.week2)}</td>
                           <td style={totalCell}>{fmtHoursComma(r.total)}</td>
 
-                          <td style={{ ...td, whiteSpace: "normal", textAlign: "left", minWidth: isPhone ? 240 : 320 }}>
-                            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
-                              <div style={{ flex: 1, minWidth: isPhone ? 180 : 260 }}>
+                          <td
+                            style={{
+                              ...td,
+                              whiteSpace: "normal",
+                              textAlign: "left",
+                              verticalAlign: "top",
+                              paddingTop: 10,
+                            }}
+                            data-hist-summary-col-note="true"
+                          >
+                            <div
+                              style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}
+                              data-hist-summary-note-inner="true"
+                            >
+                              <div
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  alignItems: "flex-start",
+                                  justifyContent: "flex-start",
+                                  gap: 2,
+                                }}
+                                data-hist-summary-note-editor="true"
+                              >
                                 {canWriteNotes ? (
                                   <>
-                                    <textarea
-                                      rows={2}
+                                    <AutoGrowTextarea
+                                      minRows={2}
                                       value={getDraft(r.id)}
                                       onChange={(e) => {
                                         const v = e.target.value;
@@ -1141,55 +1443,89 @@ export function PrivilegedView(props) {
                                         borderRadius: 10,
                                         padding: "8px 10px",
                                         fontSize: 13,
-                                        resize: "vertical",
                                         boxSizing: "border-box",
                                       }}
                                     />
+
+                                    {noteHasText ? (
+                                      <div
+                                        style={{
+                                          marginTop: 2,
+                                          fontSize: 12,
+                                          fontWeight: 900,
+                                          color: noteSeenByEmp ? "#166534" : "#b91c1c",
+                                          lineHeight: 1.15,
+                                          display: "inline-block",
+                                        }}
+                                        data-hide-on-print="true"
+                                      >
+                                        {noteSeenByEmp && noteSeenByEmpAt
+                                          ? `${displayName || "Employé"} a vu la note le ${fmtDateTimeFR(noteSeenByEmpAt)}`
+                                          : `${displayName || "Employé"} n’a pas encore vu la note`}
+                                      </div>
+                                    ) : null}
+
                                     <div
                                       style={{
                                         ...saveHintRow,
+                                        marginTop: 2,
+                                        minHeight: "auto",
                                         color: st.err ? "#b91c1c" : st.saving ? "#7c2d12" : "#166534",
                                         opacity: status ? 1 : 0.55,
                                       }}
+                                      data-hide-on-print="true"
                                     >
                                       {status || " "}
                                     </div>
                                   </>
                                 ) : (
-                                  <div
-                                    style={{
-                                      border: "1px solid #e2e8f0",
-                                      borderRadius: 10,
-                                      padding: "8px 10px",
-                                      fontSize: 13,
-                                      background: "#f8fafc",
-                                      minHeight: 54,
-                                      whiteSpace: "pre-wrap",
-                                      wordBreak: "break-word",
-                                    }}
-                                  >
-                                    {getDraft(r.id) || "—"}
-                                  </div>
-                                )}
+                                  <>
+                                    <div
+                                      style={{
+                                        border: "1px solid #e2e8f0",
+                                        borderRadius: 10,
+                                        padding: "8px 10px",
+                                        fontSize: 13,
+                                        background: "#f8fafc",
+                                        minHeight: 54,
+                                        whiteSpace: "pre-wrap",
+                                        wordBreak: "break-word",
+                                      }}
+                                    >
+                                      {getDraft(r.id) || "—"}
+                                    </div>
 
-                                {noteHasText ? (
-                                  <div style={{ marginTop: 6, fontSize: 12, fontWeight: 900, color: noteSeenByEmp ? "#166534" : "#b91c1c" }}>
-                                    {noteSeenByEmp && noteSeenByEmpAt
-                                      ? `${displayName || "Employé"} a vu la note le ${fmtDateTimeFR(noteSeenByEmpAt)}`
-                                      : `${displayName || "Employé"} n’a pas encore vu la note`}
-                                  </div>
-                                ) : null}
+                                    {noteHasText ? (
+                                      <div
+                                        style={{
+                                          marginTop: 2,
+                                          fontSize: 12,
+                                          fontWeight: 900,
+                                          color: noteSeenByEmp ? "#166534" : "#b91c1c",
+                                          lineHeight: 1.15,
+                                          display: "inline-block",
+                                        }}
+                                        data-hide-on-print="true"
+                                      >
+                                        {noteSeenByEmp && noteSeenByEmpAt
+                                          ? `${displayName || "Employé"} a vu la note le ${fmtDateTimeFR(noteSeenByEmpAt)}`
+                                          : `${displayName || "Employé"} n’a pas encore vu la note`}
+                                      </div>
+                                    ) : null}
+                                  </>
+                                )}
                               </div>
 
                               {(hasReply || hasAdminReply) ? (
                                 <div style={{ display: "grid", gap: 6, alignItems: "start" }}>
                                   <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
-                                    {renderReplyBubbleContent(r.id, isPhone ? 280 : 360)}
+                                    {renderReplyBubbleContent(r.id, isPhone ? 220 : 320)}
 
                                     {isAdmin ? (
                                       <button
                                         type="button"
                                         style={plusAdminBtn}
+                                        data-hide-on-print="true"
                                         title="Ajouter un message admin dans la case jaune"
                                         onClick={() => openAdminReplyModalForEmp(r.id)}
                                       >
@@ -1210,6 +1546,7 @@ export function PrivilegedView(props) {
                                       opacity: isRH ? 1 : 0.7,
                                     }}
                                     title={isRH ? "Coche Vu pour arrêter le flash rouge" : "Lecture seule pour Admin"}
+                                    data-hide-on-print="true"
                                   >
                                     <input
                                       type="checkbox"
@@ -1225,7 +1562,10 @@ export function PrivilegedView(props) {
                                   </label>
 
                                   {seen && replySeenAt ? (
-                                    <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}>
+                                    <div
+                                      style={{ fontSize: 12, fontWeight: 900, color: "#64748b" }}
+                                      data-hide-on-print="true"
+                                    >
                                       Vu le {fmtDateTimeFR(replySeenAt)}
                                     </div>
                                   ) : null}
@@ -1241,6 +1581,7 @@ export function PrivilegedView(props) {
                                           ? "#7c2d12"
                                           : "#166534",
                                       }}
+                                      data-hide-on-print="true"
                                     >
                                       {adminMsgStatus}
                                     </div>
@@ -1251,6 +1592,7 @@ export function PrivilegedView(props) {
                                   <button
                                     type="button"
                                     style={plusAdminBtn}
+                                    data-hide-on-print="true"
                                     title="Ajouter un message admin dans la case jaune"
                                     onClick={() => openAdminReplyModalForEmp(r.id)}
                                   >
@@ -1267,6 +1609,7 @@ export function PrivilegedView(props) {
                                           ? "#7c2d12"
                                           : "#166534",
                                       }}
+                                      data-hide-on-print="true"
                                     >
                                       {adminMsgStatus}
                                     </div>
@@ -1295,75 +1638,77 @@ export function PrivilegedView(props) {
           </Card>
         </div>
 
-        {detailEmpId ? (
-          <DetailModal
-            isPhone={isPhone}
-            detailEmpId={detailEmpId}
-            setDetailEmpId={setDetailEmpId}
-            detailEmp={detailEmp}
-            detailErr={detailErr}
-            detailLoading={detailLoading}
-            detailWeek1={detailWeek1}
-            detailWeek2={detailWeek2}
-            detailTotalWeek1={detailTotalWeek1}
-            detailTotalWeek2={detailTotalWeek2}
-            detailTotal2Weeks={detailTotal2Weeks}
-            week1Label={week1Label}
-            week2Label={week2Label}
-            payPeriodStart={payPeriodStart}
-            payBlockLabel={payBlockLabel}
-            rateDraftValue={rateDraftValue}
-            setRateDrafts={setRateDrafts}
-            saveRateAndSickDays={saveRateAndSickDays}
-            sickModal={sickModal}
-            setSickModal={setSickModal}
-            canWriteNotes={canWriteNotes}
-            getDraft={getDraft}
-            setDraft={setDraft}
-            scheduleAutoSave={scheduleAutoSave}
-            saveNoteForEmp={saveNoteForEmp}
-            noteMeta={noteMeta}
-            noteStatus={noteStatus}
-            statusLabel={statusLabel}
-            repliesFS={repliesFS}
-            getAdminReplyLikeText={getAdminReplyLikeText}
-            renderReplyBubbleContent={renderReplyBubbleContent}
-            getEffectiveYellowAtMs={getEffectiveYellowAtMs}
-            replyMeta={replyMeta}
-            isReplySeenFS={isReplySeenFS}
-            setReplySeenFS={setReplySeenFS}
-            adminReplyLikeStatusLabel={adminReplyLikeStatusLabel}
-            adminReplyLikeStatus={adminReplyLikeStatus}
-            isAdmin={isAdmin}
-            isRH={isRH}
-            openAdminReplyModalForEmp={openAdminReplyModalForEmp}
-          />
-        ) : null}
+        <div data-print-hide="true">
+          {detailEmpId ? (
+            <DetailModal
+              isPhone={isPhone}
+              detailEmpId={detailEmpId}
+              setDetailEmpId={setDetailEmpId}
+              detailEmp={detailEmp}
+              detailErr={detailErr}
+              detailLoading={detailLoading}
+              detailWeek1={detailWeek1}
+              detailWeek2={detailWeek2}
+              detailTotalWeek1={detailTotalWeek1}
+              detailTotalWeek2={detailTotalWeek2}
+              detailTotal2Weeks={detailTotal2Weeks}
+              week1Label={week1Label}
+              week2Label={week2Label}
+              payPeriodStart={payPeriodStart}
+              payBlockLabel={payBlockLabel}
+              rateDraftValue={rateDraftValue}
+              setRateDrafts={setRateDrafts}
+              saveRateAndSickDays={saveRateAndSickDays}
+              sickModal={sickModal}
+              setSickModal={setSickModal}
+              canWriteNotes={canWriteNotes}
+              getDraft={getDraft}
+              setDraft={setDraft}
+              scheduleAutoSave={scheduleAutoSave}
+              saveNoteForEmp={saveNoteForEmp}
+              noteMeta={noteMeta}
+              noteStatus={noteStatus}
+              statusLabel={statusLabel}
+              repliesFS={repliesFS}
+              getAdminReplyLikeText={getAdminReplyLikeText}
+              renderReplyBubbleContent={renderReplyBubbleContent}
+              getEffectiveYellowAtMs={getEffectiveYellowAtMs}
+              replyMeta={replyMeta}
+              isReplySeenFS={isReplySeenFS}
+              setReplySeenFS={setReplySeenFS}
+              adminReplyLikeStatusLabel={adminReplyLikeStatusLabel}
+              adminReplyLikeStatus={adminReplyLikeStatus}
+              isAdmin={isAdmin}
+              isRH={isRH}
+              openAdminReplyModalForEmp={openAdminReplyModalForEmp}
+            />
+          ) : null}
 
-        {sickModal.open ? (
-          <SickDaysModal
-            isPhone={isPhone}
-            sickModal={sickModal}
-            setSickModal={setSickModal}
-            employes={employes}
-            adjustSickDays={adjustSickDays}
-            isAdmin={isAdminUser}
-            isRH={isRHUser}
-          />
-        ) : null}
+          {sickModal.open ? (
+            <SickDaysModal
+              isPhone={isPhone}
+              sickModal={sickModal}
+              setSickModal={setSickModal}
+              employes={employes}
+              adjustSickDays={adjustSickDays}
+              isAdmin={isAdminUser}
+              isRH={isRHUser}
+            />
+          ) : null}
 
-        {adminReplyModal.open && isAdmin ? (
-          <AdminReplyModal
-            isPhone={isPhone}
-            adminReplyModal={adminReplyModal}
-            setAdminReplyModal={setAdminReplyModal}
-            employes={employes}
-            actorDisplayName={actorDisplayName}
-            adminReplyLikeStatusLabel={adminReplyLikeStatusLabel}
-            adminReplyLikeStatus={adminReplyLikeStatus}
-            saveAdminReplyLikeForEmp={saveAdminReplyLikeForEmp}
-          />
-        ) : null}
+          {adminReplyModal.open && isAdmin ? (
+            <AdminReplyModal
+              isPhone={isPhone}
+              adminReplyModal={adminReplyModal}
+              setAdminReplyModal={setAdminReplyModal}
+              employes={employes}
+              actorDisplayName={actorDisplayName}
+              adminReplyLikeStatusLabel={adminReplyLikeStatusLabel}
+              adminReplyLikeStatus={adminReplyLikeStatus}
+              saveAdminReplyLikeForEmp={saveAdminReplyLikeForEmp}
+            />
+          ) : null}
+        </div>
       </PageContainer>
     </div>
   );
@@ -1578,8 +1923,8 @@ export function DetailModal(props) {
               <div style={{ fontWeight: 1000, marginBottom: 6 }}>Réponse de la comptabilité</div>
 
               {canWriteNotes ? (
-                <textarea
-                  rows={5}
+                <AutoGrowTextarea
+                  minRows={5}
                   value={getDraft(detailEmpId)}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -1594,7 +1939,6 @@ export function DetailModal(props) {
                     borderRadius: 12,
                     padding: "10px 12px",
                     fontSize: 13,
-                    resize: "vertical",
                     boxSizing: "border-box",
                   }}
                 />
@@ -1625,13 +1969,13 @@ export function DetailModal(props) {
                 const seenAt = noteMeta?.[detailEmpId]?.seenAt || null;
                 const ok = updMs <= seenMs;
                 return (
-                  <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, color: ok ? "#166534" : "#b91c1c" }}>
+                  <div style={{ marginTop: 4, fontSize: 12, fontWeight: 900, color: ok ? "#166534" : "#b91c1c" }}>
                     {ok && seenAt ? `Employé a vu la note le ${fmtDateTimeFR(seenAt)}` : "Employé n’a pas encore vu la note"}
                   </div>
                 );
               })()}
 
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
                 <div style={{ fontSize: 12, fontWeight: 900, color: "#64748b", wordBreak: "break-word" }}>
                   Bloc: {payBlockLabel}
                 </div>
@@ -1640,6 +1984,8 @@ export function DetailModal(props) {
                   <div
                     style={{
                       ...saveHintRow,
+                      marginTop: 0,
+                      minHeight: "auto",
                       color: noteStatus?.[detailEmpId]?.err
                         ? "#b91c1c"
                         : noteStatus?.[detailEmpId]?.saving
@@ -1884,8 +2230,8 @@ export function AdminReplyModal({
           <span style={{ color: "#92400e" }}>— {actorDisplayName}</span>
         </div>
 
-        <textarea
-          rows={5}
+        <AutoGrowTextarea
+          minRows={5}
           value={adminReplyModal.draft}
           onChange={(e) =>
             setAdminReplyModal((p) => ({ ...(p || {}), draft: e.target.value }))
@@ -1897,7 +2243,6 @@ export function AdminReplyModal({
             borderRadius: 12,
             padding: "10px 12px",
             fontSize: 14,
-            resize: "vertical",
             boxSizing: "border-box",
           }}
         />

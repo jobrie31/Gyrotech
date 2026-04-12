@@ -252,7 +252,20 @@ export function useHistoriquePeriods() {
     setAnchorDate(d);
   }, []);
 
-  const payPeriodStart = useMemo(() => startOfSunday(anchorDate), [anchorDate]);
+  const payPeriodStart = useMemo(() => {
+    const d = anchorDate instanceof Date ? new Date(anchorDate) : new Date(anchorDate);
+    d.setHours(0, 0, 0, 0);
+
+    const pp1 = getCyclePP1StartForDate(d);
+
+    const dUTC = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+    const pp1UTC = Date.UTC(pp1.getFullYear(), pp1.getMonth(), pp1.getDate());
+
+    const diffDays = Math.floor((dUTC - pp1UTC) / 86400000);
+    const blockIndex = Math.floor(diffDays / 14);
+
+    return addDays(pp1, blockIndex * 14);
+  }, [anchorDate]);
   const days14 = useMemo(() => build14Days(payPeriodStart), [payPeriodStart]);
 
   const week1Start = days14[0]?.date;
