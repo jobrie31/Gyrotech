@@ -1,15 +1,7 @@
-// src/ReglagesAdminAutoDepunch.jsx
-// -----------------------------------------------------------------------------
-// CE CODE CONTIENT :
-// - Toute la partie AUTO-DÉ-PUNCH PLANIFIÉ
-// - Chargement / sauvegarde des règles
-// - Ajout / modification / suppression des règles
-// - Tableau desktop + cartes mobile
-// -----------------------------------------------------------------------------
-
 import React, { useEffect, useMemo, useState } from "react";
 import { doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
 import { MultiSelectEmployesDropdown, normalizeRoleFromDoc } from "./ReglagesAdminEmployes";
+import PageAlarmesAdmin from "../PageAlarmesAdmin";
 import {
   sectionResponsive,
   h3Bold,
@@ -615,137 +607,161 @@ export function AutoDepunchSection({
   );
 
   return (
-    <section style={sectionResponsive(isPhone)}>
-      <h3 style={h3Bold}>Auto-dé-punch planifié</h3>
+    <>
+      <section style={sectionResponsive(isPhone)}>
+        <h3 style={h3Bold}>Auto-dépunch planifié</h3>
 
-      <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.45 }}>
-        La Cloud Function roulera aux <strong>15 minutes</strong> et appliquera ces règles.
-        Chaque règle dépunchera seulement les employés choisis, ainsi que leurs segments de projet / autre tâche exactement comme ton autoDepunch17.
-      </div>
+        <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.45 }}>
+          La Cloud Function roulera aux <strong>15 minutes</strong> et appliquera ces règles.
+          Chaque règle dépunchera seulement les employés choisis, ainsi que leurs segments de projet / autre tâche exactement comme ton autoDepunch17.
+        </div>
 
-      {autoDpError && <div style={alertErr}>{autoDpError}</div>}
-      {autoDpSaved && !autoDpError && <div style={alertOk}>Règles enregistrées.</div>}
+        {autoDpError && <div style={alertErr}>{autoDpError}</div>}
+        {autoDpSaved && !autoDpError && <div style={alertOk}>Règles enregistrées.</div>}
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: isPhone ? "stretch" : "center",
-          gap: 10,
-          flexWrap: "wrap",
-          flexDirection: isPhone ? "column" : "row",
-          marginBottom: 12,
-          padding: isPhone ? 9 : 10,
-          borderRadius: 10,
-          background: "#dbe0e6",
-          border: "1px solid #cbd5e1",
-        }}
-      >
-        <label
+        <div
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-            fontWeight: 900,
-            fontSize: isPhone ? 12 : 13,
-            lineHeight: 1.35,
+            display: "flex",
+            alignItems: isPhone ? "stretch" : "center",
+            gap: 10,
+            flexWrap: "wrap",
+            flexDirection: isPhone ? "column" : "row",
+            marginBottom: 12,
+            padding: isPhone ? 9 : 10,
+            borderRadius: 10,
+            background: "#dbe0e6",
+            border: "1px solid #cbd5e1",
           }}
         >
-          <input
-            type="checkbox"
-            checked={!!autoDpEnabled}
-            onChange={(e) => saveAutoDpEnabledOnly(e.target.checked)}
-            disabled={autoDpSaving || autoDpLoading}
-          />
-          <span>Activer l’auto-dé-punch planifié</span>
-        </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              fontWeight: 900,
+              fontSize: isPhone ? 12 : 13,
+              lineHeight: 1.35,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!autoDpEnabled}
+              onChange={(e) => saveAutoDpEnabledOnly(e.target.checked)}
+              disabled={autoDpSaving || autoDpLoading}
+            />
+            <span>Activer l’auto-dépunch planifié</span>
+          </label>
 
-        <div style={{ fontSize: isPhone ? 11 : 12, color: "#475569", fontWeight: 800, wordBreak: "break-word" }}>
-          Fuseau : America/Toronto — Intervalle : 15 min
-        </div>
-      </div>
-
-      <div
-        style={{
-          marginBottom: 14,
-          padding: isPhone ? 10 : 12,
-          border: "1px solid #111",
-          borderRadius: 12,
-          background: "#dbe0e6",
-        }}
-      >
-        <div style={{ fontWeight: 900, marginBottom: 10, fontSize: isPhone ? 13 : 14 }}>
-          Ajouter une règle
+          <div style={{ fontSize: isPhone ? 11 : 12, color: "#475569", fontWeight: 800, wordBreak: "break-word" }}>
+            Fuseau : America/Toronto — Intervalle : 15 min
+          </div>
         </div>
 
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: isPhone ? "1fr" : "160px minmax(0,1fr) auto",
-            gap: 8,
-            alignItems: "end",
+            marginBottom: 14,
+            padding: isPhone ? 10 : 12,
+            border: "1px solid #111",
+            borderRadius: 12,
+            background: "#dbe0e6",
           }}
         >
-          <div style={{ width: "100%" }}>
-            <label style={label}>Heure</label>
-            <select
-              value={newAutoDpTime}
-              onChange={(e) => setNewAutoDpTime(e.target.value)}
-              style={{ ...input, width: "100%" }}
-            >
-              {QUARTER_HOUR_OPTIONS.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+          <div style={{ fontWeight: 900, marginBottom: 10, fontSize: isPhone ? 13 : 14 }}>
+            Ajouter une règle
           </div>
 
-          <div style={{ width: "100%", minWidth: 0 }}>
-            <label style={label}>Employés</label>
-            <MultiSelectEmployesDropdown
-              employes={autoDepunchEligibleEmployes}
-              selectedIds={newAutoDpEmpIds}
-              onToggle={toggleNewAutoDpEmp}
-              placeholder="Choisir les employés"
-              disabled={autoDpSaving || autoDpLoading}
-              compact={isPhone}
-            />
-            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={selectAllNewAutoDpEmp} style={btnSecondarySmallResponsive(isPhone)}>
-                Tout le monde
-              </button>
-              <button type="button" onClick={clearAllNewAutoDpEmp} style={btnSecondarySmallResponsive(isPhone)}>
-                Vider
-              </button>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={addAutoDpRule}
-            disabled={autoDpSaving || autoDpLoading}
-            style={isPhone ? btnPrimaryFullMobile : btnPrimary}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: isPhone ? "1fr" : "160px minmax(0,1fr) auto",
+              gap: 8,
+              alignItems: "end",
+            }}
           >
-            {autoDpSaving ? "..." : "Ajouter la règle"}
-          </button>
+            <div style={{ width: "100%" }}>
+              <label style={label}>Heure</label>
+              <select
+                value={newAutoDpTime}
+                onChange={(e) => setNewAutoDpTime(e.target.value)}
+                style={{ ...input, width: "100%" }}
+              >
+                {QUARTER_HOUR_OPTIONS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ width: "100%", minWidth: 0 }}>
+              <label style={label}>Employés</label>
+              <MultiSelectEmployesDropdown
+                employes={autoDepunchEligibleEmployes}
+                selectedIds={newAutoDpEmpIds}
+                onToggle={toggleNewAutoDpEmp}
+                placeholder="Choisir les employés"
+                disabled={autoDpSaving || autoDpLoading}
+                compact={isPhone}
+              />
+              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={selectAllNewAutoDpEmp} style={btnSecondarySmallResponsive(isPhone)}>
+                  Tout le monde
+                </button>
+                <button type="button" onClick={clearAllNewAutoDpEmp} style={btnSecondarySmallResponsive(isPhone)}>
+                  Vider
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={addAutoDpRule}
+              disabled={autoDpSaving || autoDpLoading}
+              style={isPhone ? btnPrimaryFullMobile : btnPrimary}
+            >
+              {autoDpSaving ? "..." : "Ajouter la règle"}
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: isPhone ? 11 : 12, color: "#374151", fontWeight: 700, wordBreak: "break-word" }}>
+            Sélectionnés :{" "}
+            {autoDepunchEligibleEmployes
+              .filter((emp) => newAutoDpEmpIds.includes(emp.id))
+              .map((emp) => emp.nom)
+              .join(", ") || "Aucun"}
+          </div>
         </div>
 
-        <div style={{ marginTop: 8, fontSize: isPhone ? 11 : 12, color: "#374151", fontWeight: 700, wordBreak: "break-word" }}>
-          Sélectionnés :{" "}
-          {autoDepunchEligibleEmployes
-            .filter((emp) => newAutoDpEmpIds.includes(emp.id))
-            .map((emp) => emp.nom)
-            .join(", ") || "Aucun"}
-        </div>
-      </div>
+        {isPhone ? renderAutoDpMobile() : renderAutoDpDesktop()}
 
-      {isPhone ? renderAutoDpMobile() : renderAutoDpDesktop()}
+        {autoDpLoading && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+            Chargement…
+          </div>
+        )}
+      </section>
 
-      {autoDpLoading && (
-        <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-          Chargement…
+      <section style={sectionResponsive(isPhone)}>
+        <h3 style={h3Bold}>Alarmes</h3>
+
+        <div style={{ fontSize: isPhone ? 11 : 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.45 }}>
+          Alarmes locales dans l’application, du lundi au vendredi seulement, avec choix des heures de 08:00 à 18:00, par tranches de 5 minutes.
         </div>
-      )}
-    </section>
+
+        <div
+          style={{
+            width: "100%",
+            overflowX: "hidden",
+            background: "#dbe0e6",
+            borderRadius: 10,
+            padding: isPhone ? 8 : 10,
+            boxSizing: "border-box",
+            border: "1px solid #cbd5e1",
+          }}
+        >
+          <PageAlarmesAdmin />
+        </div>
+      </section>
+    </>
   );
 }

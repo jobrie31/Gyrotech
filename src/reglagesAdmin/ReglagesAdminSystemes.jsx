@@ -1,21 +1,6 @@
-// src/ReglagesAdminSystemes.jsx
-// Contient uniquement les sections "systèmes" de la page Réglages Admin :
-// 1) HeaderRow (titre + bouton retour accueil)
-// 2) Sécurité (déconnecter tout le monde)
-// 3) Alarmes
-// 4) Facturation
-// 5) Emails destinataires facture
-// 6) Approbation des feuilles de dépenses
-//
-// MODIFICATIONS FAITES :
-// - Retrait complet de la section "Taux de déplacement par employé"
-// - Le taux est maintenant géré directement dans le tableau Employés
-//   de ReglagesAdminEmployes.jsx
-
 import React, { useEffect, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import PageAlarmesAdmin from "../PageAlarmesAdmin";
 
 export function HeaderRow({
   title = "🛠️ Réglages Admin",
@@ -285,8 +270,6 @@ export function SystemesSection({
     }
   };
 
-  const alarmScale = isPhone ? 0.9 : isSmallTablet ? 0.96 : 1;
-
   return (
     <>
       <section style={sectionResponsive(isPhone)}>
@@ -325,31 +308,6 @@ export function SystemesSection({
         >
           {kickAllLoading ? "..." : "🚫 Déconnecter tout le monde"}
         </button>
-      </section>
-
-      <section style={sectionResponsive(isPhone)}>
-        <h3 style={h3Bold}>Alarmes</h3>
-
-        <div
-          style={{
-            width: "100%",
-            overflowX: "auto",
-            background: "#dbe0e6",
-            borderRadius: 10,
-            padding: 8,
-            boxSizing: "border-box",
-          }}
-        >
-          <div
-            style={{
-              transform: alarmScale !== 1 ? `scale(${alarmScale})` : "none",
-              transformOrigin: "top left",
-              width: alarmScale !== 1 ? `${100 / alarmScale}%` : "100%",
-            }}
-          >
-            <PageAlarmesAdmin />
-          </div>
-        </div>
       </section>
 
       <section style={sectionResponsive(isPhone)}>

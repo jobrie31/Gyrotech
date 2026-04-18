@@ -30,7 +30,7 @@ import {
 } from "./PageActions";
 import TableauEmployesTV from "./TableauEmployesTV";
 
-const APP_BUILD = "3.0";
+const APP_BUILD = "3.1";
 const LEFT_RAIL_W = 0;
 const TV_VERSION_RESERVED_H = 34;
 
@@ -842,6 +842,8 @@ function ErrorBanner({ error, onClose }) {
 function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
   void projets;
   const hasInitialProj = !!initialProj;
+  const isMobile = typeof window !== "undefined" ? window.innerWidth <= 640 : false;
+
   if (!open) return null;
 
   const confirmText = hasInitialProj
@@ -850,7 +852,15 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
 
   const modal = (
     <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} style={styles.modalBackdrop}>
-      <div onClick={(e) => e.stopPropagation()} style={styles.modalCard}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          ...styles.modalCard,
+          width: isMobile ? "calc(100vw - 16px)" : undefined,
+          maxWidth: "100%",
+          boxSizing: "border-box",
+        }}
+      >
         <div
           style={{
             display: "flex",
@@ -861,7 +871,7 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
             flexWrap: "wrap",
           }}
         >
-          <div style={{ fontWeight: 800, fontSize: 22 }}>Confirmation du punch</div>
+          <div style={{ fontWeight: 800, fontSize: isMobile ? 20 : 22 }}>Confirmation du punch</div>
           <button
             onClick={() => onCancel && onCancel()}
             title="Fermer"
@@ -872,26 +882,93 @@ function MiniConfirm({ open, initialProj, projets, onConfirm, onCancel }) {
         </div>
 
         {hasInitialProj ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, fontSize: 18, minWidth: 220 }}>{confirmText}</div>
-            <Button variant="success" onClick={() => onConfirm && onConfirm(initialProj || null)}>
-              Oui
-            </Button>
-            <Button variant="danger" onClick={() => onCancel && onCancel("clearProject")}>
-              Non
-            </Button>
-          </div>
+          <>
+            <div
+              style={{
+                fontSize: isMobile ? 16 : 18,
+                marginBottom: 16,
+                lineHeight: 1.25,
+                wordBreak: "break-word",
+              }}
+            >
+              {confirmText}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 12,
+                width: "100%",
+                alignItems: "stretch",
+              }}
+            >
+              <Button
+                variant="success"
+                onClick={() => onConfirm && onConfirm(initialProj || null)}
+                style={{
+                  width: "100%",
+                  minHeight: isMobile ? 44 : 46,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: 0,
+                }}
+              >
+                Oui
+              </Button>
+
+              <Button
+                variant="danger"
+                onClick={() => onCancel && onCancel("clearProject")}
+                style={{
+                  width: "100%",
+                  minHeight: isMobile ? 44 : 46,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: 0,
+                }}
+              >
+                Non
+              </Button>
+            </div>
+          </>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, fontSize: 18, minWidth: 220 }}>{confirmText}</div>
-            <Button variant="primary" onClick={() => onCancel && onCancel()}>
-              Choisir un projet
-            </Button>
-          </div>
+          <>
+            <div
+              style={{
+                fontSize: isMobile ? 16 : 18,
+                marginBottom: 16,
+                lineHeight: 1.25,
+                wordBreak: "break-word",
+              }}
+            >
+              {confirmText}
+            </div>
+
+            <div style={{ width: "100%" }}>
+              <Button
+                variant="primary"
+                onClick={() => onCancel && onCancel()}
+                style={{
+                  width: "100%",
+                  minHeight: isMobile ? 44 : 46,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: 0,
+                }}
+              >
+                Choisir un projet
+              </Button>
+            </div>
+          </>
         )}
       </div>
     </div>
   );
+
   return ReactDOM.createPortal(modal, document.body);
 }
 
@@ -1192,7 +1269,21 @@ function CodeAutresProjetsModal({ open, requiredCode, projetNom, onConfirm, onCa
 
 function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autresProjets, onClose }) {
   const [extraProjLabels, setExtraProjLabels] = useState({});
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= 640;
+  });
+
   const key = todayKey();
+
+  useEffect(() => {
+    const onResize = () => {
+      setIsMobile(window.innerWidth <= 640);
+    };
+
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -1220,7 +1311,9 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
                 const data = snap.data() || {};
                 const obj = { id: pid, ...data, nom: getProjetNom(data) || data.nom || data.clientNom };
                 out[pid] = getProjetLabel(obj) || pid;
-              } else out[pid] = pid;
+              } else {
+                out[pid] = pid;
+              }
             } catch {
               out[pid] = pid;
             }
@@ -1240,16 +1333,19 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
     const jn = String(s?.jobName || "").trim();
 
     if (!jid) return jn || "Aucun projet";
+
     if (jid.startsWith("other:")) {
       const oid = jid.slice(6);
       const fromList = autresProjets?.find?.((x) => x.id === oid)?.nom;
       return jn || fromList || "Autre tâche";
     }
+
     if (jid.startsWith("proj:")) {
       const pid = jid.slice(5);
       const fromOpen = projets?.find?.((p) => p.id === pid);
       return jn || (fromOpen ? getProjetLabel(fromOpen) : null) || extraProjLabels[pid] || pid;
     }
+
     return jn || jid;
   };
 
@@ -1259,6 +1355,7 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
       const st = s.start?.toDate ? s.start.toDate() : s.start ? new Date(s.start) : null;
       const en = s.end?.toDate ? s.end.toDate() : s.end ? new Date(s.end) : null;
       const durMs = st ? Math.max(0, (en ? en.getTime() : nowMs) - st.getTime()) : 0;
+
       return {
         id: s.id,
         label: resolveJobLabel(s),
@@ -1274,20 +1371,49 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
 
   const modal = (
     <div role="dialog" aria-modal="true" onClick={onClose} style={styles.modalBackdrop}>
-      <div onClick={(e) => e.stopPropagation()} style={{ ...styles.modalCard, width: "min(900px, 96vw)" }}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          ...styles.modalCard,
+          width: isMobile ? "calc(100vw - 16px)" : "min(900px, 96vw)",
+          maxWidth: "100%",
+          maxHeight: isMobile ? "90vh" : "88vh",
+          overflowY: "auto",
+          padding: isMobile ? 12 : 20,
+          borderRadius: isMobile ? 14 : 16,
+          boxSizing: "border-box",
+        }}
+      >
         <div
           style={{
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-start",
             justifyContent: "space-between",
-            gap: 12,
-            marginBottom: 10,
-            flexWrap: "wrap",
+            gap: 10,
+            marginBottom: 12,
+            flexWrap: "nowrap",
           }}
         >
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 900, fontSize: 22 }}>{emp?.nom || "Employé(e)"}</div>
-            <div style={{ color: "#64748b", marginTop: 2 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div
+              style={{
+                fontWeight: 900,
+                fontSize: isMobile ? 18 : 22,
+                lineHeight: 1.1,
+                wordBreak: "break-word",
+              }}
+            >
+              {emp?.nom || "Employé(e)"}
+            </div>
+
+            <div
+              style={{
+                color: "#64748b",
+                marginTop: 4,
+                fontSize: isMobile ? 13 : 15,
+                lineHeight: 1.25,
+              }}
+            >
               Aujourd’hui ({key}) — Total: <strong>{fmtHM(totalMs)}</strong>
             </div>
           </div>
@@ -1295,50 +1421,125 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
           <button
             onClick={onClose}
             title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: isMobile ? 30 : 28,
+              cursor: "pointer",
+              lineHeight: 1,
+              flex: "0 0 auto",
+              padding: 0,
+            }}
           >
             ×
           </button>
         </div>
 
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", width: "100%" }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0,1.5fr) 120px 120px 120px",
-              background: "#f3f4f6",
-            }}
-          >
-            {["Projet / tâche", "Début", "Fin", "Durée"].map((h) => (
-              <div key={h} style={{ padding: "10px 12px", fontWeight: 900, color: "#111827", minWidth: 0 }}>
-                {h}
-              </div>
-            ))}
-          </div>
-
-          {rows.map((r) => (
+        {!isMobile ? (
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", width: "100%" }}>
             <div
-              key={r.id}
               style={{
                 display: "grid",
                 gridTemplateColumns: "minmax(0,1.5fr) 120px 120px 120px",
-                borderTop: "1px solid #e5e7eb",
-                alignItems: "center",
+                background: "#f3f4f6",
               }}
             >
-              <div style={{ padding: "10px 12px", fontWeight: 800, minWidth: 0 }}>
-                <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.label}>
+              {["Projet / tâche", "Début", "Fin", "Durée"].map((h) => (
+                <div key={h} style={{ padding: "10px 12px", fontWeight: 900, color: "#111827", minWidth: 0 }}>
+                  {h}
+                </div>
+              ))}
+            </div>
+
+            {rows.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0,1.5fr) 120px 120px 120px",
+                  borderTop: "1px solid #e5e7eb",
+                  alignItems: "center",
+                }}
+              >
+                <div style={{ padding: "10px 12px", fontWeight: 800, minWidth: 0 }}>
+                  <div
+                    style={{
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={r.label}
+                  >
+                    {r.label}
+                  </div>
+
+                  {r.open && (
+                    <div style={{ marginTop: 4, display: "inline-flex", gap: 8, alignItems: "center" }}>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 900,
+                          color: "#065f46",
+                          background: "#d1fae5",
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                        }}
+                      >
+                        EN COURS
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ padding: "10px 12px", fontWeight: 800 }}>{fmtHMFromDate(r.start)}</div>
+                <div style={{ padding: "10px 12px", fontWeight: 800 }}>{r.open ? "—" : fmtHMFromDate(r.end)}</div>
+                <div style={{ padding: "10px 12px", fontWeight: 900 }}>{fmtHM(r.durMs)}</div>
+              </div>
+            ))}
+
+            {rows.length === 0 && (
+              <div style={{ padding: 12, color: "#64748b" }}>
+                Aucun segment aujourd’hui (pas punché / pas de données).
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {rows.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "#f8fafc",
+                  boxSizing: "border-box",
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: 900,
+                    fontSize: 15,
+                    lineHeight: 1.2,
+                    color: "#111827",
+                    wordBreak: "break-word",
+                    overflowWrap: "anywhere",
+                  }}
+                >
                   {r.label}
                 </div>
+
                 {r.open && (
-                  <div style={{ marginTop: 4, display: "inline-flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ marginTop: 8 }}>
                     <span
                       style={{
-                        fontSize: 12,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        fontSize: 11,
                         fontWeight: 900,
                         color: "#065f46",
                         background: "#d1fae5",
-                        padding: "2px 8px",
+                        padding: "3px 8px",
                         borderRadius: 999,
                       }}
                     >
@@ -1346,22 +1547,85 @@ function EmployePunchDetailsModal({ open, emp, sessions, totalMs, projets, autre
                     </span>
                   </div>
                 )}
-              </div>
-              <div style={{ padding: "10px 12px", fontWeight: 800 }}>{fmtHMFromDate(r.start)}</div>
-              <div style={{ padding: "10px 12px", fontWeight: 800 }}>{r.open ? "—" : fmtHMFromDate(r.end)}</div>
-              <div style={{ padding: "10px 12px", fontWeight: 900 }}>{fmtHM(r.durMs)}</div>
-            </div>
-          ))}
 
-          {rows.length === 0 && (
-            <div style={{ padding: 12, color: "#64748b" }}>
-              Aucun segment aujourd’hui (pas punché / pas de données).
-            </div>
-          )}
-        </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 8,
+                    marginTop: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 10,
+                      padding: "8px 10px",
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", marginBottom: 2 }}>Début</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, color: "#111827" }}>{fmtHMFromDate(r.start)}</div>
+                  </div>
+
+                  <div
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 10,
+                      padding: "8px 10px",
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", marginBottom: 2 }}>Fin</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, color: "#111827" }}>
+                      {r.open ? "—" : fmtHMFromDate(r.end)}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      background: "#ffffff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 10,
+                      padding: "8px 10px",
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", marginBottom: 2 }}>Durée</div>
+                    <div style={{ fontSize: 17, fontWeight: 900, color: "#111827" }}>{fmtHM(r.durMs)}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {rows.length === 0 && (
+              <div
+                style={{
+                  padding: 12,
+                  color: "#64748b",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 12,
+                  background: "#f8fafc",
+                  fontSize: 14,
+                }}
+              >
+                Aucun segment aujourd’hui (pas punché / pas de données).
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
-          <Button variant="neutral" onClick={onClose}>
+          <Button
+            variant="neutral"
+            onClick={onClose}
+            style={{
+              width: isMobile ? "100%" : undefined,
+              minHeight: isMobile ? 44 : undefined,
+              fontSize: isMobile ? 15 : undefined,
+              fontWeight: 800,
+            }}
+          >
             Fermer
           </Button>
         </div>

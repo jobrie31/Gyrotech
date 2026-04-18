@@ -1278,12 +1278,12 @@ export function ClosedProjectsPopup({ open, onClose, onReopen, onDelete }) {
         `}</style>
 
         <div style={rowBetween}>
-          <div style={{ fontWeight: 1000, fontSize: 24 }}>📁 Projets fermés (≤ 2 mois)</div>
+          <div style={{ fontWeight: 1000, fontSize: 24 }}>📁 Projets fermés</div>
           <button onClick={onClose} style={btnX}>×</button>
         </div>
 
         <div style={{ fontSize: 16, color: "#6b7280", marginBottom: 12, fontWeight: 700 }}>
-          Projets fermés complètement et tâches spéciales fermées avec PDF + email depuis moins de 2 mois.
+          Supprimé après 2 mois
         </div>
 
         {localError ? <ErrorBanner error={localError} onClose={() => setLocalError(null)} /> : null}

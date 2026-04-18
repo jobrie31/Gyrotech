@@ -985,53 +985,82 @@ function PopupHistoriqueAutreProjet({ open, onClose, projet }) {
 /* ---------- Popup DOCS ---------- */
 function PopupDocsManagerAutre({ open, onClose, projet }) {
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [files, setFiles] = useState([]);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= 700;
+  });
+
   const inputRef = useRef(null);
+  const reqIdRef = useRef(0);
+
+  useEffect(() => {
+    const onResize = () => {
+      setIsMobile(window.innerWidth <= 700);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const syncPdfCountExact = async (count) => {
     if (!projet?.id) return;
     try {
-      await setDoc(doc(db, "autresProjets", projet.id), { pdfCount: Number(count || 0) }, { merge: true });
+      await setDoc(
+        doc(db, "autresProjets", projet.id),
+        { pdfCount: Number(count || 0) },
+        { merge: true }
+      );
     } catch (e) {
       console.error("syncPdfCountExact other error", e);
     }
   };
 
   useEffect(() => {
-    if (!open || !projet?.id) return;
-    let cancelled = false;
+    if (!open || !projet?.id) {
+      setFiles([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    const myReqId = ++reqIdRef.current;
+    setFiles([]);
+    setError(null);
+    setLoading(true);
 
     (async () => {
       try {
         const base = storageRef(storage, `autresProjets/${projet.id}/pdfs`);
         const res = await listAll(base).catch(() => ({ items: [] }));
+
         const entries = await Promise.all(
           (res.items || []).map(async (itemRef) => {
             const url = await getDownloadURL(itemRef);
-            const name = itemRef.name;
-            return { name, url };
+            return { name: itemRef.name, url };
           })
         );
 
+        if (reqIdRef.current !== myReqId) return;
+
         const sorted = entries.sort((a, b) => a.name.localeCompare(b.name));
-        if (!cancelled) setFiles(sorted);
+        setFiles(sorted);
 
         const current = Number(projet?.pdfCount ?? 0);
-        if (!cancelled && sorted.length !== current) {
+        if (sorted.length !== current) {
           await syncPdfCountExact(sorted.length);
         }
       } catch (e) {
-        if (!cancelled) {
-          console.error(e);
-          setError(e?.message || String(e));
+        if (reqIdRef.current !== myReqId) return;
+        console.error(e);
+        setError(e?.message || String(e));
+      } finally {
+        if (reqIdRef.current === myReqId) {
+          setLoading(false);
         }
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [open, projet?.id]);
 
   const pickFile = () => inputRef.current?.click();
@@ -1050,6 +1079,7 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
 
     setBusy(true);
     setError(null);
+
     try {
       const safeName = file.name.replace(/[^\w.\-()]/g, "_");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -1057,7 +1087,10 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
       const path = `autresProjets/${projet.id}/pdfs/${name}`;
       const dest = storageRef(storage, path);
 
-      await uploadBytes(dest, file, { contentType: file.type || "application/octet-stream" });
+      await uploadBytes(dest, file, {
+        contentType: file.type || "application/octet-stream",
+      });
+
       const url = await getDownloadURL(dest);
 
       setFiles((prev) => {
@@ -1076,8 +1109,10 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
   const onDelete = async (name) => {
     if (!projet?.id) return;
     if (!window.confirm(`Supprimer « ${name} » ?`)) return;
+
     setBusy(true);
     setError(null);
+
     try {
       const fileRef = storageRef(storage, `autresProjets/${projet.id}/pdfs/${name}`);
       await deleteObject(fileRef);
@@ -1099,6 +1134,39 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
 
   const title = projet.nom || "(autre tâche)";
 
+  const btnOpenDoc = {
+    border: "none",
+    background: "#2563eb",
+    color: "#fff",
+    borderRadius: 14,
+    padding: isMobile ? "12px 14px" : "12px 18px",
+    cursor: "pointer",
+    fontWeight: 1000,
+    fontSize: isMobile ? 16 : 18,
+    textDecoration: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: isMobile ? 46 : 48,
+    width: isMobile ? "100%" : "auto",
+    boxSizing: "border-box",
+    boxShadow: "0 8px 18px rgba(37, 99, 235, 0.22)",
+  };
+
+  const btnDeleteDoc = {
+    border: "1px solid #ef4444",
+    background: "#fee2e2",
+    color: "#b91c1c",
+    borderRadius: 12,
+    padding: isMobile ? "10px 12px" : "10px 14px",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: isMobile ? 14 : 15,
+    minHeight: isMobile ? 42 : 44,
+    width: isMobile ? "100%" : "auto",
+    boxSizing: "border-box",
+  };
+
   return (
     <div
       role="dialog"
@@ -1111,7 +1179,8 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 16,
+        padding: isMobile ? 8 : 16,
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -1119,23 +1188,52 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
         style={{
           background: "#fff",
           border: "1px solid #e5e7eb",
-          width: "min(760px, 96vw)",
+          width: isMobile ? "calc(100vw - 12px)" : "min(760px, 96vw)",
+          maxWidth: "100%",
           maxHeight: "92vh",
-          overflow: "auto",
-          borderRadius: 18,
-          padding: 18,
+          overflowY: "auto",
+          overflowX: "hidden",
+          borderRadius: isMobile ? 14 : 18,
+          padding: isMobile ? 12 : 18,
           boxShadow: "0 28px 64px rgba(0,0,0,0.30)",
+          boxSizing: "border-box",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 1000, fontSize: 24 }}>DOCS – {title}</div>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 10,
+            marginBottom: 10,
+          }}
+        >
+          <div
+            style={{
+              fontWeight: 1000,
+              fontSize: isMobile ? 20 : 24,
+              lineHeight: 1.1,
+              minWidth: 0,
+              wordBreak: "break-word",
+            }}
+          >
+            DOCS – {title}
+          </div>
+
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClose?.();
             }}
             title="Fermer"
-            style={{ border: "none", background: "transparent", fontSize: 28, cursor: "pointer", lineHeight: 1 }}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 28,
+              cursor: "pointer",
+              lineHeight: 1,
+              flex: "0 0 auto",
+            }}
           >
             ×
           </button>
@@ -1143,10 +1241,28 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
 
         {error && <ErrorBanner error={error} onClose={() => setError(null)} />}
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-          <button onClick={pickFile} style={btnPrimary} disabled={busy}>
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            marginBottom: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            onClick={pickFile}
+            style={{
+              ...btnPrimary,
+              width: isMobile ? "100%" : "auto",
+              fontSize: isMobile ? 15 : 16,
+              minHeight: isMobile ? 44 : undefined,
+            }}
+            disabled={busy || loading}
+          >
             {busy ? "Téléversement..." : "Ajouter un document"}
           </button>
+
           <input
             ref={inputRef}
             type="file"
@@ -1156,57 +1272,184 @@ function PopupDocsManagerAutre({ open, onClose, projet }) {
           />
         </div>
 
-        <div style={{ fontWeight: 900, margin: "6px 0 10px", fontSize: 18 }}>Documents de la tâche</div>
-        <table
+        <div
           style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            border: "1px solid #eee",
-            borderRadius: 14,
-            fontSize: 16,
+            fontWeight: 900,
+            margin: "6px 0 10px",
+            fontSize: isMobile ? 16 : 18,
           }}
         >
-          <thead>
-            <tr style={{ background: "#e5e7eb" }}>
-              <th style={thCenter}>Nom</th>
-              <th style={thCenter}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {files.map((f, i) => (
-              <tr key={i}>
-                <td style={{ ...tdCenter, wordBreak: "break-word" }}>{f.name}</td>
-                <td style={tdCenter}>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
-                    <a href={f.url} target="_blank" rel="noreferrer" style={btnBlue}>
+          Documents de la tâche
+        </div>
+
+        {!isMobile ? (
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              border: "1px solid #eee",
+              borderRadius: 14,
+              fontSize: 16,
+              tableLayout: "fixed",
+            }}
+          >
+            <thead>
+              <tr style={{ background: "#e5e7eb" }}>
+                <th style={{ ...thCenter, width: "58%" }}>Nom</th>
+                <th style={{ ...thCenter, width: "42%" }}>Actions</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td
+                    colSpan={2}
+                    style={{
+                      padding: 14,
+                      color: "#666",
+                      textAlign: "center",
+                      fontSize: 16,
+                    }}
+                  >
+                    Chargement des documents...
+                  </td>
+                </tr>
+              ) : files.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={2}
+                    style={{
+                      padding: 14,
+                      color: "#666",
+                      textAlign: "center",
+                      fontSize: 16,
+                    }}
+                  >
+                    Aucun document.
+                  </td>
+                </tr>
+              ) : (
+                files.map((f, i) => (
+                  <tr key={i}>
+                    <td
+                      style={{
+                        ...tdCenter,
+                        textAlign: "left",
+                        fontSize: 15,
+                        fontWeight: 800,
+                        wordBreak: "break-word",
+                        overflowWrap: "anywhere",
+                        padding: "12px 14px",
+                      }}
+                    >
+                      {f.name}
+                    </td>
+
+                    <td style={{ ...tdCenter, padding: "12px 14px" }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 10,
+                          flexWrap: "wrap",
+                          justifyContent: "center",
+                          alignItems: "center",
+                        }}
+                      >
+                        <a href={f.url} target="_blank" rel="noreferrer" style={btnOpenDoc}>
+                          Ouvrir
+                        </a>
+
+                        <button onClick={() => onDelete(f.name)} style={btnDeleteDoc} disabled={busy}>
+                          Supprimer
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {loading ? (
+              <div
+                style={{
+                  padding: 14,
+                  color: "#666",
+                  textAlign: "center",
+                  fontSize: 16,
+                  border: "1px solid #eee",
+                  borderRadius: 12,
+                  background: "#fff",
+                }}
+              >
+                Chargement des documents...
+              </div>
+            ) : files.length === 0 ? (
+              <div
+                style={{
+                  padding: 14,
+                  color: "#666",
+                  textAlign: "center",
+                  fontSize: 16,
+                  border: "1px solid #eee",
+                  borderRadius: 12,
+                  background: "#fff",
+                }}
+              >
+                Aucun document.
+              </div>
+            ) : (
+              files.map((f, i) => (
+                <div
+                  key={i}
+                  style={{
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 14,
+                    padding: 12,
+                    background: "#f8fafc",
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 14,
+                      fontWeight: 900,
+                      color: "#111827",
+                      lineHeight: 1.25,
+                      wordBreak: "break-word",
+                      overflowWrap: "anywhere",
+                      marginBottom: 10,
+                    }}
+                  >
+                    {f.name}
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <a href={f.url} target="_blank" rel="noreferrer" style={btnOpenDoc}>
                       Ouvrir
                     </a>
-                    <button
-                      onClick={() => navigator.clipboard?.writeText(f.url)}
-                      style={btnSecondary}
-                      title="Copier l’URL"
-                    >
-                      Copier l’URL
-                    </button>
-                    <button onClick={() => onDelete(f.name)} style={btnDanger} disabled={busy}>
+
+                    <button onClick={() => onDelete(f.name)} style={btnDeleteDoc} disabled={busy}>
                       Supprimer
                     </button>
                   </div>
-                </td>
-              </tr>
-            ))}
-            {files.length === 0 && (
-              <tr>
-                <td colSpan={2} style={{ padding: 14, color: "#666", textAlign: "center", fontSize: 16 }}>
-                  Aucun document.
-                </td>
-              </tr>
+                </div>
+              ))
             )}
-          </tbody>
-        </table>
+          </div>
+        )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onClose} style={btnGhost}>
+          <button
+            onClick={onClose}
+            style={{
+              ...btnGhost,
+              width: isMobile ? "100%" : "auto",
+              minHeight: isMobile ? 44 : undefined,
+            }}
+          >
             Fermer
           </button>
         </div>
