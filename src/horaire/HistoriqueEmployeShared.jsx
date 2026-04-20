@@ -5,6 +5,10 @@
 // - Les styles partagés
 // - Les composants Modal et TopBar
 // - Les helpers visuels (renderWeekTable, renderWeekCardsMobile)
+// - AJOUTS RESPONSIVE:
+//   * TopBar plus flexible tablette/mobile
+//   * Modal mieux adapté aux petits écrans
+//   * tables/cartes mieux contrôlées en largeur
 // -----------------------------------------------------------------------------
 
 import React, { useEffect } from "react";
@@ -314,12 +318,14 @@ export const smallInputBase = {
   fontSize: 14,
   background: "#fff",
   boxSizing: "border-box",
+  minWidth: 0,
 };
 
 export const table = {
   width: "100%",
   borderCollapse: "collapse",
   fontSize: 13,
+  tableLayout: "fixed",
 };
 
 export const th = {
@@ -350,8 +356,12 @@ export const replyBubbleInline = {
   fontSize: 13,
   whiteSpace: "pre-wrap",
   lineHeight: 1.25,
-  minWidth: 160,
-  maxWidth: 320,
+  minWidth: 140,
+  maxWidth: "100%",
+  width: "fit-content",
+  wordBreak: "break-word",
+  overflowWrap: "anywhere",
+  boxSizing: "border-box",
 };
 
 export const linkBtn = {
@@ -361,6 +371,8 @@ export const linkBtn = {
   padding: "6px 10px",
   fontWeight: 1000,
   cursor: "pointer",
+  maxWidth: "100%",
+  boxSizing: "border-box",
 };
 
 export const btnFeuilleDepenses = {
@@ -375,6 +387,8 @@ export const btnFeuilleDepenses = {
   alignItems: "center",
   gap: 8,
   boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
+  maxWidth: "100%",
+  boxSizing: "border-box",
 };
 
 export const plusAdminBtn = {
@@ -398,6 +412,7 @@ export const saveHintRow = {
   marginTop: 6,
   fontSize: 12,
   fontWeight: 900,
+  wordBreak: "break-word",
 };
 
 export const mobileCard = {
@@ -407,6 +422,9 @@ export const mobileCard = {
   background: "#fff",
   display: "grid",
   gap: 8,
+  width: "100%",
+  maxWidth: "100%",
+  boxSizing: "border-box",
 };
 
 export const mobileStatGrid = {
@@ -428,6 +446,8 @@ export function pill(bg, bd, fg) {
     fontWeight: 900,
     fontSize: 12,
     whiteSpace: "nowrap",
+    maxWidth: "100%",
+    boxSizing: "border-box",
   };
 }
 
@@ -471,7 +491,12 @@ export function normalizeRoleFromDoc(emp) {
 /* ---------------------- Modal ---------------------- */
 export function Modal({ title, onClose, children, width = 980 }) {
   const winW = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const winH = typeof window !== "undefined" ? window.innerHeight : 900;
   const isPhone = winW <= 640;
+
+  const finalWidth = isPhone
+    ? Math.max(280, Math.min(width, winW - 16))
+    : Math.min(width, winW - 28);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -495,9 +520,9 @@ export function Modal({ title, onClose, children, width = 980 }) {
         background: "rgba(15, 23, 42, 0.55)",
         zIndex: 9999,
         display: "flex",
-        alignItems: "center",
+        alignItems: isPhone ? "flex-end" : "center",
         justifyContent: "center",
-        padding: isPhone ? 10 : 14,
+        padding: isPhone ? 8 : 14,
         boxSizing: "border-box",
       }}
       onMouseDown={(e) => {
@@ -506,13 +531,15 @@ export function Modal({ title, onClose, children, width = 980 }) {
     >
       <div
         style={{
-          width: "min(100%, " + width + "px)",
-          maxHeight: "90vh",
+          width: finalWidth,
+          maxWidth: "100%",
+          maxHeight: isPhone ? Math.max(320, winH - 12) : "90vh",
           overflow: "auto",
           background: "#fff",
-          borderRadius: 16,
+          borderRadius: isPhone ? 16 : 18,
           border: "1px solid #e2e8f0",
           boxShadow: "0 30px 80px rgba(0,0,0,0.25)",
+          boxSizing: "border-box",
         }}
       >
         <div
@@ -523,7 +550,7 @@ export function Modal({ title, onClose, children, width = 980 }) {
             borderBottom: "1px solid #e2e8f0",
             padding: isPhone ? "10px 12px" : "12px 14px",
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-start",
             justifyContent: "space-between",
             gap: 10,
             zIndex: 1,
@@ -535,6 +562,8 @@ export function Modal({ title, onClose, children, width = 980 }) {
               fontSize: isPhone ? 14 : 16,
               lineHeight: 1.15,
               wordBreak: "break-word",
+              minWidth: 0,
+              flex: 1,
             }}
           >
             {title}
@@ -551,13 +580,24 @@ export function Modal({ title, onClose, children, width = 980 }) {
               cursor: "pointer",
               fontSize: isPhone ? 12 : 13,
               flexShrink: 0,
+              whiteSpace: "nowrap",
             }}
           >
             ✕ Fermer
           </button>
         </div>
 
-        <div style={{ padding: isPhone ? 12 : 14 }}>{children}</div>
+        <div
+          style={{
+            padding: isPhone ? 12 : 14,
+            width: "100%",
+            maxWidth: "100%",
+            boxSizing: "border-box",
+            overflowX: "hidden",
+          }}
+        >
+          {children}
+        </div>
       </div>
     </div>,
     document.body
@@ -568,7 +608,7 @@ export function Modal({ title, onClose, children, width = 980 }) {
 export function TopBar({ title, rightSlot = null, flashTitle = false }) {
   const width = typeof window !== "undefined" ? window.innerWidth : 1200;
   const isPhone = width <= 640;
-  const isTablet = width <= 900;
+  const isTablet = width <= 980;
 
   const titleStyle = flashTitle
     ? {
@@ -589,6 +629,7 @@ export function TopBar({ title, rightSlot = null, flashTitle = false }) {
           flexDirection: "column",
           gap: 10,
           marginBottom: 16,
+          width: "100%",
         }}
       >
         <div style={{ display: "flex", justifyContent: "flex-start" }}>
@@ -605,13 +646,64 @@ export function TopBar({ title, rightSlot = null, flashTitle = false }) {
             fontWeight: 900,
             textAlign: "center",
             wordBreak: "break-word",
+            width: "100%",
+            boxSizing: "border-box",
             ...(titleStyle || {}),
           }}
         >
           {title}
         </h1>
 
-        {rightSlot ? <div>{rightSlot}</div> : null}
+        {rightSlot ? (
+          <div style={{ width: "100%", minWidth: 0 }}>
+            {rightSlot}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (isTablet) {
+    return (
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          marginBottom: 16,
+          width: "100%",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <a href="#/" style={btnAccueilStyle(false)} title="Retour à l'accueil">
+            ⬅ Accueil
+          </a>
+
+          {rightSlot ? <div style={{ minWidth: 0 }}>{rightSlot}</div> : null}
+        </div>
+
+        <h1
+          style={{
+            margin: 0,
+            fontSize: 28,
+            lineHeight: 1.15,
+            fontWeight: 900,
+            textAlign: "center",
+            width: "100%",
+            boxSizing: "border-box",
+            wordBreak: "break-word",
+            ...(titleStyle || {}),
+          }}
+        >
+          {title}
+        </h1>
       </div>
     );
   }
@@ -623,8 +715,9 @@ export function TopBar({ title, rightSlot = null, flashTitle = false }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        minHeight: 54,
+        minHeight: 64,
         marginBottom: 16,
+        width: "100%",
       }}
     >
       <div
@@ -633,8 +726,7 @@ export function TopBar({ title, rightSlot = null, flashTitle = false }) {
           left: 0,
           top: "50%",
           transform: "translateY(-50%)",
-          maxWidth: isTablet ? 170 : 220,
-          width: "100%",
+          maxWidth: 210,
           display: "flex",
           justifyContent: "flex-start",
         }}
@@ -647,13 +739,13 @@ export function TopBar({ title, rightSlot = null, flashTitle = false }) {
       <h1
         style={{
           margin: 0,
-          fontSize: isTablet ? 28 : 32,
+          fontSize: 32,
           lineHeight: 1.15,
           fontWeight: 900,
           textAlign: "center",
           width: "100%",
-          paddingLeft: isTablet ? 150 : 210,
-          paddingRight: isTablet ? 150 : 210,
+          paddingLeft: 220,
+          paddingRight: rightSlot ? 280 : 220,
           boxSizing: "border-box",
           wordBreak: "break-word",
           ...(titleStyle || {}),
@@ -673,8 +765,9 @@ export function TopBar({ title, rightSlot = null, flashTitle = false }) {
             justifyContent: "flex-end",
             alignItems: "center",
             gap: 10,
-            maxWidth: isTablet ? 280 : 360,
+            maxWidth: 270,
             width: "100%",
+            minWidth: 0,
           }}
         >
           {rightSlot}
@@ -687,8 +780,13 @@ export function TopBar({ title, rightSlot = null, flashTitle = false }) {
 /* ---------------------- Rendus semaine ---------------------- */
 export function renderWeekTable(rows, totalHours) {
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={table}>
+    <div style={{ overflowX: "auto", width: "100%", maxWidth: "100%" }}>
+      <table
+        style={{
+          ...table,
+          minWidth: 320,
+        }}
+      >
         <thead>
           <tr>
             <th style={th}>Jour</th>
@@ -699,7 +797,9 @@ export function renderWeekTable(rows, totalHours) {
         <tbody>
           {(rows || []).map((r) => (
             <tr key={r.key}>
-              <td style={tdLeft}>{r.weekday}</td>
+              <td style={{ ...tdLeft, whiteSpace: "normal", wordBreak: "break-word" }}>
+                {r.weekday}
+              </td>
               <td style={td}>{r.dateStr}</td>
               <td style={td}>{fmtHoursComma(r.totalHours || 0)}</td>
             </tr>
@@ -718,18 +818,24 @@ export function renderWeekTable(rows, totalHours) {
 
 export function renderWeekCardsMobile(rows, totalHours) {
   return (
-    <div style={{ display: "grid", gap: 8 }}>
+    <div style={{ display: "grid", gap: 8, width: "100%" }}>
       {(rows || []).map((r) => (
         <div key={r.key} style={mobileCard}>
-          <div style={{ fontWeight: 1000, fontSize: 14 }}>{r.weekday}</div>
+          <div style={{ fontWeight: 1000, fontSize: 14, lineHeight: 1.2 }}>
+            {r.weekday}
+          </div>
           <div style={mobileStatGrid}>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 900, color: "#64748b" }}>Date</div>
-              <div style={{ fontSize: 13, fontWeight: 900 }}>{r.dateStr}</div>
+              <div style={{ fontSize: 13, fontWeight: 900, wordBreak: "break-word" }}>
+                {r.dateStr}
+              </div>
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 900, color: "#64748b" }}>Heures</div>
-              <div style={{ fontSize: 13, fontWeight: 900 }}>{fmtHoursComma(r.totalHours || 0)}</div>
+              <div style={{ fontSize: 13, fontWeight: 900 }}>
+                {fmtHoursComma(r.totalHours || 0)}
+              </div>
             </div>
           </div>
         </div>
@@ -742,7 +848,9 @@ export function renderWeekCardsMobile(rows, totalHours) {
         }}
       >
         <div style={{ fontWeight: 1000, fontSize: 14 }}>Total</div>
-        <div style={{ fontSize: 16, fontWeight: 1000 }}>{fmtHoursComma(totalHours || 0)} h</div>
+        <div style={{ fontSize: 16, fontWeight: 1000 }}>
+          {fmtHoursComma(totalHours || 0)} h
+        </div>
       </div>
     </div>
   );

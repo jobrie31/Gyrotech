@@ -2554,7 +2554,19 @@ export default function PageAccueil({ isTV = false, tvNewsText = "", tvNewsFlash
                               ...styles.th,
                               background: "#e5e7eb",
                               color: "#111827",
-                              whiteSpace: i < 2 ? "nowrap" : "normal",
+                              padding: "clamp(6px, 1.4vw, 12px) clamp(4px, 0.9vw, 10px)",
+                              lineHeight: 1.05,
+                              textAlign: "center",
+                              verticalAlign: "middle",
+                              minWidth: 0,
+
+                              // ✅ les 3 titres scale ensemble
+                              fontSize: "clamp(9px, 2.4vw, 15px)",
+
+                              // ✅ permet de mieux fitter sur cell
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                              overflowWrap: "anywhere",
                             }}
                           >
                             {h}

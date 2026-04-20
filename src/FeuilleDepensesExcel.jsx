@@ -22,15 +22,19 @@
 // - Quand on clique OK sur "Remboursement enregistré ✅", retour automatique à la liste
 // - NOUVEAU : les RH ne voient pas les remboursements "À approuver par un admin"
 //   dans le tableau. Ils ne les voient qu'une fois approuvés par l'admin.
+//
+// MODIF RESPONSIVE :
+// - La feuille garde une composition desktop
+// - Sur petits écrans, elle scale pour entrer en largeur
+// - Aucun minimum de scale imposé
 // -----------------------------------------------------------------------------
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { db, storage, auth } from "./firebaseConfig";
 import {
   addDoc,
   collection,
   deleteDoc,
-  doc,
   getDocs,
   limit,
   onSnapshot,
@@ -164,6 +168,8 @@ function getPPRangeForDisplayYearAndPP(displayYear, ppLabel) {
   };
 }
 
+const DESKTOP_SHEET_WIDTH = 1240;
+
 export default function FeuilleDepensesExcel({
   isAdmin = false,
   isRH = false,
@@ -239,6 +245,53 @@ export default function FeuilleDepensesExcel({
   const [saving, setSaving] = useState(false);
 
   const datePickerRefs = useRef({});
+
+  const responsiveViewportRef = useRef(null);
+  const sheetContentRef = useRef(null);
+  const [responsiveScale, setResponsiveScale] = useState(1);
+  const [sheetNaturalHeight, setSheetNaturalHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const viewportEl = responsiveViewportRef.current;
+    const contentEl = sheetContentRef.current;
+    if (!viewportEl || !contentEl) return;
+
+    let rafId = 0;
+    let ro = null;
+
+    const updateResponsiveScale = () => {
+      cancelAnimationFrame(rafId);
+
+      rafId = requestAnimationFrame(() => {
+        const viewportWidth =
+          viewportEl.clientWidth || window.innerWidth || DESKTOP_SHEET_WIDTH;
+
+        const usableWidth = Math.max(0, viewportWidth);
+        const nextScale = Math.min(1, usableWidth / DESKTOP_SHEET_WIDTH);
+
+        setResponsiveScale(nextScale);
+        setSheetNaturalHeight(contentEl.offsetHeight || 0);
+      });
+    };
+
+    updateResponsiveScale();
+
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(updateResponsiveScale);
+      ro.observe(viewportEl);
+      ro.observe(contentEl);
+    }
+
+    window.addEventListener("resize", updateResponsiveScale);
+    window.addEventListener("orientationchange", updateResponsiveScale);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", updateResponsiveScale);
+      window.removeEventListener("orientationchange", updateResponsiveScale);
+      if (ro) ro.disconnect();
+    };
+  }, [mode, rows.length, notes, activePP, ppYear]);
 
   useEffect(() => {
     const q = query(
@@ -386,7 +439,6 @@ export default function FeuilleDepensesExcel({
     return false;
   };
 
-  // RH ne doit voir dans le tableau que les remboursements approuvés par l’admin
   const canShowInTable = (rec) => {
     if (!canAccessRecord(rec)) return false;
     if (isAdmin) return true;
@@ -1111,10 +1163,35 @@ export default function FeuilleDepensesExcel({
       padding: 18,
       fontFamily: "Arial, Helvetica, sans-serif",
       color: "#111827",
+      boxSizing: "border-box",
     },
+
+    responsiveViewport: {
+      width: "100%",
+      maxWidth: "100%",
+      overflow: "hidden",
+    },
+    responsiveShell: {
+      width: "100%",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "flex-start",
+      overflow: "hidden",
+    },
+    responsiveScaledOuter: {
+      position: "relative",
+      overflow: "hidden",
+    },
+    responsiveScaledInner: {
+      width: DESKTOP_SHEET_WIDTH,
+      transformOrigin: "top left",
+      willChange: "transform",
+    },
+
     sheetWrap: {
-      maxWidth: 1240,
-      margin: "0 auto",
+      width: DESKTOP_SHEET_WIDTH,
+      maxWidth: "none",
+      margin: 0,
       background: "white",
       border: "1px solid #cbd5e1",
       boxShadow: "0 8px 30px rgba(0,0,0,0.08)",
@@ -1930,6 +2007,12 @@ export default function FeuilleDepensesExcel({
     );
   };
 
+  const scaledWidth = Math.max(1, Math.round(DESKTOP_SHEET_WIDTH * responsiveScale));
+  const scaledHeight =
+    sheetNaturalHeight > 0
+      ? Math.max(1, Math.ceil(sheetNaturalHeight * responsiveScale))
+      : "auto";
+
   return (
     <div style={styles.page}>
       <style>
@@ -1948,143 +2031,162 @@ export default function FeuilleDepensesExcel({
         `}
       </style>
 
-      <div style={styles.sheetWrap}>
-        <div style={styles.header}>
-          <div style={styles.headerRow}>
-            <div>
-              <div style={styles.title}>Feuille dépenses</div>
-              <div
-                style={{
-                  fontWeight: 1000,
-                  fontSize: 15,
-                  color: "#0f172a",
-                  marginTop: 6,
-                }}
-              >
-                <b>{headerPeriodText}</b>
-              </div>
-              <div style={{ ...styles.subTitle, marginTop: 2 }}>
-                {headerPeriodSubText}
-              </div>
-            </div>
-
+      <div ref={responsiveViewportRef} style={styles.responsiveViewport}>
+        <div style={styles.responsiveShell}>
+          <div
+            style={{
+              ...styles.responsiveScaledOuter,
+              width: scaledWidth,
+              height: scaledHeight,
+            }}
+          >
             <div
               style={{
-                display: "flex",
-                justifyContent: "center",
-                alignItems: "center",
+                ...styles.responsiveScaledInner,
+                transform: `scale(${responsiveScale})`,
               }}
             >
-              {mode !== "list" ? (
-                <div style={styles.empPill}>
-                  <div>Employé :</div>
-                  <div>{recordEmployeNom || "—"}</div>
-                </div>
-              ) : null}
-            </div>
+              <div ref={sheetContentRef} style={styles.sheetWrap}>
+                <div style={styles.header}>
+                  <div style={styles.headerRow}>
+                    <div>
+                      <div style={styles.title}>Feuille dépenses</div>
+                      <div
+                        style={{
+                          fontWeight: 1000,
+                          fontSize: 15,
+                          color: "#0f172a",
+                          marginTop: 6,
+                        }}
+                      >
+                        <b>{headerPeriodText}</b>
+                      </div>
+                      <div style={{ ...styles.subTitle, marginTop: 2 }}>
+                        {headerPeriodSubText}
+                      </div>
+                    </div>
 
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                alignItems: "center",
-                gap: 12,
-                flexWrap: "wrap",
-              }}
-            >
-              {mode === "list" ? (
-                <>
-                  <input
-                    value={String(ppYear)}
-                    onChange={(e) => {
-                      const raw = String(e.target.value || "").replace(/[^\d]/g, "");
-                      setPpYear(raw ? Number(raw) : "");
-                      setMode("list");
-                    }}
-                    placeholder="2026"
-                    style={styles.yearInput}
-                    inputMode="numeric"
-                    title="Année"
-                  />
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                      }}
+                    >
+                      {mode !== "list" ? (
+                        <div style={styles.empPill}>
+                          <div>Employé :</div>
+                          <div>{recordEmployeNom || "—"}</div>
+                        </div>
+                      ) : null}
+                    </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setOldPopupOpen(true)}
-                    style={{
-                      border: "1px solid #cbd5e1",
-                      background: "#f8fafc",
-                      borderRadius: 999,
-                      padding: "8px 12px",
-                      fontWeight: 900,
-                      cursor: "pointer",
-                      fontSize: 13,
-                      color: "#334155",
-                    }}
-                    title="Voir tous les anciens remboursements"
-                  >
-                    📜 Anciens
-                  </button>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      {mode === "list" ? (
+                        <>
+                          <input
+                            value={String(ppYear)}
+                            onChange={(e) => {
+                              const raw = String(e.target.value || "").replace(/[^\d]/g, "");
+                              setPpYear(raw ? Number(raw) : "");
+                              setMode("list");
+                            }}
+                            placeholder="2026"
+                            style={styles.yearInput}
+                            inputMode="numeric"
+                            title="Année"
+                          />
 
-                  <button
-                    type="button"
-                    style={styles.btnPrimary}
-                    onClick={() => {
-                      resetEditor();
-                      setMode("edit");
-                    }}
-                  >
-                    ➕ Nouveau remboursement
-                  </button>
-                </>
-              ) : (
-                <>
-                  <div style={styles.empPill}>
-                    <div>Taux :</div>
-                    <div>{fmtMoney(globalTaux)} $/km</div>
+                          <button
+                            type="button"
+                            onClick={() => setOldPopupOpen(true)}
+                            style={{
+                              border: "1px solid #cbd5e1",
+                              background: "#f8fafc",
+                              borderRadius: 999,
+                              padding: "8px 12px",
+                              fontWeight: 900,
+                              cursor: "pointer",
+                              fontSize: 13,
+                              color: "#334155",
+                            }}
+                            title="Voir tous les anciens remboursements"
+                          >
+                            📜 Anciens
+                          </button>
+
+                          <button
+                            type="button"
+                            style={styles.btnPrimary}
+                            onClick={() => {
+                              resetEditor();
+                              setMode("edit");
+                            }}
+                          >
+                            ➕ Nouveau remboursement
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div style={styles.empPill}>
+                            <div>Taux :</div>
+                            <div>{fmtMoney(globalTaux)} $/km</div>
+                          </div>
+
+                          <button
+                            type="button"
+                            style={styles.btnGhost}
+                            onClick={() => setMode("list")}
+                          >
+                            ↩ Retour à la liste
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
+                </div>
 
-                  <button
-                    type="button"
-                    style={styles.btnGhost}
-                    onClick={() => setMode("list")}
-                  >
-                    ↩ Retour à la liste
-                  </button>
-                </>
-              )}
+                {mode === "list" ? renderList() : renderEditor()}
+
+                {mode === "list" ? (
+                  <div style={styles.tabsBar}>
+                    {ppTabs.map((pp) => {
+                      const count = Number(countsByPP?.[pp] || 0) || 0;
+                      const active = pp === activePP;
+
+                      return (
+                        <div
+                          key={pp}
+                          style={styles.tab(active)}
+                          onClick={() => {
+                            setActivePP(pp);
+                            setMode("list");
+                          }}
+                          title={`${ppYear} ${pp}`}
+                        >
+                          {pp}
+                          {count > 0 ? (
+                            <span style={styles.badge}>
+                              {count > 99 ? "99+" : String(count)}
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
-
-        {mode === "list" ? renderList() : renderEditor()}
-
-        {mode === "list" ? (
-          <div style={styles.tabsBar}>
-            {ppTabs.map((pp) => {
-              const count = Number(countsByPP?.[pp] || 0) || 0;
-              const active = pp === activePP;
-
-              return (
-                <div
-                  key={pp}
-                  style={styles.tab(active)}
-                  onClick={() => {
-                    setActivePP(pp);
-                    setMode("list");
-                  }}
-                  title={`${ppYear} ${pp}`}
-                >
-                  {pp}
-                  {count > 0 ? (
-                    <span style={styles.badge}>
-                      {count > 99 ? "99+" : String(count)}
-                    </span>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
       </div>
 
       <PopupAnciensRemboursements

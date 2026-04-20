@@ -7,6 +7,9 @@
 // - Les statuts "vu"
 // - Les alertes de notes/réponses non vues
 // - L'autosave et les listeners Firestore
+// - AJUSTEMENT RESPONSIVE:
+//   * bulle jaune plus stable sur petit écran
+//   * largeur/clamp plus sûre dans les cartes et modales
 // -----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -673,9 +676,37 @@ export function useHistoriqueNotes({
 
     if (!employeeReply && !adminText) return null;
 
+    const winW = typeof window !== "undefined" ? window.innerWidth : 1200;
+    const safeMobileMax = Math.max(220, winW - 48);
+    const finalMaxWidth = Math.min(
+      Number(maxWidth || 320) || 320,
+      winW <= 640 ? safeMobileMax : Number(maxWidth || 320) || 320
+    );
+
     return (
-      <div style={{ ...replyBubbleInline, maxWidth }}>
-        {employeeReply ? <div style={{ whiteSpace: "pre-wrap" }}>{employeeReply}</div> : null}
+      <div
+        style={{
+          ...replyBubbleInline,
+          maxWidth: finalMaxWidth,
+          width: "100%",
+          minWidth: 0,
+          boxSizing: "border-box",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+        }}
+      >
+        {employeeReply ? (
+          <div
+            style={{
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+              minWidth: 0,
+            }}
+          >
+            {employeeReply}
+          </div>
+        ) : null}
 
         {adminText ? (
           <div
@@ -685,6 +716,9 @@ export function useHistoriqueNotes({
               marginTop: employeeReply ? 8 : 0,
               paddingTop: employeeReply ? 8 : 0,
               borderTop: employeeReply ? "1px solid rgba(146,64,14,0.20)" : "none",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+              minWidth: 0,
             }}
           >
             {adminText}
@@ -696,6 +730,8 @@ export function useHistoriqueNotes({
                   fontSize: 11,
                   fontWeight: 900,
                   color: "#92400e",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
                 }}
               >
                 {fmtDateTimeFR(adminAt)}

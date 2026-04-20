@@ -783,7 +783,7 @@ function PopupDocsManager({ open, onClose, projet }) {
 
   const btnOpenDoc = {
     border: "none",
-    background: "#2563eb",
+    background: "#16a34a",
     color: "#fff",
     borderRadius: 14,
     padding: isMobile ? "12px 14px" : "12px 18px",
@@ -797,7 +797,7 @@ function PopupDocsManager({ open, onClose, projet }) {
     minHeight: isMobile ? 46 : 48,
     width: isMobile ? "100%" : "auto",
     boxSizing: "border-box",
-    boxShadow: "0 8px 18px rgba(37, 99, 235, 0.22)",
+    boxShadow: "0 8px 18px rgba(22, 163, 74, 0.22)",
   };
 
   const btnDeleteDoc = {

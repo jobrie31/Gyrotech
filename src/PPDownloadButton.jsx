@@ -40,6 +40,9 @@ function ConfirmCenterModal({
   onYes,
   onNo,
 }) {
+  const winW = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const isPhone = winW <= 640;
+
   if (!open) return null;
 
   return createPortal(
@@ -50,9 +53,10 @@ function ConfirmCenterModal({
         background: "rgba(15, 23, 42, 0.62)",
         zIndex: 30000,
         display: "flex",
-        alignItems: "center",
+        alignItems: isPhone ? "flex-end" : "center",
         justifyContent: "center",
-        padding: 18,
+        padding: isPhone ? 8 : 18,
+        boxSizing: "border-box",
       }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onNo?.();
@@ -60,22 +64,25 @@ function ConfirmCenterModal({
     >
       <div
         style={{
-          width: "min(720px, 96vw)",
+          width: isPhone ? "calc(100vw - 16px)" : "min(720px, 96vw)",
+          maxWidth: "100%",
           background: "#ffffff",
-          borderRadius: 24,
+          borderRadius: isPhone ? 18 : 24,
           border: "1px solid #e2e8f0",
           boxShadow: "0 30px 80px rgba(0,0,0,0.28)",
-          padding: "28px 26px 24px",
+          padding: isPhone ? "18px 14px 16px" : "28px 26px 24px",
+          boxSizing: "border-box",
         }}
       >
         <div
           style={{
-            fontSize: 32,
+            fontSize: isPhone ? 22 : 32,
             fontWeight: 1000,
             color: "#0f172a",
-            marginBottom: 16,
+            marginBottom: isPhone ? 12 : 16,
             textAlign: "center",
             lineHeight: 1.15,
+            wordBreak: "break-word",
           }}
         >
           {title}
@@ -83,13 +90,14 @@ function ConfirmCenterModal({
 
         <div
           style={{
-            fontSize: 24,
+            fontSize: isPhone ? 16 : 24,
             fontWeight: 900,
             color: "#334155",
-            lineHeight: 1.4,
+            lineHeight: 1.35,
             textAlign: "center",
             whiteSpace: "pre-wrap",
-            marginBottom: 26,
+            marginBottom: isPhone ? 18 : 26,
+            wordBreak: "break-word",
           }}
         >
           {message}
@@ -99,8 +107,9 @@ function ConfirmCenterModal({
           style={{
             display: "flex",
             justifyContent: "center",
-            gap: 14,
+            gap: 12,
             flexWrap: "wrap",
+            flexDirection: isPhone ? "column" : "row",
           }}
         >
           <button
@@ -111,11 +120,13 @@ function ConfirmCenterModal({
               background: "#ffffff",
               color: "#0f172a",
               borderRadius: 16,
-              padding: "14px 28px",
+              padding: isPhone ? "12px 16px" : "14px 28px",
               fontWeight: 1000,
-              fontSize: 22,
+              fontSize: isPhone ? 16 : 22,
               cursor: "pointer",
-              minWidth: 150,
+              minWidth: isPhone ? "100%" : 150,
+              width: isPhone ? "100%" : "auto",
+              boxSizing: "border-box",
             }}
           >
             Non
@@ -129,11 +140,13 @@ function ConfirmCenterModal({
               background: "#2563eb",
               color: "#ffffff",
               borderRadius: 16,
-              padding: "14px 28px",
+              padding: isPhone ? "12px 16px" : "14px 28px",
               fontWeight: 1000,
-              fontSize: 22,
+              fontSize: isPhone ? 16 : 22,
               cursor: "pointer",
-              minWidth: 150,
+              minWidth: isPhone ? "100%" : 150,
+              width: isPhone ? "100%" : "auto",
+              boxSizing: "border-box",
             }}
           >
             Oui
@@ -161,6 +174,10 @@ export default function PPDownloadButton({
   const [confirmSavedOpen, setConfirmSavedOpen] = useState(false);
 
   const printStyleRef = useRef(null);
+
+  const winW = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const isPhone = winW <= 640;
+  const isTablet = winW <= 980;
 
   const docRef = useMemo(() => {
     if (!payBlockKey) return null;
@@ -210,7 +227,7 @@ export default function PPDownloadButton({
         background: "#fde68a",
         color: "#713f12",
         borderRadius: 16,
-        padding: "10px 14px",
+        padding: isPhone ? "10px 12px" : "10px 14px",
         fontWeight: 1000,
         cursor: busy ? "wait" : "pointer",
         display: "inline-flex",
@@ -219,18 +236,21 @@ export default function PPDownloadButton({
         gap: 8,
         boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
         flex: "0 0 auto",
-        whiteSpace: "nowrap",
-        minWidth: 150,
+        whiteSpace: isPhone ? "normal" : "nowrap",
+        minWidth: isPhone ? "100%" : 150,
+        width: isPhone ? "100%" : "auto",
         maxWidth: "100%",
-        fontSize: 14,
-        lineHeight: 1.1,
+        fontSize: isPhone ? 13 : 14,
+        lineHeight: 1.15,
+        textAlign: "center",
+        boxSizing: "border-box",
       }
     : {
         border: "2px solid #0f172a",
         background: "#ffffff",
         color: "#0f172a",
         borderRadius: 16,
-        padding: "10px 14px",
+        padding: isPhone ? "10px 12px" : "10px 14px",
         fontWeight: 1000,
         cursor: busy ? "wait" : "pointer",
         display: "inline-flex",
@@ -239,11 +259,14 @@ export default function PPDownloadButton({
         gap: 8,
         boxShadow: "0 10px 24px rgba(0,0,0,0.10)",
         flex: "0 0 auto",
-        whiteSpace: "nowrap",
-        minWidth: 150,
+        whiteSpace: isPhone ? "normal" : "nowrap",
+        minWidth: isPhone ? "100%" : 150,
+        width: isPhone ? "100%" : "auto",
         maxWidth: "100%",
-        fontSize: 14,
-        lineHeight: 1.1,
+        fontSize: isPhone ? 13 : 14,
+        lineHeight: 1.15,
+        textAlign: "center",
+        boxSizing: "border-box",
       };
 
   const savePrintMeta = async () => {
@@ -599,7 +622,7 @@ export default function PPDownloadButton({
     }, 100);
   };
 
-    return (
+  return (
     <>
       <div
         style={{
@@ -608,6 +631,8 @@ export default function PPDownloadButton({
           alignContent: "start",
           justifyItems: "stretch",
           minWidth: 0,
+          width: isPhone ? "100%" : "auto",
+          maxWidth: "100%",
         }}
         data-hide-on-print="true"
       >
@@ -629,12 +654,15 @@ export default function PPDownloadButton({
           <div
             style={{
               minWidth: 0,
-              fontSize: 11,
+              width: isPhone ? "100%" : isTablet ? 170 : "auto",
+              maxWidth: "100%",
+              fontSize: isPhone ? 11 : 11,
               fontWeight: 900,
               color: "#713f12",
               lineHeight: 1.15,
               wordBreak: "break-word",
               overflowWrap: "anywhere",
+              textAlign: isPhone ? "center" : "left",
             }}
           >
             <div>Traité le : {fmtDateTimeFR(rhProcessedAt)}</div>
@@ -662,8 +690,10 @@ export default function PPDownloadButton({
               fontWeight: 900,
               color: "#b91c1c",
               minWidth: 0,
+              width: "100%",
               wordBreak: "break-word",
               overflowWrap: "anywhere",
+              textAlign: isPhone ? "center" : "left",
             }}
           >
             {err}
